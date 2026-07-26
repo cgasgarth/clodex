@@ -39,6 +39,7 @@ import {
   streamAnthropicResponse,
   generateAnthropicResponse,
   extractClaudeSessionId,
+  isClaudeCodeCompactRequest,
   sdkTranslationErrorSignature,
   silenceSdkWarnings,
 } from './sdk-adapter.js';
@@ -55,6 +56,7 @@ import {
   estimateAnthropicInputTokens,
 } from './anthropic-endpoints.js';
 import { withResponsesWebSocketDiagnosticContext } from './oauth/responses-websocket.js';
+import { resolveOpenAiCompactionThreshold } from './oauth/responses-compaction.js';
 import { resolveContextWindow } from './context-window.js';
 import { listenTcpServer } from './listener-ready.js';
 
@@ -534,6 +536,9 @@ export async function startProxyCatalog(
           route.providerId ?? route.aliasId.split(':')[1] ?? 'unknown',
         );
         const runSdkRequest = async (): Promise<void> => {
+          const estimatedInputTokens = estimateAnthropicInputTokens(anthropicBody);
+          const forceCompaction = openAiOAuth
+            && isClaudeCodeCompactRequest(anthropicBody);
           const params = sdkTranslateRequest(anthropicBody, route.npm!, {
             openAiOAuth,
             claudeSessionId,
@@ -563,6 +568,9 @@ export async function startProxyCatalog(
             headers: route.headers,
             useResponsesLite: route.useResponsesLite,
             preferWebSockets: route.preferWebSockets,
+            openAiCompactThreshold: openAiOAuth
+              ? resolveOpenAiCompactionThreshold(route.contextWindow)
+              : undefined,
             onDebug: (msg: string) => plog(() => msg),
             onWebSocketDiagnostic: webSocketDiagnosticsLogPath
               ? event => writeWebSocketDiagnosticLog(webSocketDiagnosticsLogPath, event)
@@ -607,7 +615,7 @@ export async function startProxyCatalog(
             keepAlive.unref();
             try {
               await withResponsesWebSocketDiagnosticContext(
-                { requestId: relayRequestId, claudeSessionId },
+                { requestId: relayRequestId, claudeSessionId, estimatedInputTokens, forceCompaction },
                 () => streamAnthropicResponse(
                   model,
                   params,
@@ -619,7 +627,7 @@ export async function startProxyCatalog(
                       lastUpstreamPartAt = Date.now();
                       translationLifecycle?.onPart(partType);
                     },
-                    initialInputTokens: estimateAnthropicInputTokens(anthropicBody),
+                    initialInputTokens: estimatedInputTokens,
                     abortSignal: clientAbort.signal,
                   },
                 ),
@@ -635,7 +643,7 @@ export async function startProxyCatalog(
             // outright ("Stream must be set to true"), so always stream internally
             // for it and collect the result, regardless of what the client asked for.
             const anthropicResponse = await withResponsesWebSocketDiagnosticContext(
-              { requestId: relayRequestId, claudeSessionId },
+              { requestId: relayRequestId, claudeSessionId, estimatedInputTokens, forceCompaction },
               () => generateAnthropicResponse(
                 model,
                 params,
