@@ -329,6 +329,23 @@ describe('createResponsesWebSocketFetch', () => {
       cacheWriteTokens: 200,
       outputTokens: 50,
     }));
+    expect(diagnostics).toContainEqual(expect.objectContaining({
+      event: 'ws_cache_outcome',
+      terminalStatus: 'response.completed',
+      requestId: 'req-usage',
+      claudeSessionId: '927b8642-15d2-4535-ab27-1430ae54c4aa',
+      decision: 'unpartitioned_socket',
+      sendAttemptCount: 1,
+      retried: false,
+      plainUncachedTokens: 100,
+      nonReadTokens: 300,
+      usage: {
+        inputTokens: 1_200,
+        cachedTokens: 900,
+        cacheWriteTokens: 200,
+        outputTokens: 50,
+      },
+    }));
   });
 
   it('retries a pre-frame socket error once on a fresh socket with full context', async () => {
@@ -385,6 +402,18 @@ describe('createResponsesWebSocketFetch', () => {
       frameCount: 1,
       emittedModelData: false,
     }));
+    expect(diagnostics.filter(event => event.event === 'ws_cache_outcome')).toEqual([
+      expect.objectContaining({
+        terminalStatus: 'response.completed',
+        requestId: 'req-socket-error',
+        sendAttemptCount: 1,
+        retried: true,
+        finalConnectionId: 2,
+        sendAttempts: [
+          expect.objectContaining({ connectionId: 2, continued: false }),
+        ],
+      }),
+    ]);
     expect(JSON.stringify(diagnostics)).not.toContain('secret socket failure');
   });
 
@@ -1623,7 +1652,7 @@ describe('createResponsesWebSocketFetch', () => {
       content: [currentPrompt],
     }]);
     expect(compactFetch).not.toHaveBeenCalled();
-    expect(diagnostics.at(-1)).toMatchObject({
+    expect(diagnostics.filter(event => event.event === 'ws_head_decision').at(-1)).toMatchObject({
       event: 'ws_head_decision',
       decision: 'continuation',
       continuationMatchMode: 'claude_compaction_summary',
@@ -2642,7 +2671,7 @@ describe('createResponsesWebSocketFetch', () => {
         providerId: 'openai',
         model: 'gpt-5.6-sol',
         effort: 'high',
-        promptCacheKey: 'relay-session-abc',
+        promptCacheKeyHash: expect.stringMatching(/^[a-f0-9]{16}$/),
         accountIdHash: expect.any(String),
       },
     });
@@ -2665,6 +2694,7 @@ describe('createResponsesWebSocketFetch', () => {
     });
     const serialized = JSON.stringify(diagnostics);
     expect(serialized).not.toContain('private-account-id');
+    expect(serialized).not.toContain('relay-session-abc');
     expect(serialized).not.toContain('private first prompt');
     expect(serialized).not.toContain('private divergent prompt');
     expect(serialized).not.toContain('private answer');
@@ -3194,7 +3224,7 @@ describe('createResponsesWebSocketFetch', () => {
 
     expect(fakeSockets).toHaveLength(2);
     expect(fakeSockets[0]!.send).toHaveBeenCalledTimes(2);
-    expect(diagnostics.at(-1)).toMatchObject({
+    expect(diagnostics.filter(event => event.event === 'ws_head_decision').at(-1)).toMatchObject({
       event: 'ws_head_decision',
       decision: 'history_mismatch_reused_head',
       selectedConnectionId: 1,

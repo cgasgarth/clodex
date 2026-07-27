@@ -89,6 +89,22 @@ interface OutputAccumulator {
   done?: JsonObject;
 }
 
+interface CacheOutcomeState {
+  startedAt: number;
+  metadata: Record<string, unknown>;
+  attempts: Array<{
+    connectionId: number;
+    generation: ConnectionEntry['generation'];
+    continued: boolean;
+    wireBytes: number;
+    inputCount: number;
+    inputBytes: number;
+  }>;
+  firstFrameAt?: number;
+  firstModelDataAt?: number;
+  emitted: boolean;
+}
+
 interface RequestContext {
   controller: ReadableStreamDefaultController<Uint8Array>;
   encoder: TextEncoder;
@@ -110,6 +126,7 @@ interface RequestContext {
   frameCount: number;
   responseId?: string;
   responseUsage?: ResponseUsage;
+  cacheOutcome?: CacheOutcomeState;
   pendingEvents: unknown[];
   emittedModelData: boolean;
   transportRetryPending: boolean;
@@ -1318,6 +1335,7 @@ function failContext(
       ...(retryAfterSeconds !== undefined ? { retry_after_seconds: retryAfterSeconds } : {}),
     },
   });
+  emitCacheOutcome(entry, ctx, 'transport_error');
   retireSupersededEntry(ctx);
   deleteEntry(entry);
   closeContext(ctx);
@@ -1480,6 +1498,86 @@ function outgoingPayload(payload: JsonObject): string {
   return JSON.stringify({ type: 'response.create', ...payload });
 }
 
+function diagnosticHash(value: unknown): string {
+  return createHash('sha256').update(canonicalJson(value)).digest('hex').slice(0, 16);
+}
+
+function serializedBytes(value: unknown): number {
+  return Buffer.byteLength(canonicalJson(value), 'utf8');
+}
+
+function requestShapeDiagnostic(payload: JsonObject): Record<string, unknown> {
+  const input = inputArray(payload);
+  const tools = Array.isArray(payload.tools) ? payload.tools : [];
+  const toolNames = tools.map(tool => (
+    tool && typeof tool === 'object' && typeof (tool as JsonObject).name === 'string'
+      ? (tool as JsonObject).name
+      : ''
+  ));
+  const instructions = instructionsFromPayload(payload) ?? '';
+  const promptCacheKey = typeof payload.prompt_cache_key === 'string'
+    ? payload.prompt_cache_key
+    : '';
+  return {
+    model: typeof payload.model === 'string' ? payload.model : undefined,
+    effort: typeof (payload.reasoning as JsonObject | undefined)?.effort === 'string'
+      ? String((payload.reasoning as JsonObject).effort).trim().toLowerCase()
+      : '',
+    promptCacheKeyHash: promptCacheKey ? diagnosticHash(promptCacheKey) : undefined,
+    instructions: {
+      bytes: Buffer.byteLength(instructions, 'utf8'),
+      hash: instructions ? diagnosticHash(instructions) : undefined,
+    },
+    tools: {
+      count: tools.length,
+      bytes: serializedBytes(tools),
+      namesHash: diagnosticHash(toolNames),
+      schemaHash: diagnosticHash(tools),
+    },
+    logicalInput: {
+      count: input.length,
+      bytes: serializedBytes(input),
+      kindsHash: diagnosticHash(input.map(conversationItemKind)),
+    },
+  };
+}
+
+function emitCacheOutcome(
+  entry: ConnectionEntry,
+  ctx: RequestContext,
+  terminalStatus: string,
+): void {
+  const state = ctx.cacheOutcome;
+  if (!state || state.emitted) return;
+  state.emitted = true;
+  const now = entry.options.now();
+  const usage = ctx.responseUsage;
+  ctx.emitDiagnostic?.({
+    event: 'ws_cache_outcome',
+    terminalStatus,
+    ...state.metadata,
+    sendAttempts: state.attempts,
+    sendAttemptCount: state.attempts.length,
+    retried: ctx.retried,
+    finalConnectionId: entry.debugId,
+    finalGeneration: entry.generation,
+    elapsedMs: Math.max(0, now - state.startedAt),
+    firstFrameMs: state.firstFrameAt === undefined
+      ? undefined
+      : Math.max(0, state.firstFrameAt - state.startedAt),
+    firstModelDataMs: state.firstModelDataAt === undefined
+      ? undefined
+      : Math.max(0, state.firstModelDataAt - state.startedAt),
+    usage,
+    plainUncachedTokens: usage
+      ? Math.max(0, usage.inputTokens - usage.cachedTokens - usage.cacheWriteTokens)
+      : undefined,
+    nonReadTokens: usage
+      ? Math.max(0, usage.inputTokens - usage.cachedTokens)
+      : undefined,
+  });
+}
+
 type WebSocketConstructor = new (
   url: string,
   options: { headers: Record<string, string>; agent?: import('node:http').Agent },
@@ -1487,6 +1585,15 @@ type WebSocketConstructor = new (
 
 function sendContext(entry: ConnectionEntry, ctx: RequestContext): void {
   const outgoing = outgoingPayload(ctx.sendPayload);
+  const sentInput = inputArray(ctx.sendPayload);
+  ctx.cacheOutcome?.attempts.push({
+    connectionId: entry.debugId,
+    generation: entry.generation,
+    continued: ctx.continued,
+    wireBytes: Buffer.byteLength(outgoing, 'utf8'),
+    inputCount: sentInput.length,
+    inputBytes: serializedBytes(sentInput),
+  });
   entry.debug(
     `connection=${entry.debugId} key=${debugKey(entry.key)} sending ${outgoing.length}B payload`
     + (ctx.continued ? ' (continuation)' : ''),
@@ -1548,6 +1655,9 @@ function handleSocketMessage(entry: ConnectionEntry, data: RawData): void {
   const ctx = entry.current;
   if (!ctx || ctx.closed) return;
   const text = Array.isArray(data) ? Buffer.concat(data).toString('utf8') : data.toString('utf8');
+  if (ctx.cacheOutcome && ctx.cacheOutcome.firstFrameAt === undefined) {
+    ctx.cacheOutcome.firstFrameAt = entry.options.now();
+  }
   ctx.frameCount += 1;
   if (ctx.transportRetryPending) {
     ctx.transportRetryPending = false;
@@ -1584,7 +1694,12 @@ function handleSocketMessage(entry: ConnectionEntry, data: RawData): void {
       });
     }
   }
-  if (isModelDataEvent(type)) ctx.emittedModelData = true;
+  if (isModelDataEvent(type)) {
+    ctx.emittedModelData = true;
+    if (ctx.cacheOutcome && ctx.cacheOutcome.firstModelDataAt === undefined) {
+      ctx.cacheOutcome.firstModelDataAt = entry.options.now();
+    }
+  }
 
   const errorCode = responseErrorCode(event);
   const previousMissing = errorCode === 'previous_response_not_found';
@@ -1630,6 +1745,7 @@ function handleSocketMessage(entry: ConnectionEntry, data: RawData): void {
   if (TERMINAL_EVENT_TYPES.has(type ?? '') || type === 'error') {
     flushPending(ctx);
     const failed = FAILURE_EVENT_TYPES.has(type ?? '');
+    emitCacheOutcome(entry, ctx, type ?? 'unknown');
     if (!failed && ctx.responseId && entry.persistent) {
       const now = entry.options.now();
       finishInFlightPeriod(entry, now);
@@ -2288,6 +2404,35 @@ export function createResponsesWebSocketFetch(
     }
 
     const requestInput = inputArray(payload);
+    const cacheOutcomeMetadata = options.onDiagnostic ? {
+      decision,
+      partitionKeyHash: partitionKey,
+      authorizationFingerprintHash: authorizationFingerprint.slice(0, 16),
+      promptFingerprint,
+      promptFieldHashes,
+      promptChanges,
+      ...requestShapeDiagnostic(payload),
+      candidateCount: candidates.length,
+      idleCandidateCount: idleCandidates.length,
+      matchingCandidateCount: matches.length,
+      checkpointCount: partitionKey ? checkpointEntries(partitionKey).length : 0,
+      matchingCheckpointCount: checkpointMatches.length,
+      compactThreshold,
+      forceCompaction,
+      activeConnectionCount: connectionCount(),
+      nurseryConnectionCount: connectionCountByGeneration('nursery'),
+      establishedConnectionCount: connectionCountByGeneration('established'),
+      selectedConnectionId: selected?.debugId,
+      selectedGeneration: selected?.generation,
+      continuationMatchMode: selectedMatch?.mode ?? checkpointMatch?.mode,
+      createdConnectionId: selected ? undefined : nextConnectionDebugId,
+      createdGeneration: selected ? undefined : persistent ? 'nursery' : 'isolated',
+      incrementalInputItems: selectedDelta?.length,
+      evictionReasons: evictions.map(eviction => ({
+        generation: eviction.generation,
+        reason: eviction.reason,
+      })),
+    } : undefined;
     emitDiagnostic(options, {
       event: 'ws_head_decision',
       decision,
@@ -2302,7 +2447,9 @@ export function createResponsesWebSocketFetch(
         effort: typeof (payload.reasoning as JsonObject | undefined)?.effort === 'string'
           ? String((payload.reasoning as JsonObject).effort).trim().toLowerCase()
           : '',
-        promptCacheKey: typeof payload.prompt_cache_key === 'string' ? payload.prompt_cache_key : undefined,
+        promptCacheKeyHash: typeof payload.prompt_cache_key === 'string'
+          ? diagnosticHash(payload.prompt_cache_key)
+          : undefined,
       },
       promptFingerprint,
       promptFieldHashes,
@@ -2365,6 +2512,12 @@ export function createResponsesWebSocketFetch(
           retried: false,
           closed: false,
           frameCount: 0,
+          cacheOutcome: cacheOutcomeMetadata ? {
+            startedAt: now,
+            metadata: cacheOutcomeMetadata,
+            attempts: [],
+            emitted: false,
+          } : undefined,
           pendingEvents: [],
           emittedModelData: false,
           transportRetryPending: false,
