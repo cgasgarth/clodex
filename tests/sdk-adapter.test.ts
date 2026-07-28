@@ -450,7 +450,7 @@ describe('translateRequest', () => {
     expect(params.tools && Object.keys(params.tools)).toEqual(['Read']);
   });
 
-  it('uses low OpenAI reasoning and disables tools for generic and structured compact requests', () => {
+  it('preserves OpenAI reasoning partition and disables tools for compact requests', () => {
     const compactInstruction = [
       'CRITICAL: Respond with TEXT ONLY. Do NOT call any tools.',
       'Your task is to create a detailed summary of the conversation so far.',
@@ -494,14 +494,14 @@ describe('translateRequest', () => {
     expect(compact.providerOptions?.openai).toMatchObject({
       store: false,
       include: ['reasoning.encrypted_content'],
-      reasoningEffort: 'low',
+      reasoningEffort: 'high',
     });
     expect(genericCompact.tools && Object.keys(genericCompact.tools)).toEqual(['Read']);
     expect(genericCompact.toolChoice).toBe('none');
     expect(genericCompact.providerOptions?.openai).toMatchObject({
       store: false,
       include: ['reasoning.encrypted_content'],
-      reasoningEffort: 'low',
+      reasoningEffort: 'medium',
     });
     expect(compact.messages.map(message => message.role)).toEqual(['tool', 'user']);
     expect(compact.messages[1]).toMatchObject({

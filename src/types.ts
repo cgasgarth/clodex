@@ -4,7 +4,17 @@ import type { FreeStatus } from './free-models.js';
 
 export type ModelFormat = 'anthropic' | 'openai' | 'unsupported';
 
-export type StarterCommand = 'root' | 'claude' | 'server' | 'models' | 'providers' | 'patch';
+export type StarterCommand =
+  | 'root'
+  | 'start'
+  | 'stop'
+  | 'claude'
+  | 'server'
+  | 'daemon'
+  | 'accounts'
+  | 'models'
+  | 'providers'
+  | 'patch';
 
 export interface ModelCost {
   input: number;

@@ -18,5 +18,8 @@ export default defineConfig({
     'undici',
     'https-proxy-agent',
     'tweakcc',
+    'ink',
+    'react',
+    'react/jsx-runtime',
   ],
 });

@@ -17,6 +17,7 @@ import {
   INFERENCE_PROGRESS_INTERVAL_MS,
   redactTraceLine,
   resetTraceLog,
+  writeInferenceRequestLog,
   writeInferenceResponseLifecycleLog,
   writeInferenceResponseErrorLog,
   writeWebSocketDiagnosticLog,
@@ -39,6 +40,7 @@ import {
   streamAnthropicResponse,
   generateAnthropicResponse,
   extractClaudeSessionId,
+  anthropicEffortFromRequest,
   isClaudeCodeCompactRequest,
   sdkTranslationErrorSignature,
   silenceSdkWarnings,
@@ -82,6 +84,7 @@ function createTranslationLifecycle(
   claudeSessionId: string | undefined,
   modelId: string,
   provider: string,
+  ownsResponseLifecycle = false,
 ) {
   if (!logPath || !requestId) return undefined;
 
@@ -152,28 +155,59 @@ function createTranslationLifecycle(
       translatedChunks += 1;
       lastOutputAt = Date.now();
     },
-    complete() {
+    complete(usage?: {
+      input_tokens?: number;
+      output_tokens?: number;
+      cache_creation_input_tokens?: number;
+      cache_read_input_tokens?: number;
+    }) {
       if (stopped) return;
       stopped = true;
       clearInterval(timer);
-      write('translation_completed', snapshot(Date.now()));
+      const completed = {
+        ...snapshot(Date.now()),
+        ...(usage
+          ? {
+              inputTokens: usage.input_tokens,
+              outputTokens: usage.output_tokens,
+              cacheCreationInputTokens: usage.cache_creation_input_tokens,
+              cacheReadInputTokens: usage.cache_read_input_tokens,
+            }
+          : {}),
+      };
+      write('translation_completed', completed);
+      if (ownsResponseLifecycle) write('response_completed', completed);
     },
     cancel() {
       if (stopped) return;
       stopped = true;
       clearInterval(timer);
-      write('translation_cancelled', snapshot(Date.now()));
+      const cancelled = snapshot(Date.now());
+      write('translation_cancelled', cancelled);
+      if (ownsResponseLifecycle) {
+        write('response_client_disconnected', {
+          ...cancelled,
+          terminationSource: 'downstream_client',
+        });
+      }
     },
     fail(errorType: string, errorSignature?: string, errorCode?: string) {
       if (stopped) return;
       stopped = true;
       clearInterval(timer);
-      write('translation_failed', {
+      const failed = {
         ...snapshot(Date.now()),
         errorType,
         errorSignature,
         errorCode,
-      });
+      };
+      write('translation_failed', failed);
+      if (ownsResponseLifecycle) {
+        write('response_failed', {
+          ...failed,
+          terminationSource: 'upstream_failure',
+        });
+      }
     },
   };
 }
@@ -283,6 +317,11 @@ export interface ProxyModelAlias {
   unavailableReason?: string;
 }
 
+export type ProxyRouteRequestResolver = (
+  route: ProxyRoute,
+  context: { launchTicket?: string },
+) => Promise<ProxyRoute>;
+
 function configuredAliasLookupNames(alias: ProxyModelAlias): string[] {
   const sourceNames = [
     alias.name,
@@ -304,6 +343,8 @@ export async function startProxyCatalog(
   debugLogPath?: string,
   webSocketDiagnosticsLogPath?: string,
   modelAliases?: ProxyModelAlias[],
+  resolveRouteForRequest?: ProxyRouteRequestResolver,
+  port = 0,
 ): Promise<ProxyHandle> {
   const proxyToken = getOrCreateProxyToken();
   silenceSdkWarnings();
@@ -383,7 +424,11 @@ export async function startProxyCatalog(
     // Anthropic message creation and token counting are distinct endpoints.
     if (req.method === 'POST' && messagesEndpoint) {
       const inboundKey = extractApiKey(req);
-      if (inboundKey !== proxyToken) {
+      const ticketPrefix = `${proxyToken}.`;
+      const launchTicketFromKey = inboundKey?.startsWith(ticketPrefix)
+        ? inboundKey.slice(ticketPrefix.length)
+        : undefined;
+      if (inboundKey !== proxyToken && !launchTicketFromKey) {
         anthropicError(res, 401, 'Invalid proxy token');
         return;
       }
@@ -409,7 +454,10 @@ export async function startProxyCatalog(
       const originalModel = anthropicBody.model;
       const clientWantsStream = Boolean(anthropicBody.stream);
       const relayRequestIdRaw = req.headers['x-relay-request-id'];
-      const relayRequestId = Array.isArray(relayRequestIdRaw) ? relayRequestIdRaw[0] : relayRequestIdRaw;
+      const forwardedRequestId = Array.isArray(relayRequestIdRaw)
+        ? relayRequestIdRaw[0]
+        : relayRequestIdRaw;
+      const relayRequestId = forwardedRequestId ?? randomUUID();
 
       // Per-request route resolution: look up the alias, fall back to default
       const resolvedRoute = typeof originalModel === 'string'
@@ -431,7 +479,25 @@ export async function startProxyCatalog(
         );
         return;
       }
-      const route = resolvedRoute ?? defaultRoute;
+      let route = resolvedRoute ?? defaultRoute;
+      if (resolveRouteForRequest) {
+        const launchTicketHeader = req.headers['x-clodex-launch-ticket'];
+        const launchTicketFromHeader = Array.isArray(launchTicketHeader)
+          ? launchTicketHeader[0]
+          : launchTicketHeader;
+        try {
+          route = await resolveRouteForRequest(route, {
+            launchTicket: launchTicketFromHeader ?? launchTicketFromKey,
+          });
+        } catch (error) {
+          anthropicError(
+            res,
+            401,
+            error instanceof Error ? error.message : 'Managed account is unavailable',
+          );
+          return;
+        }
+      }
       if (messagesEndpoint === 'count_tokens' && route.modelFormat !== 'anthropic') {
         const inputTokens = estimateAnthropicInputTokens(anthropicBody);
         plog(() => `token-count: local estimate model=${originalModel} input_tokens=${inputTokens}`);
@@ -565,12 +631,24 @@ export async function startProxyCatalog(
           ? req.headers['x-claude-code-agent-id'][0]
           : req.headers['x-claude-code-agent-id'];
         const claudeSessionId = extractClaudeSessionId(anthropicBody, claudeSessionIdHeader);
+        if (inferenceLogPath && !forwardedRequestId) {
+          writeInferenceRequestLog(inferenceLogPath, {
+            requestId: relayRequestId,
+            claudeSessionId,
+            modelId: typeof originalModel === 'string' ? originalModel : 'unknown',
+            effort: anthropicEffortFromRequest(anthropicBody),
+            provider: route.providerId ?? route.aliasId.split(':')[1] ?? 'unknown',
+            route: 'translated',
+            stream: clientWantsStream,
+          });
+        }
         const translationLifecycle = createTranslationLifecycle(
           inferenceLogPath,
           relayRequestId,
           claudeSessionId,
           originalModel,
           route.providerId ?? route.aliasId.split(':')[1] ?? 'unknown',
+          !forwardedRequestId,
         );
         const runSdkRequest = async (): Promise<void> => {
           const estimatedInputTokens = estimateAnthropicInputTokens(anthropicBody);
@@ -650,6 +728,12 @@ export async function startProxyCatalog(
               }
             }, keepAliveMs);
             keepAlive.unref();
+            let finalUsage: {
+              input_tokens: number;
+              output_tokens: number;
+              cache_creation_input_tokens: number;
+              cache_read_input_tokens: number;
+            } | undefined;
             try {
               await withResponsesWebSocketDiagnosticContext(
                 {
@@ -670,6 +754,7 @@ export async function startProxyCatalog(
                       lastUpstreamPartAt = Date.now();
                       translationLifecycle?.onPart(partType);
                     },
+                    onUsage: usage => { finalUsage = usage; },
                     initialInputTokens: estimatedInputTokens,
                     abortSignal: clientAbort.signal,
                   },
@@ -678,7 +763,7 @@ export async function startProxyCatalog(
             } finally {
               clearInterval(keepAlive);
             }
-            translationLifecycle?.complete();
+            translationLifecycle?.complete(finalUsage);
             if (!res.headersSent) writeStreamChunk('');
             res.end();
           } else {
@@ -705,7 +790,14 @@ export async function startProxyCatalog(
               ),
             );
             translationLifecycle?.onOutput(JSON.stringify(anthropicResponse));
-            translationLifecycle?.complete();
+            translationLifecycle?.complete(
+              anthropicResponse['usage'] as {
+                input_tokens?: number;
+                output_tokens?: number;
+                cache_creation_input_tokens?: number;
+                cache_read_input_tokens?: number;
+              } | undefined,
+            );
             sendJson(res, 200, anthropicResponse);
           }
         };
@@ -810,7 +902,7 @@ export async function startProxyCatalog(
 
   let address: AddressInfo;
   try {
-    address = await listenTcpServer(server, 0, '127.0.0.1');
+    address = await listenTcpServer(server, port, '127.0.0.1');
   } catch (error) {
     process.off('unhandledRejection', onRejection);
     process.off('uncaughtException', onException);

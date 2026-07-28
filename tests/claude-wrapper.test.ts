@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { createServer as createHttpServer } from 'node:http';
 import {
   existsSync,
   mkdirSync,
@@ -296,7 +297,7 @@ describe('clodex-claude process wrapper', () => {
     const result = await runWrapper(claudeInvocation(), { CLODEX_REQUIRE_SERVER: '1' });
 
     expect(result).toMatchObject({ code: 1, signal: null });
-    expect(result.stderr).toContain('no live clodex server is available');
+    expect(result.stderr).toContain('persistent clodex daemon is unavailable');
     expect(existsSync(launchMarker)).toBe(false);
   });
 
@@ -384,6 +385,108 @@ describe('clodex-claude process wrapper', () => {
       await Promise.all([
         closeServer(proxy.server),
         closeServer(endpoint.server),
+      ]);
+    }
+  });
+
+  it('pins direct and inherited workflow launches to one daemon account ticket', async () => {
+    const proxy = await openLoopbackServer();
+    const controlSocketPath = join(testRoot, 'clodex.sock');
+    const requests: Array<{ accountId?: string }> = [];
+    const control = createHttpServer(async (request, response) => {
+      const chunks: Buffer[] = [];
+      for await (const chunk of request) chunks.push(Buffer.from(chunk));
+      requests.push(chunks.length
+        ? JSON.parse(Buffer.concat(chunks).toString('utf8')) as { accountId?: string }
+        : {});
+      const body = JSON.stringify({
+        ticket: 'ticket-for-two',
+        accountId: 'account-two',
+        accountLabel: 'Two',
+      });
+      response.writeHead(201, {
+        'content-type': 'application/json',
+        'content-length': Buffer.byteLength(body),
+      });
+      response.end(body);
+    });
+    await new Promise<void>((resolveListen, reject) => {
+      control.once('error', reject);
+      control.listen(controlSocketPath, () => {
+        control.off('error', reject);
+        resolveListen();
+      });
+    });
+
+    advertiseServers([{
+      mode: 'proxy',
+      port: proxy.port,
+      pid: process.pid,
+      caPath,
+      startedAt: new Date().toISOString(),
+    }]);
+    writeFileSync(join(clodexHome, 'daemon-runtime.json'), JSON.stringify({
+      protocolVersion: 2,
+      instanceId: 'test-daemon',
+      pid: process.pid,
+      nodePath: process.execPath,
+      cliPath: wrapperPath,
+      startedAt: new Date().toISOString(),
+      ready: true,
+      proxyPort: proxy.port,
+      endpointPort: proxy.port,
+      caPath,
+      controlSocketPath,
+      version: 'test',
+    }));
+    const ticketHelper = join(testRoot, 'ticket-helper.mjs');
+    const ticketMarker = join(testRoot, 'ticket-launch.json');
+    writeFileSync(
+      ticketHelper,
+      [
+        "import { writeFileSync } from 'node:fs';",
+        'writeFileSync(process.argv[2], JSON.stringify({',
+        '  proxy: process.env.HTTPS_PROXY ?? null,',
+        '  ticket: process.env.CLODEX_LAUNCH_TICKET ?? null,',
+        '  args: process.argv.slice(4),',
+        '}));',
+        'process.exit(Number(process.argv[3]));',
+        '',
+      ].join('\n'),
+    );
+
+    try {
+      const first = await runWrapper([
+        process.execPath,
+        ticketHelper,
+        ticketMarker,
+        '0',
+        '--clodex-account=Two',
+      ]);
+      expect(first.code).toBe(0);
+      const firstLaunch = JSON.parse(readFileSync(ticketMarker, 'utf8')) as {
+        proxy: string;
+        ticket: string;
+        args: string[];
+      };
+      expect(requests).toEqual([{ accountId: 'Two' }]);
+      expect(firstLaunch.ticket).toBe('ticket-for-two');
+      expect(new URL(firstLaunch.proxy).password).toBe('ticket-for-two');
+      expect(firstLaunch.args).toEqual([]);
+
+      const inherited = await runWrapper(
+        [process.execPath, ticketHelper, ticketMarker, '0'],
+        { CLODEX_LAUNCH_TICKET: 'ticket-for-two' },
+      );
+      expect(inherited.code).toBe(0);
+      expect(requests).toHaveLength(1);
+      expect(JSON.parse(readFileSync(ticketMarker, 'utf8'))).toMatchObject({
+        ticket: 'ticket-for-two',
+      });
+    } finally {
+      await Promise.all([
+        closeServer(proxy.server),
+        closeServer(control),
       ]);
     }
   });

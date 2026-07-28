@@ -2,11 +2,16 @@
 import pc from 'picocolors';
 import { relayIntro, relayOutro, providerSelectOption, fmtModel, fmtEnabledStar, formatModelLabel } from './ui.js';
 import * as p from '@clack/prompts';
-import { realpathSync } from 'node:fs';
+import { readFileSync, realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
 import { findClaudeBinary, launchClaude } from './launch.js';
-import { detectConflicts, buildChildEnv, buildHttpProxyChildEnv } from './env.js';
-import { claudeCodeClientModelId } from './context-model-id.js';
+import { detectConflicts, buildChildEnv } from './env.js';
+import {
+  claudeCodeClientModelId,
+  normalizeRouteLookupId,
+  stripOneMContextSuffix,
+} from './context-model-id.js';
 import { needsFirstRunSetup, runFirstRunWizard } from './first-run.js';
 import { MAX_MODEL_CATALOG } from './constants.js';
 import { startProxy, startProxyCatalog } from './proxy.js';
@@ -38,11 +43,9 @@ import {
 import { favoriteProviderDisplayName } from './favorite-provider-display.js';
 import { runProvidersCommand, providersHelpText } from './providers-command.js';
 import {
-  getInferenceSessionLogPath,
   getSessionLogPath,
   prepareClaudeTraceLog,
   printTraceLog,
-  writeProxyLifecycleLog,
 } from './trace-log.js';
 import { providersForTarget } from './target-compatibility.js';
 import { refreshModelsDevCacheAsync } from './registry/models-dev.js';
@@ -57,13 +60,57 @@ import {
   loadHttpProxyRoutes,
   printHttpProxyModels,
   reportSkippedHttpProxyFavorites,
-  startConfiguredHttpProxy,
 } from './http-proxy/index.js';
 import { runPatchCommand, runLaunchPatchCheck } from './patcher.js';
 import { installOutboundProxyDispatcher } from './outbound-proxy.js';
 import { resolveOpenAiCompactionThreshold } from './oauth/responses-compaction.js';
+import {
+  daemonHelpText,
+  ensureDaemonRunning,
+  restartDaemonIfRunning,
+  resolveDaemonPort,
+  runDaemonCommand,
+  stopDaemon,
+} from './daemon/index.js';
+import { accountsHelpText, runAccountsCommand } from './daemon/account-command.js';
+import { daemonControlRequest } from './daemon/control-client.js';
+import { computeWrapperEnv } from './wrapper-env.js';
+import { getConfigPath, getProvidersPath } from './paths.js';
+import { getOrCreateProxyToken } from './proxy-token.js';
 const STARTER_CLAUDE_FLAGS = new Set(['--dry-run', '--trace', '--endpoint', '--proxy', '--save-mode', '--help', '-h', '--version', '-v']);
 const CLODEX_LAUNCH_FLAGS = new Set(['--provider', '--model']);
+
+function daemonCatalogSnapshot(): string {
+  const read = (path: string) => {
+    try {
+      return readFileSync(path, 'utf8');
+    } catch {
+      return '';
+    }
+  };
+  return `${read(getConfigPath())}\0${read(getProvidersPath())}`;
+}
+
+async function runCatalogCommand(
+  run: () => Promise<number>,
+): Promise<number> {
+  const before = daemonCatalogSnapshot();
+  const result = await run();
+  if (result !== 0 || daemonCatalogSnapshot() === before) return result;
+  try {
+    const restarted = await restartDaemonIfRunning(
+      realpathSync(fileURLToPath(import.meta.url)),
+    );
+    if (restarted) p.log.info('Reloaded the persistent daemon catalog.');
+  } catch (error) {
+    p.log.warn(
+      `Saved the catalog, but the Clodex daemon could not reload it: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+  return result;
+}
 
 function parseClodexLaunchFlag(
   arg: string,
@@ -178,7 +225,7 @@ function validateSaveModeFlag(parsed: ParsedArgs): void {
 }
 
 export function parseArgs(args: string[]): ParsedArgs {
-  if (args.length === 0) return { ...emptyParsed('root'), showHelp: true };
+  if (args.length === 0) return emptyParsed('root');
 
   const [first, ...rest] = args;
 
@@ -187,6 +234,12 @@ export function parseArgs(args: string[]): ParsedArgs {
   }
   if (first === '--version' || first === '-v') {
     return { ...emptyParsed('root'), showVersion: true };
+  }
+
+  if (first === 'start' || first === 'stop') {
+    const parsed = emptyParsed(first);
+    if (rest.length > 0) parsed.error = `Unknown ${first} option: ${rest[0]}`;
+    return parsed;
   }
 
   if (first === 'server') {
@@ -239,6 +292,22 @@ export function parseArgs(args: string[]): ParsedArgs {
       else if (!parsed.error) parsed.error = `Unknown server option: ${arg}`;
     }
     validateSaveModeFlag(parsed);
+    return parsed;
+  }
+
+  if (first === 'daemon') {
+    const parsed = emptyParsed('daemon');
+    parsed.claudeArgs = rest;
+    if (rest.includes('--help') || rest.includes('-h')) parsed.showHelp = true;
+    if (rest.includes('--version') || rest.includes('-v')) parsed.showVersion = true;
+    return parsed;
+  }
+
+  if (first === 'accounts') {
+    const parsed = emptyParsed('accounts');
+    parsed.claudeArgs = rest;
+    if (rest.includes('--help') || rest.includes('-h')) parsed.showHelp = true;
+    if (rest.includes('--version') || rest.includes('-v')) parsed.showVersion = true;
     return parsed;
   }
 
@@ -334,7 +403,12 @@ export function rootHelpText(): string {
 Bridge Claude Code to OpenAI models — OpenAI API key or ChatGPT/Codex-plan OAuth.
 
 ${pc.bold('Usage:')}
+  clodex
+  clodex start
+  clodex stop
   clodex claude [options] [claude-flags]
+  clodex daemon <install|run|status|restart|stop|uninstall>
+  clodex accounts <list|add|select|remove|usage>
   clodex server [options]
   clodex patch [--restore]
   clodex models
@@ -348,7 +422,12 @@ ${pc.bold('Root options:')}
   -v, --version    Show version
 
 ${pc.bold('Commands:')}
+  (none)      Open the live daemon dashboard
+  start       Start the persistent daemon without opening the dashboard
+  stop        Stop the persistent daemon
   claude      Launch Claude Code bridged to OpenAI models
+  daemon      Manage the persistent per-user Clodex service
+  accounts    Manage up to five OpenAI logins (manual switching only)
   server      Run a foreground gateway (endpoint or proxy mode)
   patch       Patch the Claude Code binary so clodex models are first-class
   models      Manage favorite models and aliases (max ${MAX_MODEL_CATALOG})
@@ -964,8 +1043,9 @@ async function runClaudeHttpProxyCommand(
       console.log('');
       console.log(pc.bold(pc.cyan('  DRY RUN — proxy bridge mode')));
       console.log('  ANTHROPIC_BASE_URL is not set by clodex.');
-      console.log('  HTTPS_PROXY/HTTP_PROXY=http://127.0.0.1:<random-port>');
+      console.log(`  HTTPS_PROXY/HTTP_PROXY=http://127.0.0.1:${resolveDaemonPort()}`);
       console.log('  NODE_EXTRA_CA_CERTS=~/.clodex/http-proxy/clodex-ca.pem');
+      console.log('  One shared Clodex daemon serves main, workflow, and subagent processes.');
       console.log('');
       printHttpProxyModels(loaded.routes, loaded.aliases);
       reportSkippedHttpProxyFavorites(loaded);
@@ -977,54 +1057,42 @@ async function runClaudeHttpProxyCommand(
     }
   }
 
-  const inferenceLogPath = getInferenceSessionLogPath('claude-http-proxy');
-  const proxyDebugLogPath = parsed.trace ? getSessionLogPath('claude-proxy-debug') : undefined;
-  let started: Awaited<ReturnType<typeof startConfiguredHttpProxy>>;
+  const cliPath = realpathSync(fileURLToPath(import.meta.url));
+  let runtime: Awaited<ReturnType<typeof ensureDaemonRunning>>;
   try {
-    started = await startConfiguredHttpProxy(0, parsed.trace, inferenceLogPath, proxyDebugLogPath);
+    runtime = await ensureDaemonRunning(cliPath);
   } catch (err) {
-    p.log.error(`Failed to start proxy: ${err instanceof Error ? err.message : String(err)}`);
+    p.log.error(`Failed to start the Clodex daemon: ${err instanceof Error ? err.message : String(err)}`);
     return 1;
   }
 
-  const { handle, loaded } = started;
-  const inheritedProxyPort = (() => {
-    const value = process.env['HTTPS_PROXY'] ?? process.env['HTTP_PROXY']
-      ?? process.env['https_proxy'] ?? process.env['http_proxy'];
-    if (!value) return undefined;
-    try {
-      const parsedUrl = new URL(value);
-      return (parsedUrl.hostname === '127.0.0.1' || parsedUrl.hostname === 'localhost') && parsedUrl.port
-        ? Number(parsedUrl.port)
-        : undefined;
-    } catch {
-      return undefined;
-    }
-  })();
-  writeProxyLifecycleLog(inferenceLogPath, {
-    event: 'proxy_started',
-    pid: process.pid,
-    parentPid: process.ppid,
-    host: handle.host,
-    port: handle.port,
-    inheritedProxyPort,
-  });
-  let cleanlyStopped = false;
-  const onProcessExit = (exitCode: number) => {
-    if (cleanlyStopped) return;
-    writeProxyLifecycleLog(inferenceLogPath, {
-      event: 'proxy_process_exit',
-      pid: process.pid,
-      parentPid: process.ppid,
-      port: handle.port,
-      exitCode,
-      reason: 'process exited before proxy cleanup completed',
+  let launchTicket: string | undefined;
+  try {
+    const attached = await daemonControlRequest<{ ticket: string } | null>('/v1/launches/attach', {
+      method: 'POST',
+      body: process.env['CLODEX_ACCOUNT']
+        ? { accountId: process.env['CLODEX_ACCOUNT'] }
+        : {},
+      socketPath: runtime.controlSocketPath,
+      timeoutMs: 1_000,
     });
-  };
-  process.once('exit', onProcessExit);
+    launchTicket = attached?.ticket;
+  } catch (error) {
+    p.log.error(
+      `Could not pin the OpenAI account${
+        process.env['CLODEX_ACCOUNT']
+          ? ` ${JSON.stringify(process.env['CLODEX_ACCOUNT'])}`
+          : ''
+      }: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    return 1;
+  }
+
+  const loaded = await loadHttpProxyRoutes();
   if (!agentStdout) {
-    p.log.info(`Proxy started on port ${handle.port}; Claude Code's Anthropic auth remains active.`);
-    p.log.info(`Inference request log: ${handle.inferenceLogPath}`);
+    p.log.info(
+      `Using the shared Clodex daemon on port ${runtime.proxyPort}; Claude Code's Anthropic auth remains active.`,
+    );
     printHttpProxyModels(loaded.routes, loaded.aliases);
     reportSkippedHttpProxyFavorites(loaded);
     if (loaded.routes.length > 0) {
@@ -1032,38 +1100,120 @@ async function runClaudeHttpProxyCommand(
     }
   }
 
-  const childEnv = buildHttpProxyChildEnv(handle.port, handle.caCertPath);
+  const childEnv = computeWrapperEnv(process.env, {
+    mode: 'proxy',
+    port: runtime.proxyPort,
+    pid: runtime.pid,
+    caPath: runtime.caPath,
+    startedAt: runtime.startedAt,
+  }, launchTicket);
+  childEnv['CLODEX_REQUIRE_SERVER'] = '1';
+  childEnv['CLAUDE_CODE_PROCESS_WRAPPER'] ??= join(
+    dirname(cliPath),
+    'claude-wrapper.js',
+  );
   const debugLogPath = parsed.trace
     ? prepareClaudeTraceLog(getSessionLogPath('claude-debug'))
     : undefined;
   const traceArgs = debugLogPath ? ['--debug-file', debugLogPath] : [];
   if (debugLogPath && !agentStdout) {
     p.log.info(`Claude debug log: ${debugLogPath}`);
-    if (proxyDebugLogPath) p.log.info(`Adapter debug log: ${proxyDebugLogPath}`);
   }
 
-  try {
-    const exitCode = await launchClaude(childEnv, undefined, [...traceArgs, ...claudeArgs]);
-    if (debugLogPath) printTraceLog(debugLogPath);
-    return exitCode;
-  } finally {
-    writeProxyLifecycleLog(inferenceLogPath, {
-      event: 'proxy_stopping',
-      pid: process.pid,
-      parentPid: process.ppid,
-      port: handle.port,
-      reason: 'Claude child exited',
-    });
-    await handle.close();
-    cleanlyStopped = true;
-    process.off('exit', onProcessExit);
-    writeProxyLifecycleLog(inferenceLogPath, {
-      event: 'proxy_stopped',
-      pid: process.pid,
-      parentPid: process.ppid,
-      port: handle.port,
-    });
+  const exitCode = await launchClaude(childEnv, undefined, [...traceArgs, ...claudeArgs]);
+  if (debugLogPath) printTraceLog(debugLogPath);
+  return exitCode;
+}
+
+function requestedClaudeModel(args: string[]): string | undefined {
+  let index = -1;
+  for (let cursor = 0; cursor < args.length; cursor += 1) {
+    const arg = args[cursor]!;
+    if (arg === '--model' || arg.startsWith('--model=')) index = cursor;
   }
+  if (index < 0) return undefined;
+  const flag = args[index]!;
+  return stripOneMContextSuffix(
+    flag.includes('=') ? flag.slice(flag.indexOf('=') + 1) : (args[index + 1] ?? ''),
+  ).trim() || undefined;
+}
+
+async function runClaudeDaemonEndpointCommand(
+  parsed: ParsedArgs,
+  claudeArgs: string[],
+  agentStdout: boolean,
+): Promise<number> {
+  const cliPath = realpathSync(fileURLToPath(import.meta.url));
+  let runtime: Awaited<ReturnType<typeof ensureDaemonRunning>>;
+  try {
+    runtime = await ensureDaemonRunning(cliPath);
+  } catch (error) {
+    p.log.error(`Failed to start the Clodex daemon: ${error instanceof Error ? error.message : String(error)}`);
+    return 1;
+  }
+
+  let launchTicket: string | undefined;
+  try {
+    const attached = await daemonControlRequest<{ ticket: string } | null>('/v1/launches/attach', {
+      method: 'POST',
+      body: process.env['CLODEX_ACCOUNT']
+        ? { accountId: process.env['CLODEX_ACCOUNT'] }
+        : {},
+      socketPath: runtime.controlSocketPath,
+      timeoutMs: 1_000,
+    });
+    launchTicket = attached?.ticket;
+  } catch (error) {
+    p.log.error(`Could not pin the OpenAI account: ${error instanceof Error ? error.message : String(error)}`);
+    return 1;
+  }
+
+  const loaded = await loadHttpProxyRoutes();
+  const requestedModel = requestedClaudeModel(claudeArgs);
+  const defaultAlias = loaded.aliases[0]?.name ?? loaded.routes[0]?.aliasId;
+  const launchModel = requestedModel ?? defaultAlias;
+  if (!launchModel) {
+    p.log.error('No compatible model is configured for the persistent daemon.');
+    return 1;
+  }
+  const alias = loaded.aliases.find(item =>
+    normalizeRouteLookupId(item.name) === normalizeRouteLookupId(launchModel),
+  );
+  const routeLookup = alias?.routeId ?? launchModel;
+  const route = loaded.routes.find(item =>
+    normalizeRouteLookupId(item.aliasId) === normalizeRouteLookupId(routeLookup),
+  ) ?? loaded.routes[0];
+  const apiKey = launchTicket
+    ? `${getOrCreateProxyToken()}.${launchTicket}`
+    : getOrCreateProxyToken();
+  const childEnv = buildChildEnv(
+    `http://127.0.0.1:${runtime.endpointPort}`,
+    launchModel,
+    apiKey,
+    runtime.endpointPort,
+    route?.contextWindow,
+    true,
+    catalogUsesNativeContextOwner(loaded.routes),
+  );
+  if (launchTicket) childEnv['CLODEX_LAUNCH_TICKET'] = launchTicket;
+  childEnv['CLODEX_REQUIRE_SERVER'] = '1';
+  childEnv['CLODEX_DAEMON_BRIDGE_MODE'] = 'endpoint';
+  childEnv['CLAUDE_CODE_PROCESS_WRAPPER'] ??= join(
+    dirname(cliPath),
+    'claude-wrapper.js',
+  );
+  if (!agentStdout) {
+    p.log.info(
+      `Using ${launchModel} through the shared Clodex daemon endpoint on port ${runtime.endpointPort}.`,
+    );
+  }
+  const debugLogPath = parsed.trace
+    ? prepareClaudeTraceLog(getSessionLogPath('claude-debug'))
+    : undefined;
+  const traceArgs = debugLogPath ? ['--debug-file', debugLogPath] : [];
+  const exitCode = await launchClaude(childEnv, launchModel, [...traceArgs, ...claudeArgs]);
+  if (debugLogPath) printTraceLog(debugLogPath);
+  return exitCode;
 }
 
 export async function runClaudeCommand(parsed: ParsedArgs): Promise<number> {
@@ -1090,6 +1240,14 @@ export async function runClaudeCommand(parsed: ParsedArgs): Promise<number> {
 
   if (bridgeMode === 'proxy') {
     return runClaudeHttpProxyCommand(parsed, claudeArgs, agentStdout);
+  }
+
+  if (
+    !parsed.dryRun
+    && !parsed.launchProvider
+    && !parsed.launchModel
+  ) {
+    return runClaudeDaemonEndpointCommand(parsed, claudeArgs, agentStdout);
   }
 
   const prefs = dryRun ? {} as ReturnType<typeof loadPreferences> : loadPreferences();
@@ -1459,10 +1617,52 @@ export async function main(args: string[] = process.argv.slice(2)): Promise<numb
   if (parsed.command === 'root') {
     if (parsed.showVersion) {
       console.log(VERSION);
-    } else {
+    } else if (parsed.showHelp || !process.stdin.isTTY || !process.stdout.isTTY) {
       printHelp(rootHelpText());
+    } else {
+      try {
+        await ensureDaemonRunning(realpathSync(fileURLToPath(import.meta.url)));
+      } catch (error) {
+        console.error(
+          pc.red(`Could not start the Clodex daemon: ${error instanceof Error ? error.message : String(error)}`),
+        );
+        return 1;
+      }
+      const { runDashboard } = await import('./dashboard.js');
+      return runDashboard();
     }
     return 0;
+  }
+
+  if (parsed.command === 'start') {
+    try {
+      const runtime = await ensureDaemonRunning(
+        realpathSync(fileURLToPath(import.meta.url)),
+      );
+      console.log(
+        `Clodex daemon ready (pid ${runtime.pid}, endpoint ${runtime.endpointPort}, proxy ${runtime.proxyPort}).`,
+      );
+      return 0;
+    } catch (error) {
+      console.error(
+        pc.red(`Could not start the Clodex daemon: ${error instanceof Error ? error.message : String(error)}`),
+      );
+      return 1;
+    }
+  }
+
+  if (parsed.command === 'stop') {
+    try {
+      console.log(await stopDaemon()
+        ? 'Stopped Clodex daemon.'
+        : 'Clodex daemon is not running.');
+      return 0;
+    } catch (error) {
+      console.error(
+        pc.red(`Could not stop the Clodex daemon: ${error instanceof Error ? error.message : String(error)}`),
+      );
+      return 1;
+    }
   }
 
   if (parsed.command === 'server') {
@@ -1491,6 +1691,30 @@ export async function main(args: string[] = process.argv.slice(2)): Promise<numb
     });
   }
 
+  if (parsed.command === 'daemon') {
+    if (parsed.showVersion) {
+      console.log(VERSION);
+      return 0;
+    }
+    if (parsed.showHelp) {
+      printHelp(daemonHelpText());
+      return 0;
+    }
+    return runDaemonCommand(parsed.claudeArgs, realpathSync(fileURLToPath(import.meta.url)));
+  }
+
+  if (parsed.command === 'accounts') {
+    if (parsed.showVersion) {
+      console.log(VERSION);
+      return 0;
+    }
+    if (parsed.showHelp) {
+      printHelp(accountsHelpText());
+      return 0;
+    }
+    return runAccountsCommand(parsed.claudeArgs);
+  }
+
   if (parsed.command === 'models') {
     if (parsed.showVersion) {
       console.log(VERSION);
@@ -1500,11 +1724,11 @@ export async function main(args: string[] = process.argv.slice(2)): Promise<numb
       printHelp(modelsHelpText());
       return 0;
     }
-    return runModelsCommand({
+    return runCatalogCommand(() => runModelsCommand({
       list: parsed.favoritesList,
       alias: parsed.favoritesAlias,
       unalias: parsed.favoritesUnalias,
-    });
+    }));
   }
 
   if (parsed.command === 'providers') {
@@ -1519,7 +1743,7 @@ export async function main(args: string[] = process.argv.slice(2)): Promise<numb
     if (parsed.trace) {
       process.env.CLODEX_TRACE = '1';
     }
-    return runProvidersCommand(parsed.claudeArgs);
+    return runCatalogCommand(() => runProvidersCommand(parsed.claudeArgs));
   }
 
   if (parsed.command === 'patch') {

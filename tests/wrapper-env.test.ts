@@ -94,6 +94,23 @@ describe('computeWrapperEnv', () => {
     }
   });
 
+  it('endpoint-mode daemon preserves its token and carries the pinned account ticket', () => {
+    const state: ServerRuntimeState = {
+      mode: 'endpoint',
+      port: 17647,
+      pid: process.pid,
+      startedAt: '2026-07-20T00:00:00.000Z',
+    };
+
+    const env = computeWrapperEnv({
+      ...baseEnv,
+      ANTHROPIC_API_KEY: 'stable-local-token.old-ticket',
+    }, state, 'new-ticket.part-two');
+
+    expect(env['ANTHROPIC_API_KEY']).toBe('stable-local-token.new-ticket.part-two');
+    expect(env['CLODEX_LAUNCH_TICKET']).toBe('new-ticket.part-two');
+  });
+
   it('no live server: returns the env untouched without mutating the input', () => {
     const env = computeWrapperEnv(baseEnv, null);
 

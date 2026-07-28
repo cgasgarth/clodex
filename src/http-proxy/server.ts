@@ -5,7 +5,11 @@ import type { AddressInfo, Socket } from 'node:net';
 import { randomUUID } from 'node:crypto';
 import { URL } from 'node:url';
 import { createBrotliDecompress, createGunzip, createInflate } from 'node:zlib';
-import type { ProxyHandle, ProxyRoute } from '../proxy.js';
+import type {
+  ProxyHandle,
+  ProxyRoute,
+  ProxyRouteRequestResolver,
+} from '../proxy.js';
 import { startProxyCatalog } from '../proxy.js';
 import { decodeRequestBody } from '../http-utils.js';
 import { ensureHttpProxyCertificates } from './ca.js';
@@ -166,6 +170,8 @@ export interface HttpProxyOptions {
   adapterRequest?: typeof http.request;
   /** Test hook; production emits a progress record every 30 seconds. */
   responseProgressIntervalMs?: number;
+  /** Resolve a managed-account credential from the launch ticket for this request. */
+  resolveRouteForRequest?: ProxyRouteRequestResolver;
 }
 
 export interface HttpProxyHandle {
@@ -184,6 +190,21 @@ function authorityParts(authority: string): { host: string; port: number } | nul
     return { host: parsed.hostname, port: Number(parsed.port || 443) };
   } catch {
     return null;
+  }
+}
+
+export function parseProxyLaunchTicket(
+  authorization: string | undefined,
+): string | undefined {
+  if (!authorization?.startsWith('Basic ')) return undefined;
+  try {
+    const decoded = Buffer.from(authorization.slice(6).trim(), 'base64').toString('utf8');
+    const separator = decoded.indexOf(':');
+    if (separator < 0 || decoded.slice(0, separator) !== 'clodex') return undefined;
+    const ticket = decoded.slice(separator + 1);
+    return ticket && ticket.length <= 256 ? ticket : undefined;
+  } catch {
+    return undefined;
   }
 }
 
@@ -465,6 +486,7 @@ function forwardToAdapter(
     progressIntervalMs: number;
   },
   isLocalShutdown: () => boolean = () => false,
+  launchTicket?: string,
 ): Promise<void> {
   return new Promise(resolve => {
     const startedAt = Date.now();
@@ -594,6 +616,7 @@ function forwardToAdapter(
           ? { 'x-claude-code-session-id': req.headers['x-claude-code-session-id'] }
           : {}),
         ...(lifecycle ? { 'x-relay-request-id': lifecycle.requestId } : {}),
+        ...(launchTicket ? { 'x-clodex-launch-ticket': launchTicket } : {}),
       },
     }, upstreamRes => {
       adapterResponse = upstreamRes;
@@ -724,6 +747,7 @@ export async function startHttpProxy(options: HttpProxyOptions): Promise<HttpPro
     reservedModelIds.add(normalizeRouteLookupId(modelId));
   }
   const anthropicOrigin = new URL(options.anthropicOrigin ?? 'https://api.anthropic.com');
+  const ownsAdapter = options.adapterHandle === undefined;
   let adapter: ProxyHandle | null = options.adapterHandle ?? null;
   if (options.routes.length > 0) {
     adapter ??= await startProxyCatalog(
@@ -734,10 +758,17 @@ export async function startHttpProxy(options: HttpProxyOptions): Promise<HttpPro
       options.debugLogPath,
       options.webSocketDiagnosticsLogPath,
       options.modelAliases,
+      options.resolveRouteForRequest,
     );
   }
   const adapterAgent = adapter ? new http.Agent({ keepAlive: true }) : undefined;
   let shuttingDown = false;
+  const launchTicketsByClient = new Map<string, string>();
+
+  const socketIdentity = (socket: unknown): string => {
+    const endpoint = socket as { remoteAddress?: string; remotePort?: number };
+    return `${endpoint.remoteAddress ?? ''}:${endpoint.remotePort ?? 0}`;
+  };
 
   const mitmServer = https.createServer({
     key: certificates.serverKey,
@@ -756,6 +787,7 @@ export async function startHttpProxy(options: HttpProxyOptions): Promise<HttpPro
     const messagesEndpoint = anthropicMessagesEndpoint(req.url);
     if (req.method === 'POST' && messagesEndpoint) {
       const requestId = randomUUID();
+      const launchTicket = launchTicketsByClient.get(socketIdentity(req.socket));
       let parsed: AnthropicRequest | null = null;
       let route: ProxyRoute | undefined;
       let adapterBody = rawBody;
@@ -867,6 +899,7 @@ export async function startHttpProxy(options: HttpProxyOptions): Promise<HttpPro
               }
             : undefined,
           () => shuttingDown,
+          launchTicket,
         );
         return;
       }
@@ -930,6 +963,13 @@ export async function startHttpProxy(options: HttpProxyOptions): Promise<HttpPro
   });
   proxyServer.on('connect', (req, clientSocket, head) => {
     if (shouldInterceptConnect(req.url ?? '')) {
+      const authorization = Array.isArray(req.headers['proxy-authorization'])
+        ? req.headers['proxy-authorization'][0]
+        : req.headers['proxy-authorization'];
+      const launchTicket = parseProxyLaunchTicket(authorization);
+      const identity = socketIdentity(clientSocket);
+      if (launchTicket) launchTicketsByClient.set(identity, launchTicket);
+      clientSocket.once('close', () => launchTicketsByClient.delete(identity));
       clientSocket.write('HTTP/1.1 200 Connection Established\r\n\r\n');
       if (head.length > 0) clientSocket.unshift(head);
       mitmServer.emit('connection', clientSocket);
@@ -980,7 +1020,7 @@ export async function startHttpProxy(options: HttpProxyOptions): Promise<HttpPro
     );
   } catch (err) {
     adapterAgent?.destroy();
-    adapter?.close();
+    if (ownsAdapter) adapter?.close();
     throw err;
   }
 
@@ -999,7 +1039,7 @@ export async function startHttpProxy(options: HttpProxyOptions): Promise<HttpPro
       for (const socket of sockets) socket.destroy();
       await new Promise<void>(resolve => proxyServer.close(() => resolve()));
       mitmServer.close();
-      adapter?.close();
+      if (ownsAdapter) adapter?.close();
     },
   };
 }
