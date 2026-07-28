@@ -31,10 +31,13 @@ import { findClaudeBinary } from './launch.js';
 import { waitForTcpListenerCandidate } from './listener-ready.js';
 import {
   orderWrapperServerCandidates,
+  isPidAlive,
   readLiveServerRuntimeStates,
   type ServerRuntimeState,
 } from './server-runtime.js';
 import { computeWrapperEnv, wrapperRequiresServer } from './wrapper-env.js';
+import { daemonControlRequest } from './daemon/control-client.js';
+import { readDaemonRuntimeState } from './daemon/runtime.js';
 
 const isWindows = process.platform === 'win32';
 const WRAPPER_SERVER_READY_TIMEOUT_MS = 500;
@@ -114,13 +117,52 @@ async function main(): Promise<void> {
     process.exit(127);
   }
 
-  // Selection policy (see orderWrapperServerCandidates): proxy-mode servers
-  // are preferred over endpoint-mode ones — bridging keeps Claude Code's own
-  // Anthropic auth — with newest startedAt breaking ties within a mode. A fast
-  // probe round covers every candidate so an unreachable preferred record
-  // cannot delay a reachable fallback. Timed-out probes retry under one shared
-  // deadline; definitive connection errors fail immediately.
-  const candidates = orderWrapperServerCandidates(readLiveServerRuntimeStates());
+  let requestedAccount: string | undefined = process.env['CLODEX_ACCOUNT']?.trim() || undefined;
+  const accountFlagIndex = claudeArgs.findIndex(arg =>
+    arg === '--clodex-account' || arg.startsWith('--clodex-account='),
+  );
+  if (accountFlagIndex >= 0) {
+    const flag = claudeArgs[accountFlagIndex]!;
+    if (flag.includes('=')) {
+      requestedAccount = flag.slice(flag.indexOf('=') + 1).trim() || undefined;
+      claudeArgs.splice(accountFlagIndex, 1);
+    } else {
+      requestedAccount = claudeArgs[accountFlagIndex + 1]?.trim() || undefined;
+      claudeArgs.splice(accountFlagIndex, requestedAccount ? 2 : 1);
+    }
+  }
+
+  let launchTicket = process.env['CLODEX_LAUNCH_TICKET'];
+  const daemon = readDaemonRuntimeState();
+  const liveServers = readLiveServerRuntimeStates();
+  const daemonBridgeMode = process.env['CLODEX_DAEMON_BRIDGE_MODE'] === 'endpoint'
+    ? 'endpoint'
+    : 'proxy';
+  const daemonCandidate: ServerRuntimeState | undefined = daemon?.ready && isPidAlive(daemon.pid)
+    ? {
+        mode: daemonBridgeMode,
+        pid: daemon.pid,
+        port: daemonBridgeMode === 'endpoint'
+          ? daemon.endpointPort
+          : daemon.proxyPort,
+        ...(daemonBridgeMode === 'proxy' ? { caPath: daemon.caPath } : {}),
+        startedAt: daemon.startedAt,
+      }
+    : undefined;
+  const mustUseDaemon = Boolean(
+    daemonCandidate
+    || launchTicket
+    || requestedAccount
+    || wrapperRequiresServer(process.env),
+  );
+  // A daemon-launched main session and every inherited workflow/subagent must
+  // stay on the exact daemon process. Generic discovery remains only for
+  // direct legacy wrapper use that has no daemon identity or launch ticket.
+  const candidates = daemonCandidate
+    ? [daemonCandidate]
+    : mustUseDaemon
+      ? []
+      : orderWrapperServerCandidates(liveServers);
   const state: ServerRuntimeState | null = await waitForTcpListenerCandidate(
     '127.0.0.1',
     candidates,
@@ -128,11 +170,39 @@ async function main(): Promise<void> {
     { retryFailure: result => result === 'timeout' },
   );
   if (checkOnly) process.exit(state ? 0 : 1);
-  if (!state && wrapperRequiresServer(process.env)) {
-    process.stderr.write('clodex-claude: no live clodex server is available\n');
+  if (!state && mustUseDaemon) {
+    process.stderr.write('clodex-claude: the persistent clodex daemon is unavailable\n');
     process.exit(1);
   }
-  const env = computeWrapperEnv(process.env, state);
+
+  if (
+    daemon?.ready
+    && state
+    && daemon.pid === state.pid
+    && (
+      (state.mode === 'proxy' && daemon.proxyPort === state.port)
+      || (state.mode === 'endpoint' && daemon.endpointPort === state.port)
+    )
+    && (!launchTicket || requestedAccount)
+  ) {
+    try {
+      const attached = await daemonControlRequest<{ ticket: string } | null>('/v1/launches/attach', {
+        method: 'POST',
+        body: requestedAccount ? { accountId: requestedAccount } : {},
+        socketPath: daemon.controlSocketPath,
+        timeoutMs: 500,
+      });
+      launchTicket = attached?.ticket;
+    } catch (error) {
+      process.stderr.write(
+        `clodex-claude: could not pin the OpenAI account${
+          requestedAccount ? ` ${JSON.stringify(requestedAccount)}` : ''
+        }: ${error instanceof Error ? error.message : String(error)}\n`,
+      );
+      process.exit(1);
+    }
+  }
+  const env = computeWrapperEnv(process.env, state, launchTicket);
 
   execIntoClaude(claudePath!, claudeArgs, env);
 

@@ -4,7 +4,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   computeWrapperEnv,
+  LAUNCH_TICKET_HEADER,
   LOCAL_GATEWAY_API_KEY,
+  setAnthropicCustomHeader,
   wrapperRequiresServer,
 } from '../src/wrapper-env.js';
 import {
@@ -92,6 +94,56 @@ describe('computeWrapperEnv', () => {
     for (const name of ['HTTPS_PROXY', 'HTTP_PROXY', 'https_proxy', 'http_proxy']) {
       expect(env[name]).toBeUndefined();
     }
+  });
+
+  it('endpoint-mode daemon preserves its token and carries the pinned account ticket', () => {
+    const state: ServerRuntimeState = {
+      mode: 'endpoint',
+      port: 17647,
+      pid: process.pid,
+      startedAt: '2026-07-20T00:00:00.000Z',
+    };
+
+    const env = computeWrapperEnv({
+      ...baseEnv,
+      ANTHROPIC_API_KEY: 'stable-local-token.old-ticket',
+      ANTHROPIC_CUSTOM_HEADERS: [
+        'x-existing: retained',
+        `${LAUNCH_TICKET_HEADER}: stale-ticket`,
+      ].join('\n'),
+    }, state, 'new-ticket.part-two');
+
+    expect(env['ANTHROPIC_API_KEY']).toBe('stable-local-token');
+    expect(env['CLODEX_LAUNCH_TICKET']).toBe('new-ticket.part-two');
+    expect(env['ANTHROPIC_CUSTOM_HEADERS']).toBe([
+      'x-existing: retained',
+      `${LAUNCH_TICKET_HEADER}: new-ticket.part-two`,
+    ].join('\n'));
+  });
+
+  it('removes a stale launch-ticket header when endpoint mode has no ticket', () => {
+    const state: ServerRuntimeState = {
+      mode: 'endpoint',
+      port: 4242,
+      pid: process.pid,
+      startedAt: '2026-07-20T00:00:00.000Z',
+    };
+
+    const env = computeWrapperEnv({
+      ...baseEnv,
+      ANTHROPIC_CUSTOM_HEADERS: `${LAUNCH_TICKET_HEADER}: stale-ticket`,
+    }, state);
+
+    expect(env['ANTHROPIC_CUSTOM_HEADERS']).toBeUndefined();
+  });
+
+  it('rejects newline injection in custom header values', () => {
+    const env = { ...baseEnv };
+    expect(() => setAnthropicCustomHeader(
+      env,
+      LAUNCH_TICKET_HEADER,
+      'ticket\nx-injected: unsafe',
+    )).toThrow(`Invalid ${LAUNCH_TICKET_HEADER} header value`);
   });
 
   it('no live server: returns the env untouched without mutating the input', () => {

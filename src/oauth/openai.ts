@@ -12,6 +12,8 @@ const DEVICE_CODE_DEFAULT_EXPIRES_MS = 5 * 60 * 1000;
 
 export interface OpenAiIdTokenClaims {
   chatgpt_account_id?: string;
+  email?: string;
+  preferred_username?: string;
   organizations?: Array<{ id: string }>;
   'https://api.openai.com/auth'?: { chatgpt_account_id?: string };
 }
@@ -23,19 +25,31 @@ export interface OpenAiDeviceCodeData {
   expires_in?: number;
 }
 
-export function extractOpenAiAccountId(tokens: OAuthTokenResponse): string | undefined {
+function openAiTokenClaims(tokens: OAuthTokenResponse): OpenAiIdTokenClaims | undefined {
   const token = tokens.id_token ?? tokens.access_token;
   if (!token) return undefined;
   const parts = token.split('.');
   if (parts.length !== 3) return undefined;
   try {
-    const claims = JSON.parse(Buffer.from(parts[1]!, 'base64url').toString()) as OpenAiIdTokenClaims;
-    return claims.chatgpt_account_id
-      ?? claims['https://api.openai.com/auth']?.chatgpt_account_id
-      ?? claims.organizations?.[0]?.id;
+    return JSON.parse(Buffer.from(parts[1]!, 'base64url').toString()) as OpenAiIdTokenClaims;
   } catch {
     return undefined;
   }
+}
+
+export function extractOpenAiAccountId(tokens: OAuthTokenResponse): string | undefined {
+  const claims = openAiTokenClaims(tokens);
+  return claims?.chatgpt_account_id
+    ?? claims?.['https://api.openai.com/auth']?.chatgpt_account_id
+    ?? claims?.organizations?.[0]?.id;
+}
+
+export function extractOpenAiEmail(tokens: OAuthTokenResponse): string | undefined {
+  const claims = openAiTokenClaims(tokens);
+  const email = claims?.email ?? claims?.preferred_username;
+  return typeof email === 'string' && email.includes('@')
+    ? email.trim().toLowerCase()
+    : undefined;
 }
 
 export async function requestOpenAiDeviceCode(): Promise<OpenAiDeviceCodeData> {
@@ -60,7 +74,7 @@ export function openAiDeviceCodeUrl(): string {
 export async function pollOpenAiDeviceCodeToken(
   deviceData: OpenAiDeviceCodeData,
   opts?: { sleep?: (ms: number) => Promise<void>; now?: () => number },
-): Promise<{ tokens: OAuthTokenResponse; accountId?: string }> {
+): Promise<{ tokens: OAuthTokenResponse; accountId?: string; email?: string }> {
   const sleep = opts?.sleep ?? sleepMs;
   const now = opts?.now ?? (() => Date.now());
   const intervalMs = Math.max(parseInt(deviceData.interval, 10) || 5, 1) * 1000;
@@ -96,7 +110,11 @@ export async function pollOpenAiDeviceCodeToken(
         throw new Error(`OpenAI token exchange failed (${tokenResponse.status})`);
       }
       const tokens = await tokenResponse.json() as OAuthTokenResponse;
-      return { tokens, accountId: extractOpenAiAccountId(tokens) };
+      return {
+        tokens,
+        accountId: extractOpenAiAccountId(tokens),
+        email: extractOpenAiEmail(tokens),
+      };
     }
 
     if (response.status !== 403 && response.status !== 404) {
@@ -127,7 +145,7 @@ export async function refreshOpenAiAccessToken(refreshToken: string): Promise<OA
 export async function runOpenAiDeviceCodeFlow(
   onDeviceCode: (info: { url: string; userCode: string }) => void,
   opts?: { sleep?: (ms: number) => Promise<void>; now?: () => number },
-): Promise<{ tokens: OAuthTokenResponse; accountId?: string }> {
+): Promise<{ tokens: OAuthTokenResponse; accountId?: string; email?: string }> {
   const deviceData = await requestOpenAiDeviceCode();
   onDeviceCode({ url: openAiDeviceCodeUrl(), userCode: deviceData.user_code });
   return pollOpenAiDeviceCodeToken(deviceData, opts);

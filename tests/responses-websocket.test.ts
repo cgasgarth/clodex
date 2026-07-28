@@ -1497,7 +1497,7 @@ describe('createResponsesWebSocketFetch', () => {
     }));
   });
 
-  it('re-anchors Claude rewritten history to native compacted state by portable-summary hash', async () => {
+  it('returns a synthetic Claude summary and re-anchors it to native compacted state', async () => {
     const diagnostics: ResponsesWebSocketDiagnosticEvent[] = [];
     const compactFetch = vi.fn();
     const wsFetch = createResponsesWebSocketFetch(WS_URL, undefined, {
@@ -1561,7 +1561,11 @@ describe('createResponsesWebSocketFetch', () => {
       }],
     };
     const compactRequestInput = [
-      ...secondInput,
+      {
+        ...firstUser,
+        content: [{ type: 'input_text', text: 'Investigate the original task. [resumed]' }],
+      },
+      ...secondInput.slice(1),
       secondAssistant,
       compactInstruction,
     ];
@@ -1574,22 +1578,51 @@ describe('createResponsesWebSocketFetch', () => {
       }),
     );
 
-    const compactRequest = await compactRequestPromise;
-    expect(fakeSockets).toHaveLength(2);
+    await vi.waitFor(() => expect(compactedSocket.send).toHaveBeenCalledTimes(2));
     expect(JSON.parse(compactedSocket.send.mock.calls[1]![0] as string)).toMatchObject({
       previous_response_id: 'resp_anchor_compacted',
-      input: [compactInstruction],
+      input: [compactInstruction, { type: 'compaction_trigger' }],
     });
     expect(compactFetch).not.toHaveBeenCalled();
-    const portableSummary =
-      'The original task and its verified answer are preserved in this portable summary.';
-    const modelSummary =
-      `<analysis>private preparation</analysis>\n<summary>${portableSummary}</summary>`;
-    emitAssistantMessagesResponse(compactedSocket, 'resp_anchor_summary', [
-      '<summary>This earlier assistant message must not become the anchor.</summary>',
-      modelSummary,
-    ]);
-    await readAll(compactRequest);
+    emitCompactionResponse(
+      compactedSocket,
+      'resp_anchor_manual_trigger',
+      'opaque-manual-anchor',
+      {
+        input_tokens: 130,
+        input_tokens_details: { cached_tokens: 100 },
+        output_tokens: 20,
+      },
+    );
+    const compactRequest = await compactRequestPromise;
+    const compactFrames = (await readAll(compactRequest))
+      .split('\n\n')
+      .filter(Boolean)
+      .map(frame => JSON.parse(frame.replace(/^data: /, '')));
+    const syntheticText = compactFrames
+      .find(event => event.type === 'response.output_text.delta')?.delta as string;
+    expect(syntheticText).toMatch(
+      /^<summary>Context compacted natively by OpenAI and retained in Clodex checkpoint /,
+    );
+    expect(compactFrames.find(event => event.type === 'response.completed').response.usage)
+      .toMatchObject({
+        input_tokens: 130,
+        input_tokens_details: { cached_tokens: 100 },
+        output_tokens: 20,
+      });
+    expect(fakeSockets).toHaveLength(2);
+    const portableSummary = syntheticText.match(/<summary>([\s\S]*)<\/summary>/)![1]!;
+    expect(diagnostics).toContainEqual(expect.objectContaining({
+      event: 'ws_compaction',
+      outcome: 'synthetic_checkpoint',
+      transport: 'claude_compaction_response',
+      checkpointDurable: false,
+    }));
+    expect(diagnostics).toContainEqual(expect.objectContaining({
+      event: 'ws_head_decision',
+      decision: 'claude_compaction_checkpoint',
+      continuationMatchMode: 'claude_compaction_request',
+    }));
 
     const continuationPrefix =
       'This session is being continued from a previous conversation that ran out of context. '
@@ -1612,7 +1645,6 @@ describe('createResponsesWebSocketFetch', () => {
       headers: {},
       body: JSON.stringify(sessionPayload([mismatchedUser])),
     });
-    expect(fakeSockets).toHaveLength(3);
     const mismatchedSocket = lastSocket();
     mismatchedSocket.emit('open');
     const mismatchedSent = JSON.parse(mismatchedSocket.send.mock.calls[0]![0] as string);
@@ -1650,7 +1682,6 @@ describe('createResponsesWebSocketFetch', () => {
       headers: {},
       body: JSON.stringify(sessionPayload([duplicatedUser])),
     });
-    expect(fakeSockets).toHaveLength(4);
     const duplicatedSocket = lastSocket();
     duplicatedSocket.emit('open');
     const duplicatedSent = JSON.parse(duplicatedSocket.send.mock.calls[0]![0] as string);
@@ -1670,27 +1701,28 @@ describe('createResponsesWebSocketFetch', () => {
       body: JSON.stringify(sessionPayload([rewrittenUser])),
     });
 
-    expect(fakeSockets).toHaveLength(4);
-    const sent = JSON.parse(compactedSocket.send.mock.calls[2]![0] as string);
-    expect(sent.previous_response_id).toBe('resp_anchor_summary');
-    expect(sent.input).toEqual([{
-      role: 'user',
-      content: [currentPrompt],
-    }]);
+    const anchoredSocket = lastSocket();
+    anchoredSocket.emit('open');
+    const sent = JSON.parse(anchoredSocket.send.mock.calls[0]![0] as string);
+    expect(sent.previous_response_id).toBeUndefined();
+    expect(sent.input).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'compaction' }),
+      expect.objectContaining({ role: 'assistant' }),
+      { role: 'user', content: [currentPrompt] },
+    ]));
     expect(compactFetch).not.toHaveBeenCalled();
     expect(diagnostics.at(-1)).toMatchObject({
       event: 'ws_head_decision',
-      decision: 'continuation',
+      decision: 'compaction_checkpoint',
       continuationMatchMode: 'claude_compaction_summary',
-      selectedConnectionId: 2,
     });
     expect(JSON.stringify(diagnostics)).not.toContain(portableSummary);
 
-    emitTextResponse(compactedSocket, 'resp_anchor_continued', 'Implemented.');
+    emitTextResponse(anchoredSocket, 'resp_anchor_continued', 'Implemented.');
     await readAll(continued);
   });
 
-  it('does not anchor an implausibly short Claude compaction summary', async () => {
+  it('does not anchor a tampered synthetic Claude compaction summary', async () => {
     const wsFetch = createResponsesWebSocketFetch(WS_URL, undefined, {
       accountId: 'acct-short-summary',
       compactThreshold: 100,
@@ -1738,7 +1770,7 @@ describe('createResponsesWebSocketFetch', () => {
       role: 'user',
       content: [{ type: 'input_text', text: 'Create a portable summary.' }],
     };
-    const compactRequest = await withResponsesWebSocketDiagnosticContext(
+    const compactRequestPromise = withResponsesWebSocketDiagnosticContext(
       { forceCompaction: true },
       () => wsFetch('https://example.test/responses', {
         method: 'POST',
@@ -1750,8 +1782,17 @@ describe('createResponsesWebSocketFetch', () => {
         ])),
       }),
     );
-    emitTextResponse(compactedSocket, 'resp_short_summary_output', '<summary>x</summary>');
-    await readAll(compactRequest);
+    await vi.waitFor(() => expect(compactedSocket.send).toHaveBeenCalledTimes(2));
+    expect(JSON.parse(compactedSocket.send.mock.calls[1]![0] as string).input)
+      .toEqual([compactInstruction, { type: 'compaction_trigger' }]);
+    emitCompactionResponse(
+      compactedSocket,
+      'resp_short_summary_manual_trigger',
+      'short-manual-anchor',
+    );
+    const compactRequest = await compactRequestPromise;
+    expect(await readAll(compactRequest)).toContain('Context compacted natively by OpenAI');
+    expect(lastSocket()).toBe(compactedSocket);
 
     const continuationPrefix =
       'This session is being continued from a previous conversation that ran out of context. '
@@ -1784,6 +1825,136 @@ describe('createResponsesWebSocketFetch', () => {
     emitTextResponse(fallbackSocket, 'resp_short_summary_fallback', 'done');
     await readAll(continued);
   });
+
+  it.each([
+    { label: 'parent orchestrator', claudeAgentId: undefined, prefix: [] as unknown[] },
+    { label: 'ordinary subagent', claudeAgentId: 'subagent-compact', prefix: [] as unknown[] },
+    {
+      label: 'dynamic workflow agent',
+      claudeAgentId: 'workflow-compact',
+      prefix: [{
+        role: 'developer',
+        content: [{ type: 'input_text', text: 'workflow phase context' }],
+      }] as unknown[],
+    },
+  ])(
+    'restores $label synthetic compact checkpoint and token reporting after restart',
+    async ({ label, claudeAgentId, prefix }) => {
+      mkdirSync(process.env.CLODEX_HOME!, { recursive: true });
+      const checkpointStoreDir = mkdtempSync(
+        join(process.env.CLODEX_HOME!, `synthetic-${label.replaceAll(' ', '-')}-`),
+      );
+      const compactInstruction = {
+        role: 'user',
+        content: [{
+          type: 'input_text',
+          text: 'Your task is to create a detailed summary of the conversation so far.',
+        }],
+      };
+      const canonical = [
+        { type: 'compaction', encrypted_content: `opaque-${label}` },
+      ];
+      const compactFetch = vi.fn(async () => new Response(JSON.stringify({
+        output: canonical,
+        usage: {
+          input_tokens: 210,
+          input_tokens_details: { cached_tokens: 180, cache_write_tokens: 4 },
+          output_tokens: 18,
+        },
+      }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }));
+      const accountId = `acct-synthetic-${label.replaceAll(' ', '-')}`;
+      const compactingFetch = createResponsesWebSocketFetch(WS_URL, undefined, {
+        accountId,
+        compactThreshold: 100,
+        compactFetch: compactFetch as typeof fetch,
+        checkpointStoreDir,
+      });
+      const compactResponse = await withResponsesWebSocketDiagnosticContext(
+        { claudeAgentId, forceCompaction: true },
+        () => compactingFetch('https://example.test/responses', {
+          method: 'POST',
+          headers: {},
+          body: JSON.stringify(sessionPayload([...prefix, compactInstruction])),
+        }),
+      );
+      const compactEvents = (await readAll(compactResponse))
+        .split('\n\n')
+        .filter(Boolean)
+        .map(frame => JSON.parse(frame.replace(/^data: /, '')));
+      const summaryText = compactEvents
+        .find(event => event.type === 'response.output_text.delta').delta as string;
+      const summaryBody = summaryText.match(/<summary>([\s\S]*)<\/summary>/)![1]!;
+      expect(compactEvents.find(event => event.type === 'response.completed').response.usage)
+        .toMatchObject({
+          input_tokens: 210,
+          input_tokens_details: { cached_tokens: 180, cache_write_tokens: 4 },
+          output_tokens: 18,
+        });
+      expect(fakeSockets).toHaveLength(0);
+      expect(readdirSync(checkpointStoreDir)).toHaveLength(1);
+
+      resetResponsesWebSocketConnectionsForTests();
+      fakeSockets.length = 0;
+      const compactAfterRestart = vi.fn();
+      const resumedFetch = createResponsesWebSocketFetch(WS_URL, undefined, {
+        accountId,
+        compactThreshold: 100,
+        compactFetch: compactAfterRestart as typeof fetch,
+        checkpointStoreDir,
+      });
+      const continuationPrefix =
+        'This session is being continued from a previous conversation that ran out of context. '
+        + 'The summary below covers the earlier portion of the conversation.\n\n';
+      const continuationSuffix =
+        'Continue the conversation from where it left off without asking the user any further questions. '
+        + 'Resume directly — do not acknowledge the summary, do not recap what was happening, '
+        + 'do not preface with "I\'ll continue" or similar. Pick up the last task as if the break never happened.';
+      const nextPrompt = { type: 'input_text', text: `${label} next turn` };
+      const rewrittenUser = {
+        role: 'user',
+        content: [{
+          type: 'input_text',
+          text: `${continuationPrefix}Summary:\n${summaryBody}\n${continuationSuffix}`,
+        }, nextPrompt],
+      };
+      const resumed = await withResponsesWebSocketDiagnosticContext(
+        { claudeAgentId },
+        () => resumedFetch('https://example.test/responses', {
+          method: 'POST',
+          headers: {},
+          body: JSON.stringify(sessionPayload([rewrittenUser])),
+        }),
+      );
+      const socket = lastSocket();
+      socket.emit('open');
+      const sent = JSON.parse(socket.send.mock.calls[0]![0] as string);
+      expect(sent.previous_response_id).toBeUndefined();
+      expect(sent.input).toEqual(expect.arrayContaining([
+        canonical[0],
+        expect.objectContaining({ role: 'assistant' }),
+        { role: 'user', content: [nextPrompt] },
+      ]));
+      emitTextResponse(socket, `resp_${label}`, `${label} continued`, {
+        input_tokens: 50,
+        input_tokens_details: { cached_tokens: 40 },
+        output_tokens: 7,
+      });
+      const completed = (await readAll(resumed))
+        .split('\n\n')
+        .filter(Boolean)
+        .map(frame => JSON.parse(frame.replace(/^data: /, '')))
+        .find(event => event.type === 'response.completed');
+      expect(completed.response.usage).toMatchObject({
+        input_tokens: 50,
+        input_tokens_details: { cached_tokens: 40 },
+        output_tokens: 7,
+      });
+      expect(compactAfterRestart).not.toHaveBeenCalled();
+    },
+  );
 
   it('bounds retained user messages to the Codex 64K policy during a native rebase', async () => {
     const compactFetch = vi.fn();

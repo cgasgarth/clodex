@@ -47,3 +47,27 @@ export function getLogsPath(env: HomeEnv = process.env): string {
 export function getResponsesCheckpointsPath(env: HomeEnv = process.env): string {
   return join(getAppHome(env), 'responses-checkpoints');
 }
+
+export function getDaemonRuntimePath(env: HomeEnv = process.env): string {
+  return join(getAppHome(env), 'daemon-runtime.json');
+}
+
+export function getDaemonControlSocketPath(env: HomeEnv = process.env): string {
+  return join(getAppHome(env), 'clodex.sock');
+}
+
+export function getDaemonMetricsPath(env: HomeEnv = process.env): string {
+  return join(getAppHome(env), 'daemon-metrics.jsonl');
+}
+
+export function getDaemonAccountsPath(env: HomeEnv = process.env): string {
+  return join(getAppHome(env), 'accounts.json');
+}
+
+export function getDaemonTicketKeyPath(env: HomeEnv = process.env): string {
+  return join(getAppHome(env), 'launch-ticket-key');
+}
+
+export function getDaemonLaunchAgentPath(env: HomeEnv = process.env): string {
+  return join(userHome(env), 'Library', 'LaunchAgents', 'com.clodex.daemon.plist');
+}

@@ -23,10 +23,20 @@ async function listen(server: http.Server | https.Server): Promise<number> {
   return address.port;
 }
 
-async function connectMitm(proxyPort: number, ca: string): Promise<tls.TLSSocket> {
+async function connectMitm(
+  proxyPort: number,
+  ca: string,
+  proxyAuthorization?: string,
+): Promise<tls.TLSSocket> {
   const socket = net.connect(proxyPort, '127.0.0.1');
   await once(socket, 'connect');
-  socket.write('CONNECT api.anthropic.com:443 HTTP/1.1\r\nHost: api.anthropic.com:443\r\n\r\n');
+  socket.write([
+    'CONNECT api.anthropic.com:443 HTTP/1.1',
+    'Host: api.anthropic.com:443',
+    ...(proxyAuthorization ? [`Proxy-Authorization: ${proxyAuthorization}`] : []),
+    '',
+    '',
+  ].join('\r\n'));
 
   let response = Buffer.alloc(0);
   while (!response.includes(Buffer.from('\r\n\r\n'))) {
@@ -49,8 +59,9 @@ async function requestMitm(
   path: string,
   body: string | Buffer,
   headers: Record<string, string> = {},
+  proxyAuthorization?: string,
 ): Promise<string> {
-  const socket = await connectMitm(proxyPort, ca);
+  const socket = await connectMitm(proxyPort, ca, proxyAuthorization);
   let response = '';
   socket.on('data', chunk => { response += chunk.toString(); });
   const payload = Buffer.isBuffer(body) ? body : Buffer.from(body);
@@ -196,6 +207,62 @@ describe('selective HTTP proxy', () => {
     expect(shouldInterceptConnect('api.anthropic.com:8443')).toBe(false);
     expect(shouldInterceptConnect('statsig.anthropic.com:443')).toBe(false);
     expect(shouldInterceptConnect('example.com:443')).toBe(false);
+  });
+
+  it('pins translated requests to the opaque launch ticket from CONNECT', async () => {
+    const certificates = ensureHttpProxyCertificates();
+    const observed: Array<string | undefined> = [];
+    const proxy = await startHttpProxy({
+      routes: [{
+        aliasId: 'clodex:openai-oauth:test-model',
+        realModelId: 'test-model',
+        displayName: 'Test Model',
+        upstreamUrl: '',
+        apiKey: 'unused',
+        modelFormat: 'openai',
+        npm: '@ai-sdk/openai-compatible',
+        providerId: 'openai-oauth',
+        authType: 'oauth',
+      }],
+      resolveRouteForRequest: async (_route, context) => {
+        observed.push(context.launchTicket);
+        throw new Error('account route resolved for test');
+      },
+    });
+    try {
+      const ticket = 'opaque-ticket';
+      const authorization = `Basic ${Buffer.from(`clodex:${ticket}`).toString('base64')}`;
+      const socket = await connectMitm(proxy.port, certificates.caCert, authorization);
+      let response = '';
+      socket.on('data', chunk => { response += chunk.toString(); });
+      const body = JSON.stringify({
+        model: 'clodex:openai-oauth:test-model',
+        messages: [{ role: 'user', content: 'hello' }],
+        max_tokens: 16,
+      });
+      socket.write([
+        'POST /v1/messages HTTP/1.1',
+        'Host: api.anthropic.com',
+        'Content-Type: application/json',
+        `Content-Length: ${Buffer.byteLength(body)}`,
+        'Connection: close',
+        '',
+        body,
+      ].join('\r\n'));
+      const deadline = Date.now() + 2_000;
+      while (!response.includes('account route resolved for test') && Date.now() < deadline) {
+        await Promise.race([
+          once(socket, 'data'),
+          new Promise(resolve => setTimeout(resolve, 20)),
+        ]);
+      }
+      socket.destroy();
+      expect(response).toContain('401');
+      expect(response).toContain('account route resolved for test');
+      expect(observed).toEqual([ticket]);
+    } finally {
+      await proxy.close();
+    }
   });
 
   it('releases both sides of a passthrough CONNECT tunnel when upstream closes', async () => {

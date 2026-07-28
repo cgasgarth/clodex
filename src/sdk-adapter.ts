@@ -511,7 +511,11 @@ export function translateRequest(
     upstreamTools = upstreamTools.slice(0, options.maxTools);
   }
   const configuredEffort = anthropicEffortFromRequest(body) ?? options?.defaultEffort;
-  const effort = npm === '@ai-sdk/openai' && compactRequest ? 'low' : configuredEffort;
+  // Keep Claude's compact request in the active session effort partition.
+  // The Responses transport needs the matching warm previous_response_id head
+  // to invoke native in-band compaction; forcing low here makes a medium/high
+  // session look unrelated and falls back to retransmitting full history.
+  const effort = configuredEffort;
   let providerOptions = deepMergeProviderOptions(
     thinkingProviderOptions(npm),
     effortProviderOptions(npm, effort, options?.reasoningMetadata?.upstreamModelId ?? body.model, options?.reasoningMetadata),
@@ -573,7 +577,7 @@ interface SdkUsage {
   /** AI SDK 6 compatibility for older third-party LanguageModel implementations. */
   cachedInputTokens?: number;
 }
-interface AnthropicUsage {
+export interface AnthropicUsage {
   input_tokens: number;
   output_tokens: number;
   cache_creation_input_tokens: number;
@@ -607,6 +611,8 @@ type LogFn = (msg: () => string) => void;
 export interface AnthropicStreamObserver {
   /** Called for every AI SDK fullStream part before Relay translates it. */
   onPart?: (partType: string) => void;
+  /** Final Anthropic-shaped usage emitted in message_delta. */
+  onUsage?: (usage: AnthropicUsage) => void;
   /** Local fallback used when the provider omits usage at stream completion. */
   initialInputTokens?: number;
   abortSignal?: AbortSignal;
@@ -848,6 +854,7 @@ export async function writeAnthropicStream(
 
   closeOpen();
   ensureStart();
+  observer?.onUsage?.(usage);
   emit('message_delta', { type: 'message_delta', delta: { stop_reason: finishReason, stop_sequence: null }, usage });
   emit('message_stop', { type: 'message_stop' });
 }

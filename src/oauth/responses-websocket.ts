@@ -224,6 +224,32 @@ function connectionCountByGeneration(generation: ConnectionEntry['generation']):
   return connectionEntries().filter(entry => entry.generation === generation).length;
 }
 
+export interface ResponsesWebSocketPoolSnapshot {
+  total: number;
+  open: number;
+  inFlight: number;
+  established: number;
+  nursery: number;
+  isolated: number;
+  partitions: number;
+  checkpoints: number;
+}
+
+/** Privacy-safe process-global pool counters for daemon diagnostics. */
+export function responsesWebSocketPoolSnapshot(): ResponsesWebSocketPoolSnapshot {
+  const entries = connectionEntries();
+  return {
+    total: entries.length,
+    open: entries.filter(entry => entry.open).length,
+    inFlight: entries.filter(entry => entry.inFlight).length,
+    established: connectionCountByGeneration('established'),
+    nursery: connectionCountByGeneration('nursery'),
+    isolated: connectionCountByGeneration('isolated'),
+    partitions: connections.size,
+    checkpoints: checkpointEntries().length,
+  };
+}
+
 function checkpointEntries(key?: string): CompactionCheckpoint[] {
   return key
     ? [...(compactionCheckpoints.get(key) ?? [])]
@@ -292,10 +318,17 @@ function saveCompactionCheckpoint(entry: ConnectionEntry): void {
       : RESPONSES_COMPACTION_CHECKPOINT_TTL_MS,
     checkpointStoreDir: entry.checkpointStoreDir,
   };
+  persistCompactionCheckpoint(checkpoint, entry.debug);
+}
+
+function persistCompactionCheckpoint(
+  checkpoint: CompactionCheckpoint,
+  debug: (message: string) => void,
+): void {
   upsertCompactionCheckpoint(checkpoint);
-  if (entry.checkpointStoreDir) {
+  if (checkpoint.checkpointStoreDir) {
     try {
-      const persisted = saveStoredResponsesCheckpoint(entry.checkpointStoreDir, {
+      const persisted = saveStoredResponsesCheckpoint(checkpoint.checkpointStoreDir, {
         version: 1,
         checkpointKey: checkpoint.key,
         lineageKey: checkpoint.lineageKey,
@@ -308,11 +341,91 @@ function saveCompactionCheckpoint(entry: ConnectionEntry): void {
         promptFieldHashes: checkpoint.promptFieldHashes,
         lastUsedAt: checkpoint.lastUsedAt,
       }, MAX_COMPACTION_CHECKPOINTS_PER_PARTITION, MAX_COMPACTION_CHECKPOINTS);
-      if (!persisted) entry.debug('compact checkpoint exceeded durable store size cap');
+      if (!persisted) debug('compact checkpoint exceeded durable store size cap');
     } catch {
-      entry.debug('compact checkpoint persistence unavailable');
+      debug('compact checkpoint persistence unavailable');
     }
   }
+}
+
+function syntheticClaudeCompactionSummary(checkpointId: string): string {
+  return '<summary>Context compacted natively by OpenAI and retained in Clodex '
+    + `checkpoint ${checkpointId}. Continue from the attached native context.</summary>`;
+}
+
+function syntheticAssistantMessage(itemId: string, text: string): JsonObject {
+  return {
+    type: 'message',
+    id: itemId,
+    status: 'completed',
+    role: 'assistant',
+    content: [{
+      type: 'output_text',
+      text,
+      annotations: [],
+    }],
+  };
+}
+
+function syntheticClaudeCompactionResponse(
+  responseId: string,
+  assistantItem: JsonObject,
+  text: string,
+  usage: ResponsesCompactionUsage | undefined,
+): Response {
+  const itemId = String(assistantItem.id);
+  const normalizedUsage = {
+    input_tokens: usage?.inputTokens ?? 0,
+    input_tokens_details: {
+      cached_tokens: usage?.cachedTokens ?? 0,
+      cache_write_tokens: usage?.cacheWriteTokens ?? 0,
+    },
+    output_tokens: usage?.outputTokens ?? 0,
+  };
+  const events = [
+    {
+      type: 'response.created',
+      response: { id: responseId, status: 'in_progress' },
+    },
+    {
+      type: 'response.output_item.added',
+      output_index: 0,
+      item: { ...assistantItem, content: [] },
+    },
+    {
+      type: 'response.output_text.delta',
+      output_index: 0,
+      content_index: 0,
+      item_id: itemId,
+      delta: text,
+    },
+    {
+      type: 'response.output_text.done',
+      output_index: 0,
+      content_index: 0,
+      item_id: itemId,
+      text,
+    },
+    {
+      type: 'response.output_item.done',
+      output_index: 0,
+      item: assistantItem,
+    },
+    {
+      type: 'response.completed',
+      response: {
+        id: responseId,
+        status: 'completed',
+        output: [assistantItem],
+        usage: normalizedUsage,
+      },
+    },
+  ];
+  const body = events.map(event => `data: ${JSON.stringify(event)}\n\n`).join('');
+  return new Response(body, {
+    status: 200,
+    headers: { 'content-type': 'text/event-stream; charset=utf-8' },
+  });
 }
 
 function loadCompactionCheckpointStore(directory: string | undefined, now: number): void {
@@ -591,7 +704,8 @@ type ContinuationMatchMode =
   | 'exact'
   | 'replayed_reasoning'
   | 'omitted_reasoning'
-  | 'claude_compaction_summary';
+  | 'claude_compaction_summary'
+  | 'claude_compaction_request';
 
 function continuationMatchRank(mode: ContinuationMatchMode): number {
   switch (mode) {
@@ -599,6 +713,7 @@ function continuationMatchRank(mode: ContinuationMatchMode): number {
     case 'replayed_reasoning': return 1;
     case 'omitted_reasoning': return 2;
     case 'claude_compaction_summary': return 3;
+    case 'claude_compaction_request': return 4;
   }
 }
 
@@ -2236,6 +2351,7 @@ export function createResponsesWebSocketFetch(
       return { output, usage: ctx.responseUsage, triggerWireBytes };
     };
 
+    const forceCompaction = diagnosticCorrelation?.forceCompaction === true;
     const candidates = partitionKey ? connectionEntries(partitionKey) : [];
     const idleCandidates = candidates.filter(entry => !entry.inFlight);
     const matches = idleCandidates
@@ -2245,8 +2361,26 @@ export function createResponsesWebSocketFetch(
       .sort((left, right) => left.match.delta.length - right.match.delta.length
         || continuationMatchRank(left.match.mode) - continuationMatchRank(right.match.mode));
     let selected: ConnectionEntry | undefined = matches[0]?.entry;
-    const selectedMatch = matches[0]?.match;
-    const selectedDelta = selectedMatch?.delta;
+    let selectedMatch = matches[0]?.match;
+    let selectedDelta = selectedMatch?.delta;
+    if (!selected && forceCompaction) {
+      const compactInstruction = inputArray(payload).at(-1);
+      const agentCandidates = idleCandidates.filter(
+        entry => entry.claudeAgentId === diagnosticCorrelation?.claudeAgentId,
+      );
+      if (
+        agentCandidates.length === 1
+        && compactInstruction
+        && conversationItemKind(compactInstruction) === 'user'
+      ) {
+        selected = agentCandidates[0];
+        selectedMatch = {
+          delta: [compactInstruction],
+          mode: 'claude_compaction_request',
+        };
+        selectedDelta = selectedMatch.delta;
+      }
+    }
     const checkpointMatches = checkpointKey
       ? checkpointEntries(checkpointKey)
         .map(checkpoint => ({ checkpoint, match: historyContinuationMatch(checkpoint, payload) }))
@@ -2302,6 +2436,7 @@ export function createResponsesWebSocketFetch(
       | 'continuation'
       | 'compaction_new_head'
       | 'compaction_trigger_new_head'
+      | 'claude_compaction_checkpoint'
       | 'compaction_checkpoint'
       | 'parallel_new_head'
       | 'parallel_isolated'
@@ -2315,9 +2450,8 @@ export function createResponsesWebSocketFetch(
     const compactThreshold = options.compactThreshold;
     const measuredInputTokens = selected?.lastInputTokens ?? selectedCheckpoint?.lastInputTokens;
     const estimatedInputTokens = diagnosticCorrelation?.estimatedInputTokens;
-    const forceCompaction = diagnosticCorrelation?.forceCompaction === true;
     const compactionReason = forceCompaction
-      ? undefined
+      ? 'claude_compaction_request'
       : compactThreshold !== undefined
         && measuredInputTokens !== undefined
         && measuredInputTokens >= compactThreshold
@@ -2482,6 +2616,9 @@ export function createResponsesWebSocketFetch(
 
     if (compacted) {
       // Native compaction returned canonical input for a fresh response chain.
+      if (forceCompaction && compactedInputBase && checkpointKey) {
+        decision = 'claude_compaction_checkpoint';
+      }
     } else if (selected && selectedDelta) {
       sendPayload = { ...payload, input: selectedDelta, previous_response_id: selected.responseId };
       continued = true;
@@ -2657,6 +2794,60 @@ export function createResponsesWebSocketFetch(
       })),
       evictions,
     }, diagnosticCorrelation);
+
+    if (
+      decision === 'claude_compaction_checkpoint'
+      && compactedInputBase
+      && checkpointKey
+    ) {
+      const checkpointId = randomUUID();
+      const responseId = `clodex_compact_${checkpointId}`;
+      const itemId = `msg_${checkpointId}`;
+      const summaryText = syntheticClaudeCompactionSummary(checkpointId);
+      const assistantItem = syntheticAssistantMessage(itemId, summaryText);
+      const summaryHash = compactionSummaryHash(summaryText);
+      if (!summaryHash) {
+        throw new ResponsesCompactionError('Synthetic Claude compaction marker was not anchorable');
+      }
+      const checkpoint: CompactionCheckpoint = {
+        connectionId: 0,
+        lineageId: nextLineageDebugId++,
+        lineageKey: randomUUID(),
+        key: checkpointKey,
+        requestInput,
+        expectedAssistant: [assistantItem],
+        requestInputHashes: requestInput.map(conversationItemHash),
+        expectedAssistantHashes: [conversationItemHash(assistantItem)],
+        expectedAssistantKinds: [conversationItemKind(assistantItem)],
+        compactedInput: [...compactedInputBase, assistantItem],
+        lastInputTokens: compactionUsage?.outputTokens,
+        claudeCompactionSummaryHash: summaryHash,
+        promptFieldHashes,
+        instructionsSnapshot,
+        lastUsedAt: now,
+        ttlMs: checkpointStoreDir
+          ? RESPONSES_COMPACTION_DURABLE_CHECKPOINT_TTL_MS
+          : RESPONSES_COMPACTION_CHECKPOINT_TTL_MS,
+        checkpointStoreDir,
+      };
+      persistCompactionCheckpoint(checkpoint, debug);
+      if (supersededEntry) deleteEntry(supersededEntry);
+      emitDiagnostic(options, {
+        event: 'ws_compaction',
+        outcome: 'synthetic_checkpoint',
+        transport: 'claude_compaction_response',
+        reason: compactionReason,
+        checkpointItems: checkpoint.compactedInput.length,
+        checkpointDurable: Boolean(checkpointStoreDir),
+        ...(compactionUsage ?? {}),
+      }, diagnosticCorrelation);
+      return syntheticClaudeCompactionResponse(
+        responseId,
+        assistantItem,
+        summaryText,
+        compactionUsage,
+      );
+    }
 
     let activeContext: RequestContext | undefined;
     const stream = new ReadableStream<Uint8Array>({

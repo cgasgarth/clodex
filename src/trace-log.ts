@@ -305,6 +305,33 @@ export interface WebSocketDiagnosticRequestLogEntry {
   body: Record<string, unknown>;
 }
 
+export type InferenceTraceEvent =
+  | { kind: 'request'; entry: InferenceRequestLogEntry }
+  | { kind: 'lifecycle'; entry: InferenceResponseLifecycleLogEntry }
+  | { kind: 'upstream_error'; entry: InferenceResponseErrorLogEntry }
+  | { kind: 'route_unavailable'; entry: InferenceRouteUnavailableLogEntry }
+  | { kind: 'websocket'; entry: Record<string, unknown> };
+
+const inferenceTraceSubscribers = new Set<(event: InferenceTraceEvent) => void>();
+
+/** Process-local observability hook used by the persistent daemon. */
+export function subscribeInferenceTrace(
+  subscriber: (event: InferenceTraceEvent) => void,
+): () => void {
+  inferenceTraceSubscribers.add(subscriber);
+  return () => inferenceTraceSubscribers.delete(subscriber);
+}
+
+function publishInferenceTrace(event: InferenceTraceEvent): void {
+  for (const subscriber of inferenceTraceSubscribers) {
+    try {
+      subscriber(event);
+    } catch {
+      // Observability must never alter inference behavior.
+    }
+  }
+}
+
 const REDACTED_DIAGNOSTIC_HEADER = '[REDACTED]';
 const CONVERSATION_BODY_FIELDS = new Set(['system', 'messages', 'tools']);
 
@@ -418,6 +445,7 @@ export function writeInferenceRequestLog(
     ...(entry.stream !== undefined ? { stream: entry.stream } : {}),
     ...(includePreview ? { requestPreview: compactLogValue(entry.requestPreview!, REQUEST_PREVIEW_MAX + 20) } : {}),
   }));
+  publishInferenceTrace({ kind: 'request', entry });
 }
 
 function nonNegativeInteger(value: number | undefined): number | undefined {
@@ -479,6 +507,7 @@ export function writeInferenceResponseLifecycleLog(
     ...(entry.failureSource ? { failureSource: entry.failureSource } : {}),
     ...(entry.terminationSource ? { terminationSource: entry.terminationSource } : {}),
   }));
+  publishInferenceTrace({ kind: 'lifecycle', entry });
 }
 
 /** Record enough process lifetime metadata to distinguish a dead local proxy from an upstream failure. */
@@ -524,6 +553,7 @@ export function writeWebSocketDiagnosticLog(
     timestamp: new Date().toISOString(),
     ...entry,
   }));
+  publishInferenceTrace({ kind: 'websocket', entry });
 }
 
 /** Append an upstream HTTP failure; response content follows the request-preview opt-in. */
@@ -544,6 +574,7 @@ export function writeInferenceResponseErrorLog(
     ...(entry.attemptCount !== undefined ? { attemptCount: entry.attemptCount } : {}),
     ...(includeContent ? { errorContent: compactLogValueWithMarker(entry.errorContent!, RESPONSE_ERROR_MAX) } : {}),
   }));
+  publishInferenceTrace({ kind: 'upstream_error', entry });
 }
 
 /** Append a local routing-policy rejection without attributing it to an upstream provider. */
@@ -558,6 +589,7 @@ export function writeInferenceRouteUnavailableLog(
     modelId: compactLogValue(entry.modelId),
     statusCode: entry.statusCode,
   }));
+  publishInferenceTrace({ kind: 'route_unavailable', entry });
 }
 
 export function prepareProviderTraceLog(): string {

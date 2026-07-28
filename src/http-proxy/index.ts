@@ -4,7 +4,7 @@ import { loadPreferences } from '../config.js';
 import { DEFAULT_SERVER_PORT } from '../constants.js';
 import { fetchProviderCatalog, resolveLocalProviderApiKey } from '../provider-catalog.js';
 import { providersForTarget } from '../target-compatibility.js';
-import type { ProxyRoute } from '../proxy.js';
+import type { ProxyHandle, ProxyRoute, ProxyRouteRequestResolver } from '../proxy.js';
 import { buildHttpProxyRoutes, type HttpProxyRouteResult } from './routes.js';
 import { startHttpProxy, type HttpProxyHandle, type HttpProxyOptions } from './server.js';
 import { ensureHttpProxyCaBundle } from './ca.js';
@@ -120,6 +120,8 @@ export function buildConfiguredHttpProxyOptions(
   inferenceLogPath = getInferenceRequestLogPath(),
   debugLogPath?: string,
   webSocketDiagnosticsLogPath?: string,
+  resolveRouteForRequest?: ProxyRouteRequestResolver,
+  adapterHandle?: ProxyHandle,
 ): HttpProxyOptions {
   return {
     host: '127.0.0.1',
@@ -138,6 +140,8 @@ export function buildConfiguredHttpProxyOptions(
     debugLogPath,
     inferenceLogPath,
     webSocketDiagnosticsLogPath,
+    resolveRouteForRequest,
+    adapterHandle,
   };
 }
 
@@ -164,6 +168,8 @@ export async function startConfiguredHttpProxy(
   inferenceLogPath = getInferenceRequestLogPath(),
   debugLogPath?: string,
   webSocketDiagnosticsLogPath?: string,
+  resolveRouteForRequest?: ProxyRouteRequestResolver,
+  adapterHandle?: ProxyHandle,
 ): Promise<{ handle: HttpProxyHandle; loaded: LoadedHttpProxyRoutes }> {
   const loaded = await loadHttpProxyRoutes();
   const handle = await startHttpProxy(buildConfiguredHttpProxyOptions(
@@ -173,6 +179,8 @@ export async function startConfiguredHttpProxy(
     inferenceLogPath,
     debugLogPath,
     webSocketDiagnosticsLogPath,
+    resolveRouteForRequest,
+    adapterHandle,
   ));
   handle.caCertPath = ensureHttpProxyCaBundle(
     handle.caCertPath,

@@ -189,7 +189,12 @@ export function oauthProviderKeyringAccount(providerId: string): string {
 function oauthProviderIdFromAccount(account: string): string | null {
   const prefix = 'oauth:provider:';
   const baseAccount = credentialAccountBase(account);
-  return baseAccount.startsWith(prefix) ? baseAccount.slice(prefix.length) : null;
+  if (!baseAccount.startsWith(prefix)) return null;
+  const providerId = baseAccount.slice(prefix.length);
+  // Managed account credentials use a unique suffix while retaining the
+  // canonical OAuth provider id for token refresh behavior.
+  if (providerId.startsWith('openai-oauth:account:')) return 'openai-oauth';
+  return providerId;
 }
 
 const oauthRefreshInflight = new Map<string, Promise<string | null>>();

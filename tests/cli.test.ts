@@ -36,10 +36,10 @@ describe('catalogUsesNativeContextOwner', () => {
 });
 
 describe('parseArgs', () => {
-  it('parses bare root command without launching claude', () => {
+  it('parses bare root command as the dashboard', () => {
     expect(parseArgs([])).toEqual({
       command: 'root',
-      showHelp: true,
+      showHelp: false,
       showVersion: false,
       dryRun: false,
       trace: false,
@@ -52,6 +52,14 @@ describe('parseArgs', () => {
     expect(parseArgs(['-h'])).toMatchObject({ command: 'root', showHelp: true });
     expect(parseArgs(['--version'])).toMatchObject({ command: 'root', showVersion: true });
     expect(parseArgs(['-v'])).toMatchObject({ command: 'root', showVersion: true });
+  });
+
+  it('parses daemon lifecycle shortcuts', () => {
+    expect(parseArgs(['start'])).toMatchObject({ command: 'start' });
+    expect(parseArgs(['stop'])).toMatchObject({ command: 'stop' });
+    expect(parseArgs(['start', '--unknown']).error).toBe(
+      'Unknown start option: --unknown',
+    );
   });
 
   it('parses claude command with no passthrough args', () => {

@@ -19,10 +19,10 @@
 // 10 seconds or when its pid dies, and after a brief bounded wait a writer
 // proceeds lockless (best-effort — same exposure as the old single-slot write).
 //
-// NOTE: only the standalone `clodex server` command writes this file. The
-// per-session MITM proxy spawned by `clodex claude --proxy` is private to that
-// session and must NOT advertise itself here. `clodex server --no-discovery`
-// (or CLODEX_NO_DISCOVERY=1) also opts a server out of registration entirely.
+// NOTE: the standalone `clodex server` command and persistent Clodex daemon
+// write this file. Normal `clodex claude --proxy` launches use the daemon rather than a
+// private proxy. `clodex server --no-discovery` (or CLODEX_NO_DISCOVERY=1)
+// opts a standalone server out of registration entirely.
 
 import {
   closeSync,

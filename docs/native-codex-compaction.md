@@ -38,11 +38,11 @@ that child. Manual `/compact` remains available. Native OpenAI compaction at
 the configured threshold owns the model-facing chain, with the advertised
 model window retained as the hard provider ceiling and recovery boundary.
 
-Native compaction intentionally does not rewrite Claude's local transcript. The
-two ledgers therefore remain different: Claude retains UI/resume history while
-Clodex retains compacted OpenAI continuation state. On restart, model
-switch, checkpoint expiry, or recovery failure, Claude's manual/portable
-summary path remains the safe handoff.
+Automatic native compaction does not rewrite Claude's local transcript. Manual
+`/compact` does: after OpenAI returns canonical compacted state, Clodex gives
+Claude a synthetic checkpoint marker and stores the exact marker hash beside
+the opaque state. Claude keeps its normal compacted-transcript UI/resume shape,
+while the next request reattaches to the native checkpoint.
 
 Enabling native compaction also opts into durable recovery checkpoints under
 `~/.clodex/responses-checkpoints`. These files can contain retained user
@@ -51,9 +51,11 @@ creates the directory with mode `0700` and files with mode `0600`, rejects
 symlinked stores, limits each file to 8 MiB, and removes checkpoints after seven
 days on the next checkpoint scan. Keep the Clodex home directory private.
 
-Claude-initiated compaction turns, including `/compact`, never trigger an
-additional hidden native compaction. They run against the existing response
-chain so the portable summary sees the full available history.
+With native ownership enabled, Claude-initiated `/compact` uses native OpenAI
+compaction. Clodex does not send the full transcript to a model with summary
+instructions. A successful native result is acknowledged with a synthetic
+`<summary>` marker; if both native transports fail, Clodex preserves Claude's
+ordinary summary request instead of faking success.
 
 ## Operations that can lose native state
 
@@ -73,11 +75,13 @@ partition and 64 globally. Durable storage is bounded, rescanned periodically
 for checkpoints written by another Clodex process, and used to recover matching
 agent lineages after restart.
 
-Before a planned restart, model switch, or resume, use Claude's normal
-`/compact` while the transcript still fits. If native state is already gone and
-the saved transcript is over the model window, the session is not recoverable
-in-session: start a new session with a portable handoff rather than repeatedly
-retrying the oversized transcript.
+Native `/compact` survives daemon restart through the durable checkpoint, but
+its marker is deliberately not a portable summary. It cannot recover context
+after checkpoint expiry or across incompatible model/account partitions. For a
+cross-model/account handoff, create an explicit portable handoff before
+switching. If native state is already gone and the saved transcript is over the
+model window, start a new session from that handoff rather than retrying the
+oversized transcript.
 
 ## Request and cache behavior
 
@@ -86,16 +90,22 @@ For a matching live response head:
 1. Clodex sends only the current delta plus
    `{ "type": "compaction_trigger" }` with `previous_response_id`.
 2. OpenAI returns exactly one opaque compaction item.
-3. Clodex starts a fresh response chain from recent retained user input followed
-   by that opaque item.
-4. The new head is recorded only after `response.completed`; later turns return
-   to delta-only continuation.
+3. For an ordinary turn, Clodex starts a fresh response chain from recent
+   retained user input plus that opaque item.
+4. For Claude `/compact`, Clodex stores that state directly as a durable
+   checkpoint and returns the synthetic marker without a second inference.
+5. Later turns restore the checkpoint and return to normal continuation.
 
-The trigger request is cache-warm by construction because it continues the live
-response chain. The fresh post-compaction chain is a new prefix and can incur a
-one-time cache write before later turns can reuse that new cached prefix.
-Native compaction is an additional inference request and consumes plan/API
-usage.
+Claude can replay a resumed `/compact` transcript with non-semantic differences
+that prevent exact prefix matching. Clodex may still use the warm trigger only
+when exactly one idle head matches the same session, agent, account, model, and
+effort; it sends only the final compact instruction. Multiple possible heads
+never use this relaxed rule.
+
+The trigger request is cache-warm because it continues the live response chain.
+The first post-compaction answer starts from canonical compacted state and can
+incur a one-time cache write. Native compaction consumes plan/API usage, but
+manual `/compact` no longer adds a separate transcript-summary inference.
 
 Retained user messages use a 64K approximate-token budget. Text is counted by
 UTF-8 bytes and media is charged the same flat vision estimate used elsewhere
@@ -112,17 +122,18 @@ sequentially inside one fetch. Together they can consume the full 120-second
 Claude Code no-data watchdog before the ordinary fallback starts. A failed
 compact attempt preserves the ordinary request path where possible.
 
-## Claude transcript handoff
+## Claude transcript anchor
 
-When Claude later writes a portable summary, Clodex stores only an SHA-256 hash
-of the normalized summary beside an already compacted head. The next rewritten
-request can reattach only when exactly one continuation envelope has the exact
-hash. Missing, short, malformed, duplicated, or non-matching envelopes fall
-back without selecting opaque state. Diagnostics report an `anchor_missed`
-outcome without recording summary text.
+After native `/compact`, Clodex stores only an SHA-256 hash of the normalized
+synthetic marker beside the opaque checkpoint. The next rewritten request can
+reattach only when exactly one continuation envelope has the exact hash.
+Missing, short, malformed, duplicated, or non-matching envelopes fall back
+without selecting opaque state. Diagnostics report `anchor_missed` without
+recording marker text.
 
-Summary extraction mirrors the client: the last assistant message containing a
-`<summary>` block supplies the first text part used for the anchor.
+The marker is created only after native compaction succeeds and is never sent to
+OpenAI as a substitute for context; the opaque checkpoint remains the actual
+model context.
 
 ## Diagnostics and live probe
 
@@ -140,7 +151,10 @@ also reports input, cached-input, cache-write, and output token usage when the
 backend supplies it.
 
 Live capability checks established that Sol and Luna accept
-`/responses/compact`, and Sol accepts an in-band `compaction_trigger`.
+`/responses/compact`, and Sol accepts an in-band `compaction_trigger`. A live
+Sol `/compact` over a warm 34K-token chain completed in 8.36s with 32,512 cached
+tokens, 1,525 uncached input tokens, and 280 compact output tokens; exact-marker
+recall succeeded both immediately and after daemon restart.
 Automatic `context_management` was rejected by the ChatGPT/Codex backend during
 testing, so Clodex does not send it.
 

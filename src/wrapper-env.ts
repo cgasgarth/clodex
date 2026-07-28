@@ -9,6 +9,33 @@ import type { ServerRuntimeState } from './server-runtime.js';
 
 const PROXY_ENV_VARS = ['HTTPS_PROXY', 'HTTP_PROXY', 'https_proxy', 'http_proxy'] as const;
 export const REQUIRE_SERVER_ENV = 'CLODEX_REQUIRE_SERVER';
+export const LAUNCH_TICKET_ENV = 'CLODEX_LAUNCH_TICKET';
+export const LAUNCH_TICKET_HEADER = 'x-clodex-launch-ticket';
+
+export function setAnthropicCustomHeader(
+  env: NodeJS.ProcessEnv,
+  name: string,
+  value: string | undefined,
+): void {
+  const normalizedName = name.toLowerCase();
+  const existing = (env['ANTHROPIC_CUSTOM_HEADERS'] ?? '')
+    .split(/\r?\n/)
+    .map(line => line.trim())
+    .filter(Boolean)
+    .filter(line => {
+      const separator = line.indexOf(':');
+      return separator < 0 || line.slice(0, separator).trim().toLowerCase() !== normalizedName;
+    });
+  if (value !== undefined) {
+    if (/[\r\n]/.test(value)) throw new Error(`Invalid ${name} header value`);
+    existing.push(`${name}: ${value}`);
+  }
+  if (existing.length > 0) {
+    env['ANTHROPIC_CUSTOM_HEADERS'] = existing.join('\n');
+  } else {
+    delete env['ANTHROPIC_CUSTOM_HEADERS'];
+  }
+}
 
 export function removeAnthropicProxyBypass(env: NodeJS.ProcessEnv): void {
   const noProxyValues = [env['NO_PROXY'], env['no_proxy']]
@@ -52,6 +79,7 @@ export function wrapperRequiresServer(env: NodeJS.ProcessEnv): boolean {
 export function computeWrapperEnv(
   baseEnv: NodeJS.ProcessEnv,
   state: ServerRuntimeState | null,
+  launchTicket?: string,
 ): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...baseEnv };
   // No live server: launch claude completely untouched — a down server must
@@ -61,7 +89,11 @@ export function computeWrapperEnv(
   if (state.mode === 'proxy') {
     // Selective MITM: claude keeps its own Anthropic credentials; the proxy
     // routes clodex:/alias models to OpenAI and passes everything else through.
-    const proxyUrl = `http://127.0.0.1:${state.port}`;
+    const ticket = launchTicket ?? env[LAUNCH_TICKET_ENV];
+    const proxyUrl = ticket
+      ? `http://clodex:${encodeURIComponent(ticket)}@127.0.0.1:${state.port}`
+      : `http://127.0.0.1:${state.port}`;
+    if (ticket) env[LAUNCH_TICKET_ENV] = ticket;
     delete env['ANTHROPIC_BASE_URL'];
     for (const name of PROXY_ENV_VARS) env[name] = proxyUrl;
     if (state.caPath) env['NODE_EXTRA_CA_CERTS'] = state.caPath;
@@ -72,6 +104,16 @@ export function computeWrapperEnv(
   // Endpoint gateway: all traffic goes to the local Anthropic-format gateway.
   for (const name of PROXY_ENV_VARS) delete env[name];
   env['ANTHROPIC_BASE_URL'] = `http://127.0.0.1:${state.port}/anthropic`;
-  env['ANTHROPIC_API_KEY'] = LOCAL_GATEWAY_API_KEY;
+  const ticket = launchTicket ?? env[LAUNCH_TICKET_ENV];
+  if (ticket) {
+    env[LAUNCH_TICKET_ENV] = ticket;
+    const currentKey = env['ANTHROPIC_API_KEY']?.trim();
+    const localToken = currentKey?.split('.', 1)[0] || LOCAL_GATEWAY_API_KEY;
+    env['ANTHROPIC_API_KEY'] = localToken;
+    setAnthropicCustomHeader(env, LAUNCH_TICKET_HEADER, ticket);
+  } else {
+    env['ANTHROPIC_API_KEY'] ||= LOCAL_GATEWAY_API_KEY;
+    setAnthropicCustomHeader(env, LAUNCH_TICKET_HEADER, undefined);
+  }
   return env;
 }

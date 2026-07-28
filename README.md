@@ -90,7 +90,44 @@ flowchart LR
 ```
 
 > [!TIP]
-> Using Claude Code's agents view or background agents? Ask your Claude Code agent to read [docs/background-agents.md](docs/background-agents.md) and set it up for you — one global `clodex server --proxy` plus the `clodex-claude` wrapper bin bridges every claude process automatically.
+> Using Claude Code workflows, agents, or background sessions? Run one persistent
+> Clodex daemon and point Claude Code at the `clodex-claude` wrapper. See
+> [docs/background-agents.md](docs/background-agents.md).
+
+## Persistent daemon and Ink dashboard
+
+The optional daemon gives all Claude sessions, workflows, and subagents one
+shared Anthropic-format endpoint, selective proxy, and set of OpenAI WebSocket
+continuation pools:
+
+```bash
+clodex daemon install       # macOS LaunchAgent; starts at login
+clodex start                # start only; no dashboard
+clodex-claude               # launch a bridged Claude session
+clodex                      # start if needed, then open the Ink dashboard
+clodex stop                 # stop the daemon
+```
+
+Bare `clodex` shows live WebSocket/session counts, 24-hour token and cache
+graphs, quota windows, accounts, and bounded diagnostics. The daemon uses a
+restart-stable loopback ports (`17647` endpoint and `17646` proxy; override the
+proxy base with `CLODEX_DAEMON_PORT`) and an owner-only Unix control socket.
+`clodex claude …` also starts the daemon when needed and launches Claude
+through that shared process.
+
+Up to five ChatGPT/Codex logins can be stored:
+
+```bash
+clodex accounts add
+clodex accounts list
+clodex accounts select person@example.com
+clodex accounts usage
+```
+
+Accounts are identified by their OpenAI sign-in email. Selection is deliberately
+manual: it changes the default for new launches, while existing sessions and
+their workflow/subagent children stay pinned to the account they started with.
+Clodex never changes accounts after quota, capacity, or authentication errors.
 
 ## CLI reference
 
