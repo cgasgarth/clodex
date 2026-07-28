@@ -19,8 +19,8 @@ Contributions are welcome — see [CONTRIBUTING.md](./CONTRIBUTING.md) for how t
 ## Quick Start (ChatGPT/Codex plan)
 
 ```bash
-npm install -g @bman654/clodex          # 1. install the CLI (Node 22+)
-clodex providers auth openai   # 2. sign in with your ChatGPT/Codex plan (device-code OAuth)
+npm install -g @bman654/clodex # 1. install the CLI (Node 22+)
+clodex providers auth openai   # 2. sign in with your ChatGPT/Codex plan
 clodex models                  # 3. pick favorite models and aliases
 clodex models --alias sol=clodex:openai-oauth:gpt-5.6-sol
 clodex models --alias luna=clodex:openai-oauth:gpt-5.6-luna
@@ -96,7 +96,7 @@ flowchart LR
 
 ## Persistent daemon and Ink dashboard
 
-The optional daemon gives all Claude sessions, workflows, and subagents one
+The persistent daemon gives all Claude sessions, workflows, and subagents one
 shared Anthropic-format endpoint, selective proxy, and set of OpenAI WebSocket
 continuation pools:
 
@@ -109,7 +109,7 @@ clodex stop                 # stop the daemon
 ```
 
 Bare `clodex` shows live WebSocket/session counts, 24-hour token and cache
-graphs, quota windows, accounts, and bounded diagnostics. The daemon uses a
+graphs, quota windows, accounts, and bounded diagnostics. The daemon uses
 restart-stable loopback ports (`17647` endpoint and `17646` proxy; override the
 proxy base with `CLODEX_DAEMON_PORT`) and an owner-only Unix control socket.
 `clodex claude …` also starts the daemon when needed and launches Claude
@@ -128,6 +128,9 @@ Accounts are identified by their OpenAI sign-in email. Selection is deliberately
 manual: it changes the default for new launches, while existing sessions and
 their workflow/subagent children stay pinned to the account they started with.
 Clodex never changes accounts after quota, capacity, or authentication errors.
+Endpoint launches use a stable local API key so Claude Code can remember its
+approval; the signed per-launch account ticket is sent separately in the
+`x-clodex-launch-ticket` header and inherited by spawned agents.
 
 ## CLI reference
 
@@ -298,14 +301,19 @@ clodex --version    # version
 
 ChatGPT/Codex OAuth sessions can opt into OpenAI's native opaque Responses
 compaction. It is off by default because OpenAI-side compaction does not shrink
-Claude Code's saved transcript. Read [How to configure OpenAI
-compaction](docs/native-codex-compaction.md) before enabling it.
+Claude Code's saved transcript. Matching durable checkpoints can restore
+compacted parent, subagent, and workflow histories after a daemon restart.
+Read [How to configure OpenAI compaction](docs/native-codex-compaction.md)
+before enabling it.
 
 ## Known limitations
 
 - Cost display inside Claude Code is inaccurate for OpenAI models (Claude Code applies its own pricing table).
 - In the endpoint-mode switch menu, the displayed context window reflects the launch model and does not update on live `/model` switches (Claude Code fetches window metadata once at startup). Proxy mode with `clodex patch` reports correct per-model windows.
 - ChatGPT/Codex OAuth requires `store:false` upstream; some OpenAI cache controls are intentionally omitted on OAuth routes because they returned empty responses during compatibility testing.
+- An already-oversized legacy Claude transcript that never acquired a native
+  compaction checkpoint may not be recoverable in place. Create a new session
+  from a portable handoff instead of repeatedly replaying it.
 
 ## License
 

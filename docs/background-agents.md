@@ -25,9 +25,11 @@ flowchart LR
   `17646`. Set `CLODEX_DAEMON_PORT` before installation to change the proxy
   base port.
 - Control operations use `~/.clodex/clodex.sock`, mode `0600`.
-- `clodex-claude` obtains a signed launch ticket and embeds it as local proxy
-  authentication. Claude-spawned children inherit that ticket, so a workflow
-  stays on the same account as its parent.
+- `clodex-claude` obtains a signed launch ticket. Proxy mode carries it as
+  local proxy authentication; endpoint mode sends it in
+  `x-clodex-launch-ticket` beside a stable local API key. Claude-spawned
+  children inherit that ticket, so a workflow stays on the same account as its
+  parent without generating a new custom-key approval prompt.
 - Account selection affects new launches only. There is no quota/auth/capacity
   failover.
 
