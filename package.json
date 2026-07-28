@@ -75,10 +75,10 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/bman654/clodex.git"
+    "url": "git+https://github.com/cgasgarth/clodex.git"
   },
-  "homepage": "https://github.com/bman654/clodex#readme",
+  "homepage": "https://github.com/cgasgarth/clodex#readme",
   "bugs": {
-    "url": "https://github.com/bman654/clodex/issues"
+    "url": "https://github.com/cgasgarth/clodex/issues"
   }
 }
