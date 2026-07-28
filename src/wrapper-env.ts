@@ -10,6 +10,32 @@ import type { ServerRuntimeState } from './server-runtime.js';
 const PROXY_ENV_VARS = ['HTTPS_PROXY', 'HTTP_PROXY', 'https_proxy', 'http_proxy'] as const;
 export const REQUIRE_SERVER_ENV = 'CLODEX_REQUIRE_SERVER';
 export const LAUNCH_TICKET_ENV = 'CLODEX_LAUNCH_TICKET';
+export const LAUNCH_TICKET_HEADER = 'x-clodex-launch-ticket';
+
+export function setAnthropicCustomHeader(
+  env: NodeJS.ProcessEnv,
+  name: string,
+  value: string | undefined,
+): void {
+  const normalizedName = name.toLowerCase();
+  const existing = (env['ANTHROPIC_CUSTOM_HEADERS'] ?? '')
+    .split(/\r?\n/)
+    .map(line => line.trim())
+    .filter(Boolean)
+    .filter(line => {
+      const separator = line.indexOf(':');
+      return separator < 0 || line.slice(0, separator).trim().toLowerCase() !== normalizedName;
+    });
+  if (value !== undefined) {
+    if (/[\r\n]/.test(value)) throw new Error(`Invalid ${name} header value`);
+    existing.push(`${name}: ${value}`);
+  }
+  if (existing.length > 0) {
+    env['ANTHROPIC_CUSTOM_HEADERS'] = existing.join('\n');
+  } else {
+    delete env['ANTHROPIC_CUSTOM_HEADERS'];
+  }
+}
 
 export function removeAnthropicProxyBypass(env: NodeJS.ProcessEnv): void {
   const noProxyValues = [env['NO_PROXY'], env['no_proxy']]
@@ -83,9 +109,11 @@ export function computeWrapperEnv(
     env[LAUNCH_TICKET_ENV] = ticket;
     const currentKey = env['ANTHROPIC_API_KEY']?.trim();
     const localToken = currentKey?.split('.', 1)[0] || LOCAL_GATEWAY_API_KEY;
-    env['ANTHROPIC_API_KEY'] = `${localToken}.${ticket}`;
+    env['ANTHROPIC_API_KEY'] = localToken;
+    setAnthropicCustomHeader(env, LAUNCH_TICKET_HEADER, ticket);
   } else {
     env['ANTHROPIC_API_KEY'] ||= LOCAL_GATEWAY_API_KEY;
+    setAnthropicCustomHeader(env, LAUNCH_TICKET_HEADER, undefined);
   }
   return env;
 }

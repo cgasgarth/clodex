@@ -74,7 +74,11 @@ import {
 } from './daemon/index.js';
 import { accountsHelpText, runAccountsCommand } from './daemon/account-command.js';
 import { daemonControlRequest } from './daemon/control-client.js';
-import { computeWrapperEnv } from './wrapper-env.js';
+import {
+  computeWrapperEnv,
+  LAUNCH_TICKET_HEADER,
+  setAnthropicCustomHeader,
+} from './wrapper-env.js';
 import { getConfigPath, getProvidersPath } from './paths.js';
 import { getOrCreateProxyToken } from './proxy-token.js';
 const STARTER_CLAUDE_FLAGS = new Set(['--dry-run', '--trace', '--endpoint', '--proxy', '--save-mode', '--help', '-h', '--version', '-v']);
@@ -1183,9 +1187,7 @@ async function runClaudeDaemonEndpointCommand(
   const route = loaded.routes.find(item =>
     normalizeRouteLookupId(item.aliasId) === normalizeRouteLookupId(routeLookup),
   ) ?? loaded.routes[0];
-  const apiKey = launchTicket
-    ? `${getOrCreateProxyToken()}.${launchTicket}`
-    : getOrCreateProxyToken();
+  const apiKey = getOrCreateProxyToken();
   const childEnv = buildChildEnv(
     `http://127.0.0.1:${runtime.endpointPort}`,
     launchModel,
@@ -1195,7 +1197,10 @@ async function runClaudeDaemonEndpointCommand(
     true,
     catalogUsesNativeContextOwner(loaded.routes),
   );
-  if (launchTicket) childEnv['CLODEX_LAUNCH_TICKET'] = launchTicket;
+  if (launchTicket) {
+    childEnv['CLODEX_LAUNCH_TICKET'] = launchTicket;
+    setAnthropicCustomHeader(childEnv, LAUNCH_TICKET_HEADER, launchTicket);
+  }
   childEnv['CLODEX_REQUIRE_SERVER'] = '1';
   childEnv['CLODEX_DAEMON_BRIDGE_MODE'] = 'endpoint';
   childEnv['CLAUDE_CODE_PROCESS_WRAPPER'] ??= join(
