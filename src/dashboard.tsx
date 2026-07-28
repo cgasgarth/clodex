@@ -75,10 +75,19 @@ interface Diagnostic {
   statusCode?: number;
 }
 
+export interface DeviceCodePrompt {
+  url: string;
+  userCode: string;
+}
+
 const SPARK_CHARS = '▁▂▃▄▅▆▇█';
 
 export function accountDisplayName(account: Pick<Account, 'email'>): string {
   return account.email ?? 'Email unavailable';
+}
+
+export function deviceCodeInstruction({ userCode }: DeviceCodePrompt): string {
+  return `Enter code ${userCode} in the browser.`;
 }
 
 export function sparkline(values: number[], width = 48): string {
@@ -156,6 +165,7 @@ function Dashboard(): React.ReactNode {
   const [loading, setLoading] = useState(false);
   const [accountAction, setAccountAction] = useState(false);
   const [pendingLogoutId, setPendingLogoutId] = useState<string>();
+  const [deviceCode, setDeviceCode] = useState<DeviceCodePrompt>();
 
   const refresh = useCallback(async (usage = false) => {
     setLoading(true);
@@ -186,17 +196,21 @@ function Dashboard(): React.ReactNode {
   const login = useCallback(() => {
     if (accountAction) return;
     setAccountAction(true);
+    setDeviceCode(undefined);
     setMessage('Starting OpenAI sign-in…');
     loginOpenAiAccount({
       onDeviceCode: ({ url, userCode }) => {
-        setMessage(`Browser opened · enter code ${userCode} at ${url}`);
+        setDeviceCode({ url, userCode });
+        setMessage('Browser opened; complete OpenAI sign-in below.');
       },
     }).then(
       account => {
+        setDeviceCode(undefined);
         setMessage(`Signed in as ${account.email}`);
         void refresh(true).finally(() => setAccountAction(false));
       },
       error => {
+        setDeviceCode(undefined);
         setAccountAction(false);
         setMessage(error instanceof Error ? error.message : String(error));
       },
@@ -363,6 +377,15 @@ function Dashboard(): React.ReactNode {
               </Box>
             ))}
       </Box>
+
+      {deviceCode && (
+        <Box borderStyle="round" borderColor="yellow" paddingX={1} flexDirection="column">
+          <Text bold color="yellow">OpenAI sign-in</Text>
+          <Text>{deviceCodeInstruction(deviceCode)}</Text>
+          <Text dimColor>{deviceCode.url}</Text>
+          <Text dimColor>The code stays visible until sign-in finishes.</Text>
+        </Box>
+      )}
 
       <Box borderStyle="round" paddingX={1} flexDirection="column">
         <Text bold>Recent diagnostics</Text>
