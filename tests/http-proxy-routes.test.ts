@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'bun:test';
 import { buildHttpProxyRoutes, httpProxyModelId } from '../src/http-proxy/routes.js';
 import { buildPatchModelConfig } from '../src/patcher.js';
 import type { LocalProvider } from '../src/types.js';

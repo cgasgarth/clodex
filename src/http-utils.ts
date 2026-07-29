@@ -20,7 +20,7 @@ export function decodeRequestBody(raw: Buffer, encoding?: string | string[]): st
       return zlib.brotliDecompressSync(raw).toString();
     case 'zstd':
       if (typeof zlib.zstdDecompressSync !== 'function') {
-        throw new Error('zstd request encoding requires Node >= 22.15');
+        throw new Error('zstd request encoding is unavailable in this Bun build');
       }
       return zlib.zstdDecompressSync(raw).toString();
     default:

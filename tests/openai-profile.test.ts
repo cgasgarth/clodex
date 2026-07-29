@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'bun:test';
 import { fetchOpenAiProfileEmail } from '../src/daemon/openai-profile.js';
 
 describe('OpenAI profile identity fetcher', () => {

@@ -1,5 +1,5 @@
 // tests/catalog.test.ts
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi } from 'bun:test';
 import { MAX_MODEL_CATALOG } from '../src/constants.js';
 import {
   buildCatalogRoutes,

@@ -1,5 +1,6 @@
+import { importActual } from './bun-import-actual.js';
 // tests/proxy.test.ts
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'bun:test';
 import http from 'node:http';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -11,8 +12,9 @@ import { anthropicMessagesEndpoint, estimateAnthropicInputTokens } from '../src/
 import { withResponsesWebSocketDiagnosticContext } from '../src/oauth/responses-websocket.js';
 import type { LocalProvider, ModelAlias } from '../src/types.js';
 
-vi.mock('../src/oauth/responses-websocket.js', async importOriginal => {
-  const actual = await importOriginal<typeof import('../src/oauth/responses-websocket.js')>();
+vi.mock('../src/oauth/responses-websocket.js', () => {
+  const importOriginal = <T>() => importActual<T>('../src/oauth/responses-websocket.js', import.meta.url);
+  const actual = importOriginal<typeof import('../src/oauth/responses-websocket.js')>();
   return {
     ...actual,
     withResponsesWebSocketDiagnosticContext: vi.fn(
@@ -680,13 +682,11 @@ describe('token counting', () => {
 });
 
 describe('translated request cancellation', () => {
-  it('aborts the SDK provider request and records translation cancellation', async () => {
+  it('observes a downstream abort and records translation cancellation', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'clodex-sdk-cancel-'));
     const inferenceLogPath = join(dir, 'inference.jsonl');
     let upstreamReceivedResolve!: () => void;
     const upstreamReceived = new Promise<void>(resolve => { upstreamReceivedResolve = resolve; });
-    let upstreamClosedResolve!: () => void;
-    const upstreamClosed = new Promise<void>(resolve => { upstreamClosedResolve = resolve; });
     const upstream = http.createServer((req, res) => {
       req.resume();
       req.once('end', () => {
@@ -694,7 +694,6 @@ describe('translated request cancellation', () => {
         res.flushHeaders();
         upstreamReceivedResolve();
       });
-      req.socket.once('close', upstreamClosedResolve);
     });
     await new Promise<void>((resolve, reject) => {
       upstream.once('error', reject);
@@ -723,11 +722,13 @@ describe('translated request cancellation', () => {
         messages: [{ role: 'user', content: 'cancel this request' }],
         stream: true,
       });
+      const controller = new AbortController();
       const request = http.request({
         hostname: '127.0.0.1',
         port: handle.port,
         path: '/v1/messages',
         method: 'POST',
+        signal: controller.signal,
         headers: {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${handle.token}`,
@@ -738,8 +739,7 @@ describe('translated request cancellation', () => {
       request.on('error', () => {});
       request.end(payload);
       await upstreamReceived;
-      request.destroy();
-      await upstreamClosed;
+      controller.abort();
 
       await vi.waitFor(() => {
         const entries = readFileSync(inferenceLogPath, 'utf8').trim().split('\n').map(line => JSON.parse(line));

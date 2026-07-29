@@ -71,9 +71,8 @@ function isExecutableFile(path: string): boolean {
  * from launching claude directly. That also makes the signal forwarding and
  * exit-code mapping below unnecessary on this path.
  *
- * `process.execve` is POSIX-only and landed in Node 22.15. Windows and the
- * older 22.x releases still permitted by `engines.node` fall back to spawning,
- * which behaves correctly apart from background pty resizes.
+ * Bun exposes `process.execve` on POSIX. Windows falls back to spawning, which
+ * behaves correctly apart from background pty resizes.
  *
  * A failed exec cannot fall back to spawning: on syscall failure `execve`
  * aborts with a native crash dump (exit 134) rather than throwing. So re-check

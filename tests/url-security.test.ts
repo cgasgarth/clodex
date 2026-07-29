@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'bun:test';
 import { validateCustomEndpointUrl } from '../src/registry/url-security.js';
 
 describe('validateCustomEndpointUrl', () => {

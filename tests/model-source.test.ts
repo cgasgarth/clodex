@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect } from 'bun:test';
 import { resolveModelSource } from '../src/registry/model-source.js';
 import type { RegistryProvider } from '../src/registry/types.js';
 

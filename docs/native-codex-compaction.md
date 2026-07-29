@@ -142,7 +142,7 @@ conversation text or opaque content. The guarded probe is available with:
 
 ```sh
 CLODEX_LIVE_COMPACTION_PROBE=1 \
-pnpm dlx tsx scripts/probe-openai-compaction.ts
+bun run scripts/probe-openai-compaction.ts
 ```
 
 The probe reports trigger request bytes as `triggerWireBytes` and received SSE

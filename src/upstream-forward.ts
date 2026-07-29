@@ -153,7 +153,7 @@ export async function relayAnthropicMessages(
       'Cache-Control': 'no-cache',
       'Connection': 'keep-alive',
     });
-    Readable.fromWeb(upstreamRes.body as Parameters<typeof Readable.fromWeb>[0])
+    Readable.fromWeb(upstreamRes.body as unknown as Parameters<typeof Readable.fromWeb>[0])
       .on('error', () => res.destroy())
       .pipe(res);
     return;

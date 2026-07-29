@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect } from 'bun:test';
 import { APICallError } from 'ai';
 import { anthropicErrorType, clampRetryAfterSeconds, sdkUpstreamErrorDetails } from '../src/upstream-error.js';
 

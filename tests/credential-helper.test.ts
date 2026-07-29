@@ -10,9 +10,10 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'bun:test';
 import {
   CREDENTIAL_HELPER_ENV,
+  CREDENTIAL_HELPER_TIMEOUT_ENV,
   configuredCredentialHelper,
   configuredCredentialHelperPath,
   credentialAccountBase,
@@ -54,6 +55,7 @@ describe('external credential helper', () => {
     process.env[CREDENTIAL_HELPER_ENV] = helperPath;
     process.env.CLODEX_TEST_CREDENTIAL_HELPER_STORE = join(tempDir, 'credentials.json');
     delete process.env.CLODEX_TEST_CREDENTIAL_HELPER_MODE;
+    delete process.env[CREDENTIAL_HELPER_TIMEOUT_ENV];
   });
 
   afterEach(() => {
@@ -62,6 +64,7 @@ describe('external credential helper', () => {
     delete process.env[CREDENTIAL_HELPER_ENV];
     delete process.env.CLODEX_TEST_CREDENTIAL_HELPER_STORE;
     delete process.env.CLODEX_TEST_CREDENTIAL_HELPER_MODE;
+    delete process.env[CREDENTIAL_HELPER_TIMEOUT_ENV];
     rmSync(tempDir, { recursive: true, force: true });
   });
 
@@ -275,33 +278,26 @@ describe('external credential helper', () => {
 
   it('force-kills a helper that exceeds the runtime limit', async () => {
     process.env.CLODEX_TEST_CREDENTIAL_HELPER_MODE = 'hang-ignore-term';
+    process.env[CREDENTIAL_HELPER_TIMEOUT_ENV] = '500';
     const storePath = process.env.CLODEX_TEST_CREDENTIAL_HELPER_STORE!;
-    const realSetTimeout = globalThis.setTimeout;
-    vi.useFakeTimers();
-    try {
-      const outcome = readCredentialHelperAccount('provider:test').catch(error => error);
-      await new Promise(resolve => realSetTimeout(resolve, 100));
-      const pid = Number.parseInt(readFileSync(`${storePath}.helper-pid`, 'utf8'), 10);
+    const outcome = readCredentialHelperAccount('provider:test').catch(error => error);
+    await waitForPath(`${storePath}.helper-pid`);
+    const pid = Number.parseInt(readFileSync(`${storePath}.helper-pid`, 'utf8'), 10);
 
-      await vi.advanceTimersByTimeAsync(10_001);
-      await expect(outcome).resolves.toMatchObject({
-        message: 'credential helper get timed out',
-      });
+    await expect(outcome).resolves.toMatchObject({
+      message: 'credential helper get timed out',
+    });
 
-      vi.useRealTimers();
-      let running = true;
-      const deadline = Date.now() + 2_000;
-      while (running && Date.now() < deadline) {
-        try {
-          process.kill(pid, 0);
-          await new Promise(resolve => realSetTimeout(resolve, 10));
-        } catch {
-          running = false;
-        }
+    let running = true;
+    const deadline = Date.now() + 2_000;
+    while (running && Date.now() < deadline) {
+      try {
+        process.kill(pid, 0);
+        await new Promise(resolve => setTimeout(resolve, 10));
+      } catch {
+        running = false;
       }
-      expect(running).toBe(false);
-    } finally {
-      vi.useRealTimers();
     }
+    expect(running).toBe(false);
   });
 });

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, afterEach } from 'vitest';
+import { describe, expect, it, vi, afterEach } from 'bun:test';
 import { accessTokenIsExpiring, oauthCredentialNeedsRefresh, tokensToStoredCredential } from '../src/oauth/types.js';
 import { extractOpenAiAccountId } from '../src/oauth/openai.js';
 import { postOAuthRefresh } from '../src/oauth/refresh-http.js';

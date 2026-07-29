@@ -1,4 +1,4 @@
-import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import type { ServerResponse } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import { isAuthorized } from './auth.js';
 import {
@@ -17,7 +17,7 @@ import {
   streamOpenAiResponse,
   type OpenAiRequest,
 } from '../openai-adapter.js';
-import { sendJson, readBody } from '../http-utils.js';
+import { decodeRequestBody, sendJson } from '../http-utils.js';
 import { relayAnthropicMessages, resolveOAuthRetryReplacement } from '../upstream-forward.js';
 import {
   anthropicPromptTooLongMessage,
@@ -61,7 +61,8 @@ import {
 } from '../sdk-adapter.js';
 import { withResponsesWebSocketDiagnosticContext } from '../oauth/responses-websocket.js';
 import { resolveOpenAiCompactionThreshold } from '../oauth/responses-compaction.js';
-import { listenTcpServer, tcpListenerUrlHost } from '../listener-ready.js';
+import { tcpListenerUrlHost } from '../listener-ready.js';
+import { BunHttpResponse } from '../bun-http-response.js';
 
 export interface ServerOptions {
   host: string;
@@ -89,7 +90,7 @@ export interface ServerHandle {
   host: string;
   port: number;
   url: string;
-  server: Server;
+  server: Bun.Server<undefined>;
   inferenceLogPath?: string;
   close: () => Promise<void>;
 }
@@ -183,27 +184,44 @@ export async function startServer(options: ServerOptions): Promise<ServerHandle>
   const languageModelCache: LanguageModelCache = new Map();
   const plog = makeServerLog(options.debugLogPath);
 
-  const server = createServer((req, res) => {
-    void routeRequest(req, res, options, languageModelCache, plog);
+  const server = Bun.serve({
+    hostname: options.host,
+    port: options.port,
+    idleTimeout: 255,
+    fetch(req, bunServer) {
+      const response = new BunHttpResponse();
+      if (req.method === 'POST') bunServer.timeout(req, 0);
+      void routeRequest(
+        req,
+        response as unknown as ServerResponse,
+        options,
+        languageModelCache,
+        plog,
+      ).catch(error => response.destroy(
+        error instanceof Error ? error : new Error(String(error)),
+      ));
+      return response.response;
+    },
   });
-
-  const address = await listenTcpServer(server, options.port, options.host);
+  const boundPort = server.port;
+  if (boundPort === undefined) {
+    await server.stop(true);
+    throw new Error('Server did not bind to a TCP port');
+  }
 
   return {
     host: options.host,
-    port: address.port,
-    url: `http://${tcpListenerUrlHost(address.address)}:${address.port}`,
+    port: boundPort,
+    url: `http://${tcpListenerUrlHost(options.host)}:${boundPort}`,
     server,
     inferenceLogPath: options.inferenceLogPath,
-    close: () => new Promise<void>((resolve, reject) => {
-      server.close(err => (err ? reject(err) : resolve()));
-    }),
+    close: () => server.stop(true),
   };
 }
 
-async function routeRequest(req: IncomingMessage, res: ServerResponse, options: ServerOptions, modelCache: LanguageModelCache, plog: PLog): Promise<void> {
+async function routeRequest(req: Request, res: ServerResponse, options: ServerOptions, modelCache: LanguageModelCache, plog: PLog): Promise<void> {
   try {
-    const pathname = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`).pathname;
+    const pathname = new URL(req.url).pathname;
     plog(`${req.method} ${pathname}`);
 
     if (req.method === 'GET' && pathname === '/health') {
@@ -211,7 +229,7 @@ async function routeRequest(req: IncomingMessage, res: ServerResponse, options: 
       return;
     }
 
-    if (!isAuthorized(toRequest(req), options.serverPassword)) {
+    if (!isAuthorized(req, options.serverPassword)) {
       sendJson(res, 401, { error: { message: 'Unauthorized' } });
       return;
     }
@@ -257,7 +275,7 @@ async function routeRequest(req: IncomingMessage, res: ServerResponse, options: 
 }
 
 async function handleAnthropicMessages(
-  req: IncomingMessage,
+  req: Request,
   res: ServerResponse,
   options: ServerOptions,
   modelCache: LanguageModelCache,
@@ -275,12 +293,8 @@ async function handleAnthropicMessages(
     return;
   }
   const requestId = randomUUID();
-  const claudeSessionIdHeader = Array.isArray(req.headers['x-claude-code-session-id'])
-    ? req.headers['x-claude-code-session-id'][0]
-    : req.headers['x-claude-code-session-id'];
-  const claudeAgentIdHeader = Array.isArray(req.headers['x-claude-code-agent-id'])
-    ? req.headers['x-claude-code-agent-id'][0]
-    : req.headers['x-claude-code-agent-id'];
+  const claudeSessionIdHeader = req.headers.get('x-claude-code-session-id') ?? undefined;
+  const claudeAgentIdHeader = req.headers.get('x-claude-code-agent-id') ?? undefined;
   const claudeSessionId = extractClaudeSessionId(body as AnthropicRequest, claudeSessionIdHeader);
   if (options.webSocketDiagnosticsLogPath) {
     writeWebSocketDiagnosticRequestLog(options.webSocketDiagnosticsLogPath, {
@@ -288,7 +302,7 @@ async function handleAnthropicMessages(
       claudeSessionId,
       provider: inferenceProvider(model),
       route: model.modelFormat === 'anthropic' ? 'passthrough' : 'translated',
-      headers: req.headers,
+      headers: Object.fromEntries(req.headers),
       body,
     });
   }
@@ -314,8 +328,7 @@ async function handleAnthropicMessages(
       });
       return;
     }
-    const betaHeaderRaw = req.headers['anthropic-beta'];
-    const inboundBeta = Array.isArray(betaHeaderRaw) ? betaHeaderRaw.join(',') : betaHeaderRaw;
+    const inboundBeta = req.headers.get('anthropic-beta') ?? undefined;
     const clientWantsStream = Boolean(body.stream);
     const forwardBody: Record<string, unknown> = { ...body, model: upstreamModelId(model) };
     const authType = model.authType ?? 'api';
@@ -537,7 +550,7 @@ async function handleAnthropicMessages(
 }
 
 async function handleOpenAIChatCompletions(
-  req: IncomingMessage,
+  req: Request,
   res: ServerResponse,
   options: ServerOptions,
   modelCache: LanguageModelCache,
@@ -769,29 +782,13 @@ function getResponseModelId(bodyModel: unknown, model: ServerModelInfo, options:
     : (typeof bodyModel === 'string' ? bodyModel : model.id);
 }
 
-async function readJson(req: IncomingMessage): Promise<JsonBody | null> {
+async function readJson(req: Request): Promise<JsonBody | null> {
   try {
-    const raw = await readBody(req);
+    const rawBytes = Buffer.from(await req.arrayBuffer());
+    if (rawBytes.length > 50 * 1024 * 1024) return null;
+    const raw = decodeRequestBody(rawBytes, req.headers.get('content-encoding') ?? undefined);
     return raw ? JSON.parse(raw) : {};
   } catch {
     return null;
   }
-}
-
-function toRequest(req: IncomingMessage): Request {
-  const headers = new Headers();
-  for (const [name, value] of Object.entries(req.headers)) {
-    if (Array.isArray(value)) {
-      for (const item of value) headers.append(name, sanitizeIncomingHeaderValue(item));
-    } else if (value !== undefined) {
-      headers.set(name, sanitizeIncomingHeaderValue(value));
-    }
-  }
-
-  return new Request('http://localhost/', { headers });
-}
-
-/** HTTP headers cannot contain CR/LF — common when a multi-line secret is pasted into a client. */
-function sanitizeIncomingHeaderValue(value: string): string {
-  return value.replace(/\r?\n/g, ' ').trim();
 }

@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect } from 'bun:test';
 import { localProviderToRegistry } from '../src/registry/convert.js';
 import type { LocalProvider } from '../src/types.js';
 

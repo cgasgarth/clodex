@@ -1,3 +1,4 @@
+import { importActual } from './bun-import-actual.js';
 import { createHash } from 'node:crypto';
 import {
   existsSync,
@@ -10,7 +11,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'bun:test';
 
 const keyring = vi.hoisted(() => ({
   values: new Map<string, string>(),
@@ -34,8 +35,9 @@ const keyring = vi.hoisted(() => ({
   lockHome: '' as string,
 }));
 
-vi.mock('node:os', async importOriginal => {
-  const actual = await importOriginal<typeof import('node:os')>();
+vi.mock('node:os', () => {
+  const importOriginal = <T>() => importActual<T>('node:os', import.meta.url);
+  const actual = importOriginal<typeof import('node:os')>();
   return {
     ...actual,
     userInfo: () => ({

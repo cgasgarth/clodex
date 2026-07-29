@@ -388,7 +388,12 @@ export type ClaudePatchTarget =
  */
 export function resolveClaudeBinaryForPatch(): ClaudePatchTarget {
   const envOverride = process.env['TWEAKCC_CC_INSTALLATION_PATH'];
-  const nativeSymlink = join(homedir(), '.local', 'bin', 'claude');
+  const nativeSymlink = join(
+    process.env['HOME'] ?? process.env['USERPROFILE'] ?? homedir(),
+    '.local',
+    'bin',
+    'claude',
+  );
   const source = envOverride?.trim()
     || (existsSync(nativeSymlink) ? nativeSymlink : null)
     || findClaudeBinary();
@@ -441,6 +446,11 @@ export interface ApplyOutcome {
   message: string;
   detailLines?: string[];
 }
+
+export type PatcherTweakccApi = Pick<
+  typeof import('tweakcc'),
+  'tryDetectInstallation' | 'readContent' | 'writeContent'
+>;
 
 /**
  * Establish that a backup really holds the pristine bytes of `version` before
@@ -527,7 +537,11 @@ export async function applyPatch(
   version: string,
   desired: DesiredPatchConfig,
   configHash: string,
-  opts: { trace: boolean; manifest: PatchManifest | null },
+  opts: {
+    trace: boolean;
+    manifest: PatchManifest | null;
+    tweakcc?: PatcherTweakccApi;
+  },
 ): Promise<ApplyOutcome> {
   let candidateDir: string | undefined;
   let results: PatchSiteResult[];
@@ -540,7 +554,8 @@ export async function applyPatch(
 
     // tweakcc's lib entry pulls in its interactive-picker deps (ink/react), so
     // load it lazily — only when a patch is actually applied.
-    const { tryDetectInstallation, readContent, writeContent } = await import('tweakcc');
+    const { tryDetectInstallation, readContent, writeContent } = opts.tweakcc
+      ?? await import('tweakcc');
 
     // Everything below reads and writes the CANDIDATE; the live binary is only
     // touched by the final rename. Seeding it is also how the source gets
@@ -772,7 +787,11 @@ function runRestoreCommand(target: ClaudePatchTarget): number {
   return 0;
 }
 
-export async function runPatchCommand(opts: { restore?: boolean; trace?: boolean } = {}): Promise<number> {
+export async function runPatchCommand(opts: {
+  restore?: boolean;
+  trace?: boolean;
+  tweakcc?: PatcherTweakccApi;
+} = {}): Promise<number> {
   const target = resolveClaudeBinaryForPatch();
 
   // Handled BEFORE the patch path's version check, because `--restore` has its
@@ -823,6 +842,7 @@ export async function runPatchCommand(opts: { restore?: boolean; trace?: boolean
     const outcome = await applyPatch(binaryPath, version, desired, configHash, {
       trace: opts.trace ?? false,
       manifest,
+      tweakcc: opts.tweakcc,
     });
     if (!outcome.ok) {
       p.log.error(outcome.message);

@@ -8,16 +8,13 @@
 // global fetch dispatcher — but only when a proxy env var is actually set, so
 // proxy-less environments are completely unaffected.
 //
-// The OAuth Responses WebSocket transport (`ws` in oauth/responses-websocket.ts)
-// does not go through the undici dispatcher; outboundWsProxyAgent() builds an
-// https-proxy-agent CONNECT-tunnel agent for it from the same env vars.
+// Bun's native OAuth Responses WebSocket transport receives the selected proxy
+// URL directly from outboundProxyUrlForTarget().
 //
 // Self-loop guard: clodex never sets proxy vars in its OWN process.env — proxy
 // bridge mode sets HTTPS_PROXY only in the CHILD's env (buildHttpProxyChildEnv
 // works on a copy of process.env). The dispatcher therefore only ever points at
 // a proxy the user configured for clodex, never at clodex's own MITM listener.
-
-import type { Agent as HttpAgent } from 'node:http';
 
 export function hasOutboundProxyEnv(env: NodeJS.ProcessEnv = process.env): boolean {
   return Boolean(
@@ -94,12 +91,4 @@ export async function installOutboundProxyDispatcher(): Promise<boolean> {
     );
     return false;
   }
-}
-
-/** CONNECT-tunnel agent for the `ws` OAuth WebSocket transport, or undefined when no proxy applies. */
-export async function outboundWsProxyAgent(wsUrl: string): Promise<HttpAgent | undefined> {
-  const proxyUrl = outboundProxyUrlForTarget(wsUrl);
-  if (!proxyUrl) return undefined;
-  const { HttpsProxyAgent } = await import('https-proxy-agent');
-  return new HttpsProxyAgent(proxyUrl);
 }

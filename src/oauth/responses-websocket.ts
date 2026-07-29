@@ -9,10 +9,10 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import type { FetchFunction } from '@ai-sdk/provider-utils';
-import type { RawData, WebSocket as WsWebSocket } from 'ws';
 import { IMAGE_INPUT_TOKEN_ESTIMATE } from '../anthropic-endpoints.js';
 import { CODEX_RESPONSES_WEBSOCKETS_BETA } from '../constants.js';
-import { outboundWsProxyAgent } from '../outbound-proxy.js';
+import { outboundProxyUrlForTarget } from '../outbound-proxy.js';
+import { loadBunNativeWebSocket } from '../bun-websocket.js';
 import { anthropicErrorType, clampRetryAfterSeconds } from '../upstream-error.js';
 import {
   compactResponsesWindow,
@@ -57,6 +57,8 @@ export interface ResponsesWebSocketFetchOptions {
   compactThreshold?: number;
   /** Test seam for the unary compact request. */
   compactFetch?: typeof fetch;
+  /** Test seam; production uses Bun's native WebSocket client. */
+  webSocketConstructor?: WebSocketConstructor;
   compactTimeoutMs?: number;
   /** Private durable store for compacted native-compaction recovery state. */
   checkpointStoreDir?: string;
@@ -89,6 +91,14 @@ export function withResponsesWebSocketDiagnosticContext<T>(
 }
 
 type JsonObject = Record<string, unknown>;
+type RawData = Buffer | ArrayBuffer | Buffer[];
+
+interface ResponsesWebSocket {
+  send(data: string, callback?: (error?: Error) => void): void;
+  close(code?: number, reason?: string): void;
+  on(event: string, listener: (...args: any[]) => void): this;
+  _socket?: { unref?: () => void };
+}
 
 interface OutputAccumulator {
   type?: string;
@@ -148,7 +158,7 @@ interface ConnectionEntry {
   key?: string;
   checkpointKey?: string;
   checkpointStoreDir?: string;
-  socket: WsWebSocket;
+  socket: ResponsesWebSocket;
   persistent: boolean;
   generation: 'nursery' | 'established' | 'isolated';
   open: boolean;
@@ -1842,8 +1852,8 @@ function outgoingPayload(payload: JsonObject): string {
 
 type WebSocketConstructor = new (
   url: string,
-  options: { headers: Record<string, string>; agent?: import('node:http').Agent },
-) => WsWebSocket;
+  options: { headers: Record<string, string>; proxy?: string },
+) => ResponsesWebSocket;
 
 function sendContext(entry: ConnectionEntry, ctx: RequestContext): void {
   const outgoing = outgoingPayload(ctx.sendPayload);
@@ -2054,11 +2064,11 @@ function createConnection(
   checkpointStoreDir: string | undefined,
   options: ConnectionEntry['options'],
   debug: ConnectionEntry['debug'],
-  /** Optional HTTP(S)_PROXY CONNECT-tunnel agent (see src/outbound-proxy.ts). */
-  agent?: import('node:http').Agent,
+  /** Optional HTTP(S)_PROXY URL consumed by Bun's native WebSocket client. */
+  proxy?: string,
 ): ConnectionEntry {
   const now = options.now();
-  const socket = new WebSocket(wsUrl, agent ? { headers, agent } : { headers });
+  const socket = new WebSocket(wsUrl, proxy ? { headers, proxy } : { headers });
   const entry: ConnectionEntry = {
     debugId: nextConnectionDebugId++,
     lineageId: nextLineageDebugId++,
@@ -2186,11 +2196,10 @@ export function createResponsesWebSocketFetch(
     ? options.checkpointStoreDir
     : undefined;
 
-  return async (requestUrl, init): Promise<Response> => {
-    const { WebSocket } = await import('ws');
-    // ws does not honor HTTP(S)_PROXY env vars itself; tunnel through the
-    // configured outbound proxy when one applies to this wss URL.
-    const proxyAgent = await outboundWsProxyAgent(wsUrl);
+  return (async (requestUrl, init): Promise<Response> => {
+    const WebSocket = options.webSocketConstructor
+      ?? loadBunNativeWebSocket() as unknown as WebSocketConstructor;
+    const proxyUrl = outboundProxyUrlForTarget(wsUrl);
     const headers = toHeaderRecord(init?.headers);
     headers['OpenAI-Beta'] = CODEX_RESPONSES_WEBSOCKETS_BETA;
 
@@ -2278,7 +2287,7 @@ export function createResponsesWebSocketFetch(
               checkpointStoreDir,
               resolvedOptions,
               debug,
-              proxyAgent,
+              proxyUrl,
             ),
           };
           ctx = hiddenContext;
@@ -2890,7 +2899,7 @@ export function createResponsesWebSocketFetch(
             checkpointStoreDir,
             resolvedOptions,
             debug,
-            proxyAgent,
+            proxyUrl,
           ),
         };
         activeContext = ctx;
@@ -2905,7 +2914,7 @@ export function createResponsesWebSocketFetch(
           checkpointStoreDir,
           resolvedOptions,
           debug,
-          proxyAgent,
+          proxyUrl,
         );
         if (decision === 'history_mismatch_reused_head') beginRecycledLineage(entry);
         if (decision === 'compaction_checkpoint' && selectedCheckpoint) {
@@ -2942,5 +2951,5 @@ export function createResponsesWebSocketFetch(
       status: 200,
       headers: { 'content-type': 'text/event-stream; charset=utf-8' },
     });
-  };
+  }) as FetchFunction;
 }

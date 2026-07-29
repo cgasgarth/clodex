@@ -1,6 +1,4 @@
 import fs from 'node:fs';
-import { syncBuiltinESMExports } from 'node:module';
-import os from 'node:os';
 import { join } from 'node:path';
 
 function requiredEnv(name: string): string {
@@ -18,14 +16,7 @@ function writeJson(path: string, value: unknown): void {
 }
 
 const nativeHome = requiredEnv('REGISTRY_LOCK_WORKER_NATIVE_HOME');
-os.userInfo = (() => ({
-  username: 'clodex-test',
-  uid: process.getuid?.() ?? -1,
-  gid: process.getgid?.() ?? -1,
-  shell: null,
-  homedir: nativeHome,
-})) as typeof os.userInfo;
-syncBuiltinESMExports();
+process.env.CLODEX_CREDENTIAL_HOME = nativeHome;
 
 async function waitForFile(path: string, timeoutMs: number): Promise<void> {
   const deadline = Date.now() + timeoutMs;
@@ -106,41 +97,7 @@ async function runContender(): Promise<void> {
 
 async function runLeaseLoss(): Promise<void> {
   const resultPath = join(root, 'lease-loss-result.json');
-  const originalOpenSync = fs.openSync;
-  const originalWriteSync = fs.writeSync;
-  let registryTempFd: number | undefined;
   let replacementPublished = false;
-
-  fs.openSync = ((...args: unknown[]) => {
-    const fd = Reflect.apply(originalOpenSync, fs, args) as number;
-    const path = args[0];
-    if (
-      typeof path === 'string' &&
-      path.startsWith(`${registryPath}.${process.pid}.`) &&
-      path.endsWith('.tmp')
-    ) {
-      registryTempFd = fd;
-    }
-    return fd;
-  }) as typeof fs.openSync;
-  fs.writeSync = ((...args: unknown[]) => {
-    const written = Reflect.apply(originalWriteSync, fs, args) as number;
-    if (args[0] === registryTempFd && !replacementPublished) {
-      const owner = JSON.parse(fs.readFileSync(lockPath, 'utf8')) as {
-        pid: number;
-        startedAt: number;
-        token: string;
-      };
-      fs.unlinkSync(lockPath);
-      writeJson(lockPath, {
-        ...owner,
-        token: 'replacement-owner',
-      });
-      replacementPublished = true;
-    }
-    return written;
-  }) as typeof fs.writeSync;
-  syncBuiltinESMExports();
 
   const { withRegistryWriteLockSync } =
     await import('../../src/registry/lock.js');
@@ -158,7 +115,25 @@ async function runLeaseLoss(): Promise<void> {
   try {
     withRegistryWriteLockSync(
       () => {
-        saveRegistry({ ...emptyRegistry(), importedAt: 'unwanted' }, registryPath);
+        saveRegistry(
+          { ...emptyRegistry(), importedAt: 'unwanted' },
+          registryPath,
+          {
+            afterTempWrite: () => {
+              const owner = JSON.parse(fs.readFileSync(lockPath, 'utf8')) as {
+                pid: number;
+                startedAt: number;
+                token: string;
+              };
+              fs.unlinkSync(lockPath);
+              writeJson(lockPath, {
+                ...owner,
+                token: 'replacement-owner',
+              });
+              replacementPublished = true;
+            },
+          },
+        );
       },
       { lockPath },
     );
@@ -188,38 +163,13 @@ async function runAtomicAcquire(): Promise<void> {
   const readyPath = join(root, 'atomic-acquire-ready.json');
   const releasePath = join(root, 'release-atomic-acquire');
   const resultPath = join(root, 'atomic-acquire-result.json');
-  const originalOpenSync = fs.openSync;
-  const originalWriteFileSync = fs.writeFileSync;
-  let recordFd: number | undefined;
-  let candidatePath: string | undefined;
-  let paused = false;
-
-  fs.openSync = ((...args: unknown[]) => {
-    const fd = Reflect.apply(originalOpenSync, fs, args) as number;
-    const path = args[0];
-    const flags = args[1];
-    if (
-      typeof path === 'string' &&
-      flags === 'wx' &&
-      (path === lockPath || path.startsWith(`${lockPath}.`))
-    ) {
-      recordFd = fd;
-      candidatePath = path;
-    }
-    return fd;
-  }) as typeof fs.openSync;
-  fs.writeFileSync = ((...args: unknown[]) => {
-    if (args[0] === recordFd && !paused) {
-      paused = true;
+  const { tryAcquireRegistryLock } = await import('../../src/registry/lock.js');
+  const lease = tryAcquireRegistryLock(lockPath, {
+    onLockTempCreated: candidatePath => {
       writeJson(readyPath, { candidatePath, pid: process.pid });
       waitForFileSync(releasePath, 5_000);
-    }
-    return Reflect.apply(originalWriteFileSync, fs, args) as void;
-  }) as typeof fs.writeFileSync;
-  syncBuiltinESMExports();
-
-  const { tryAcquireRegistryLock } = await import('../../src/registry/lock.js');
-  const lease = tryAcquireRegistryLock(lockPath);
+    },
+  });
   if (!lease) throw new Error('Atomic acquisition worker did not get the lock');
   const owner = JSON.parse(fs.readFileSync(lockPath, 'utf8')) as {
     pid: number;

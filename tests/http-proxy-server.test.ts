@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -14,6 +14,7 @@ import { shouldInterceptConnect, startHttpProxy } from '../src/http-proxy/server
 
 const testHome = mkdtempSync(join(tmpdir(), 'clodex-http-proxy-'));
 const previousRelayHome = process.env['CLODEX_HOME'];
+const rawMitmSockets = new WeakMap<tls.TLSSocket, net.Socket>();
 
 async function listen(server: http.Server | https.Server): Promise<number> {
   server.listen(0, '127.0.0.1');
@@ -49,8 +50,14 @@ async function connectMitm(
   if (remainder.length > 0) socket.unshift(remainder);
 
   const secure = tls.connect({ socket, servername: 'api.anthropic.com', ca });
+  rawMitmSockets.set(secure, socket);
   await once(secure, 'secureConnect');
   return secure;
+}
+
+function destroyMitmConnection(socket: tls.TLSSocket): void {
+  socket.end();
+  rawMitmSockets.get(socket)?.end();
 }
 
 async function requestMitm(
@@ -77,8 +84,65 @@ async function requestMitm(
     '',
   ].join('\r\n'));
   socket.write(payload);
-  await once(socket, 'close');
+  await waitForSocketResponseEnd(socket);
   return response;
+}
+
+/**
+ * Bun's TLS compatibility layer emits `end` when the HTTP peer half-closes but
+ * does not always follow it with Node's `close` until the local side closes.
+ */
+async function waitForSocketResponseEnd(socket: tls.TLSSocket): Promise<void> {
+  if (socket.destroyed) return;
+  await new Promise<void>((resolve, reject) => {
+    let received = Buffer.alloc(0);
+    const timer = setTimeout(() => {
+      cleanup();
+      socket.destroy();
+      reject(new Error(
+        `MITM response did not complete (${received.length} bytes): `
+        + received.subarray(0, 256).toString('latin1'),
+      ));
+    }, 5_000);
+    const cleanup = () => {
+      clearTimeout(timer);
+      socket.off('data', onData);
+      socket.off('end', onEnd);
+      socket.off('close', onClose);
+      socket.off('error', onError);
+    };
+    const finish = () => {
+      cleanup();
+      socket.destroy();
+      resolve();
+    };
+    const onEnd = () => finish();
+    const onClose = () => finish();
+    const onData = (chunk: Buffer) => {
+      received = Buffer.concat([received, chunk]);
+      const headerEnd = received.indexOf('\r\n\r\n');
+      if (headerEnd < 0) return;
+      const headers = received.subarray(0, headerEnd).toString('latin1');
+      const body = received.subarray(headerEnd + 4);
+      const contentLength = headers.match(/\r\ncontent-length:\s*(\d+)/i);
+      if (contentLength && body.length >= Number(contentLength[1])) {
+        finish();
+        return;
+      }
+      if (/\r\ntransfer-encoding:\s*chunked/i.test(headers)
+        && body.includes(Buffer.from('\r\n0\r\n\r\n'))) {
+        finish();
+      }
+    };
+    const onError = (error: Error) => {
+      cleanup();
+      reject(error);
+    };
+    socket.on('data', onData);
+    socket.once('end', onEnd);
+    socket.once('close', onClose);
+    socket.once('error', onError);
+  });
 }
 
 function activeProxySockets(proxyPort: number): net.Socket[] {
@@ -164,10 +228,7 @@ async function adapterResponseFailureEntries(
       '',
       '',
     ].join('\r\n') + body);
-    await new Promise<void>(resolve => {
-      secure.once('close', () => resolve());
-      secure.once('error', () => resolve());
-    });
+    await waitForSocketResponseEnd(secure).catch(() => {});
     await new Promise(resolve => setImmediate(resolve));
 
     return readFileSync(inferenceLogPath, 'utf8')
@@ -357,7 +418,7 @@ describe('selective HTTP proxy', () => {
         '',
         '',
       ].join('\r\n') + body.toString());
-      await once(secure, 'close');
+      await waitForSocketResponseEnd(secure);
 
       expect(response).toContain('200 OK');
       expect(receivedPath).toBe('/v1/messages?beta=true');
@@ -547,7 +608,7 @@ describe('selective HTTP proxy', () => {
         '',
         '',
       ].join('\r\n') + body);
-      await once(secure, 'close');
+      await waitForSocketResponseEnd(secure);
 
       expect(response).toContain('529');
       const entries = readFileSync(inferenceLogPath, 'utf8').trim().split('\n').map(line => JSON.parse(line));
@@ -596,7 +657,7 @@ describe('selective HTTP proxy', () => {
       res.writeHead(503, { 'Content-Type': 'application/json' });
       res.flushHeaders();
       res.write('{"error":{"message":"partial outage');
-      setImmediate(() => res.destroy(new Error('origin reset')));
+      setTimeout(() => res.destroy(new Error('origin reset')), 20).unref();
     });
     const originPort = await listen(origin);
     const proxy = await startHttpProxy({
@@ -623,10 +684,7 @@ describe('selective HTTP proxy', () => {
         '',
         '',
       ].join('\r\n') + body);
-      await new Promise<void>(resolve => {
-        secure.once('close', () => resolve());
-        secure.once('error', () => resolve());
-      });
+      await waitForSocketResponseEnd(secure).catch(() => {});
 
       const entries = readFileSync(inferenceLogPath, 'utf8').trim().split('\n').map(line => JSON.parse(line));
       const upstreamError = entries.find(entry => entry.event === 'upstream_error');
@@ -685,7 +743,7 @@ describe('selective HTTP proxy', () => {
         '',
         '',
       ].join('\r\n') + body);
-      await once(secure, 'close');
+      await waitForSocketResponseEnd(secure);
 
       expect(response).toContain('502');
       const entries = readFileSync(inferenceLogPath, 'utf8').trim().split('\n').map(line => JSON.parse(line));
@@ -807,7 +865,7 @@ describe('selective HTTP proxy', () => {
         '',
         '',
       ].join('\r\n') + body);
-      await once(secure, 'close');
+      await waitForSocketResponseEnd(secure);
 
       expect(response).toContain('200 OK');
       expect(anthropicRequests).toBe(0);
@@ -1049,7 +1107,7 @@ describe('selective HTTP proxy', () => {
         '',
         '',
       ].join('\r\n') + body);
-      await once(secure, 'close');
+      await waitForSocketResponseEnd(secure);
 
       expect(response).toContain('200 OK');
       expect(response).toContain('{"input_tokens":42}');
@@ -1070,12 +1128,23 @@ describe('selective HTTP proxy', () => {
     const adapterReceived = new Promise<void>(resolve => { adapterReceivedResolve = resolve; });
     let adapterClosedResolve!: () => void;
     const adapterClosed = new Promise<void>(resolve => { adapterClosedResolve = resolve; });
-    const adapterServer = http.createServer((req) => {
-      req.resume();
-      req.once('end', adapterReceivedResolve);
-      req.socket.once('close', adapterClosedResolve);
+    let disconnectClient!: () => void;
+    const adapterServer = Bun.serve({
+      hostname: '127.0.0.1',
+      port: 0,
+      async fetch(req) {
+        await req.arrayBuffer();
+        adapterReceivedResolve();
+        if (!req.signal.aborted) {
+          await new Promise<void>(resolve => {
+            req.signal.addEventListener('abort', () => resolve(), { once: true });
+          });
+        }
+        adapterClosedResolve();
+        return new Response(null, { status: 499 });
+      },
     });
-    const adapterPort = await listen(adapterServer);
+    const adapterPort = adapterServer.port!;
     const route = {
       aliasId: 'clodex:test:translated-model',
       realModelId: 'translated-model',
@@ -1092,11 +1161,13 @@ describe('selective HTTP proxy', () => {
         port: adapterPort,
         token: 'adapter-local-token',
         close: () => {
-          adapterServer.closeAllConnections();
-          adapterServer.close();
+          void adapterServer.stop(true);
         },
       },
       inferenceLogPath,
+      onMitmResponse: response => {
+        disconnectClient = () => response.destroy();
+      },
     });
 
     try {
@@ -1116,10 +1187,19 @@ describe('selective HTTP proxy', () => {
         '',
         '',
       ].join('\r\n') + body);
-      await adapterReceived;
-      secure.destroy();
-      await adapterClosed;
-      await new Promise(resolve => setImmediate(resolve));
+      await Promise.race([
+        adapterReceived,
+        Bun.sleep(2_000).then(() => {
+          throw new Error('native adapter did not receive the translated request');
+        }),
+      ]);
+      disconnectClient();
+      await Promise.race([
+        adapterClosed,
+        Bun.sleep(2_000).then(() => {
+          throw new Error('native adapter did not observe downstream cancellation');
+        }),
+      ]);
 
       const entries = readFileSync(inferenceLogPath, 'utf8').trim().split('\n').map(line => JSON.parse(line));
       const requestEntry = entries.find(entry => !entry.event);
@@ -1149,12 +1229,22 @@ describe('selective HTTP proxy', () => {
     const adapterClosed = new Promise<void>(resolve => {
       adapterClosedResolve = resolve;
     });
-    const adapterServer = http.createServer(req => {
-      req.resume();
-      req.once('end', adapterReceivedResolve);
-      req.socket.once('close', adapterClosedResolve);
+    const adapterServer = Bun.serve({
+      hostname: '127.0.0.1',
+      port: 0,
+      async fetch(req) {
+        await req.arrayBuffer();
+        adapterReceivedResolve();
+        if (!req.signal.aborted) {
+          await new Promise<void>(resolve => {
+            req.signal.addEventListener('abort', () => resolve(), { once: true });
+          });
+        }
+        adapterClosedResolve();
+        return new Response(null, { status: 499 });
+      },
     });
-    const adapterPort = await listen(adapterServer);
+    const adapterPort = adapterServer.port!;
     const route = {
       aliasId: 'clodex:test:translated-model',
       realModelId: 'translated-model',
@@ -1171,8 +1261,7 @@ describe('selective HTTP proxy', () => {
         port: adapterPort,
         token: 'adapter-local-token',
         close: () => {
-          adapterServer.closeAllConnections();
-          adapterServer.close();
+          void adapterServer.stop(true);
         },
       },
       inferenceLogPath,
@@ -1196,10 +1285,20 @@ describe('selective HTTP proxy', () => {
         '',
         '',
       ].join('\r\n') + body);
-      await adapterReceived;
+      await Promise.race([
+        adapterReceived,
+        Bun.sleep(2_000).then(() => {
+          throw new Error('native adapter did not receive the translated request');
+        }),
+      ]);
       await proxy.close();
       proxyClosed = true;
-      await adapterClosed;
+      await Promise.race([
+        adapterClosed,
+        Bun.sleep(2_000).then(() => {
+          throw new Error('native adapter did not observe local shutdown cancellation');
+        }),
+      ]);
       await new Promise(resolve => setImmediate(resolve));
 
       const entries = readFileSync(inferenceLogPath, 'utf8').trim().split('\n').map(line => JSON.parse(line));
@@ -1264,7 +1363,7 @@ describe('selective HTTP proxy', () => {
         statusCode: 502,
         phase: 'waiting_for_headers',
         errorType: 'Error',
-        errorCode: expect.stringMatching(/^ECONN(?:REFUSED|RESET)$/),
+        errorCode: expect.stringMatching(/^(?:ECONN(?:REFUSED|RESET)|ConnectionRefused)$/),
         failureSource: 'adapter_request_error',
         terminationSource: 'upstream_failure',
       }));
@@ -1343,7 +1442,7 @@ describe('selective HTTP proxy', () => {
           response += chunk.toString();
           if (response.includes('\r\n\r\n{}')) break;
         }
-        secure.destroy();
+        destroyMitmConnection(secure);
         return response;
       };
       const firstResponse = await requestTranslatedModel();
@@ -1472,10 +1571,7 @@ describe('selective HTTP proxy', () => {
         '',
         '',
       ].join('\r\n') + body);
-      await new Promise<void>(resolve => {
-        secure.once('close', () => resolve());
-        secure.once('error', () => resolve());
-      });
+      await waitForSocketResponseEnd(secure).catch(() => {});
 
       const entries = readFileSync(inferenceLogPath, 'utf8').trim().split('\n').map(line => JSON.parse(line));
       const requestEntry = entries.find(entry => !entry.event);
@@ -1489,7 +1585,8 @@ describe('selective HTTP proxy', () => {
         requestId: requestEntry.requestId,
         statusCode: 200,
         phase: 'streaming',
-        failureSource: 'adapter_response_aborted',
+        errorCode: 'ECONNRESET',
+        failureSource: 'adapter_response_error',
         terminationSource: 'upstream_failure',
       }));
       expect(entries.some(entry => entry.event === 'response_completed')).toBe(false);

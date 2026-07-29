@@ -1,5 +1,6 @@
+import { importActual } from './bun-import-actual.js';
 import { createServer, type Server } from 'node:http';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'bun:test';
 import { APICallError } from 'ai';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -16,24 +17,27 @@ const TEST_HELPER_REF = `helper:v1:${'a'.repeat(64)}:oauth:provider:oauth-provid
 const ORIGINAL_COMPACTION_FLAG = process.env.CLODEX_OPENAI_COMPACTION;
 const ORIGINAL_COMPACTION_THRESHOLD = process.env.CLODEX_OPENAI_COMPACT_THRESHOLD;
 
-vi.mock('../src/env.js', async importOriginal => {
-  const actual = await importOriginal<typeof import('../src/env.js')>();
+vi.mock('../src/env.js', () => {
+  const importOriginal = <T>() => importActual<T>('../src/env.js', import.meta.url);
+  const actual = importOriginal<typeof import('../src/env.js')>();
   return {
     ...actual,
     resolveProviderCredential: vi.fn(),
   };
 });
 
-vi.mock('../src/provider-factory.js', async importOriginal => {
-  const actual = await importOriginal<typeof import('../src/provider-factory.js')>();
+vi.mock('../src/provider-factory.js', () => {
+  const importOriginal = <T>() => importActual<T>('../src/provider-factory.js', import.meta.url);
+  const actual = importOriginal<typeof import('../src/provider-factory.js')>();
   return {
     ...actual,
     createLanguageModel: vi.fn(async (spec: unknown) => ({ spec })),
   };
 });
 
-vi.mock('../src/oauth/responses-websocket.js', async importOriginal => {
-  const actual = await importOriginal<typeof import('../src/oauth/responses-websocket.js')>();
+vi.mock('../src/oauth/responses-websocket.js', () => {
+  const importOriginal = <T>() => importActual<T>('../src/oauth/responses-websocket.js', import.meta.url);
+  const actual = importOriginal<typeof import('../src/oauth/responses-websocket.js')>();
   return {
     ...actual,
     withResponsesWebSocketDiagnosticContext: vi.fn(
@@ -42,8 +46,9 @@ vi.mock('../src/oauth/responses-websocket.js', async importOriginal => {
   };
 });
 
-vi.mock('../src/sdk-adapter.js', async importOriginal => {
-  const actual = await importOriginal<typeof import('../src/sdk-adapter.js')>();
+vi.mock('../src/sdk-adapter.js', () => {
+  const importOriginal = <T>() => importActual<T>('../src/sdk-adapter.js', import.meta.url);
+  const actual = importOriginal<typeof import('../src/sdk-adapter.js')>();
   return {
     ...actual,
     streamAnthropicResponse: vi.fn(async () => {}),
@@ -59,8 +64,9 @@ vi.mock('../src/sdk-adapter.js', async importOriginal => {
   };
 });
 
-vi.mock('../src/openai-adapter.js', async importOriginal => {
-  const actual = await importOriginal<typeof import('../src/openai-adapter.js')>();
+vi.mock('../src/openai-adapter.js', () => {
+  const importOriginal = <T>() => importActual<T>('../src/openai-adapter.js', import.meta.url);
+  const actual = importOriginal<typeof import('../src/openai-adapter.js')>();
   return {
     ...actual,
     streamOpenAiResponse: vi.fn(async () => {}),
@@ -1421,7 +1427,7 @@ describe('server router', () => {
         '/anthropic/v1/messages',
         '/openai/v1/chat/completions',
       ]) {
-        expect(server.server.listening, path).toBe(true);
+        expect(server.server.port, path).toBe(server.port);
         const response = await fetch(`${server.url}${path}`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },

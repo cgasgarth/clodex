@@ -60,11 +60,11 @@ workflows, subagents, and background sessions use the same daemon:
 export CLAUDE_CODE_PROCESS_WRAPPER="/absolute/path/to/clodex-claude"
 ```
 
-The wrapper must ultimately `exec` Claude. If a stable shell launcher is needed
-for a Node version manager, keep its final command in this form:
+The wrapper must ultimately `exec` Claude. If a stable shell launcher is needed,
+keep its final command in this form:
 
 ```sh
-exec /absolute/path/to/node /absolute/path/to/clodex/dist/claude-wrapper.js "$@"
+exec /absolute/path/to/bun /absolute/path/to/clodex/dist/claude-wrapper.js "$@"
 ```
 
 Do not point `CLAUDE_CODE_PROCESS_WRAPPER` at a short-lived version-manager
@@ -130,5 +130,5 @@ the last 24 hours in five-minute buckets.
 - `CLODEX_REQUIRE_SERVER=1`: fail closed instead of launching unbridged Claude.
 - Port occupied: set `CLODEX_DAEMON_PORT` to a free stable port, then reinstall
   the LaunchAgent.
-- Wrapper fails only for spawned agents: use an absolute wrapper path and an
-  absolute Node path; do not remove the launcher's final `exec`.
+- Wrapper fails only for spawned agents: use absolute wrapper and Bun paths; do
+  not remove the launcher's final `exec`.

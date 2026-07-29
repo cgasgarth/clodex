@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'bun:test';
 import { daemonLaunchAgentPlist } from '../src/daemon/launch-agent.js';
 import {
   DEFAULT_DAEMON_ENDPOINT_PORT,
@@ -8,15 +8,15 @@ import {
 } from '../src/daemon/index.js';
 
 describe('daemon launch agent', () => {
-  it('pins node and cli paths and restarts only abnormal exits', () => {
-    const plist = daemonLaunchAgentPlist('/opt/node', '/opt/clodex/cli.js', {
+  it('pins Bun and CLI paths and restarts only abnormal exits', () => {
+    const plist = daemonLaunchAgentPlist('/opt/bun', '/opt/clodex/cli.js', {
       HOME: '/Users/test',
       CLODEX_HOME: '/Users/test/.clodex',
       CLODEX_CREDENTIAL_HELPER: '/opt/clodex/helper',
       CLODEX_OPENAI_COMPACTION: '1',
       CLODEX_OPENAI_COMPACT_THRESHOLD: '250000',
     });
-    expect(plist).toContain('<string>/opt/node</string>');
+    expect(plist).toContain('<string>/opt/bun</string>');
     expect(plist).toContain('<string>/opt/clodex/cli.js</string>');
     expect(plist).toContain('<string>daemon</string>');
     expect(plist).toContain('<string>run</string>');

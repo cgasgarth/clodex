@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'bun:test';
 import { EventEmitter } from 'node:events';
 import { gzipSync, zstdCompressSync } from 'node:zlib';
 import type { IncomingMessage } from 'node:http';

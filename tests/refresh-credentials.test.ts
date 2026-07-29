@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect } from 'bun:test';
 import { isLikelyPlaceholderKey, isPlaceholderProviderKey, resolveRefreshCredential } from '../src/registry/refresh-credentials.js';
 import type { RegistryProvider } from '../src/registry/types.js';
 

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'bun:test';
 import { createHash, randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import {
@@ -34,7 +34,7 @@ class FakeWebSocket extends EventEmitter {
 vi.mock('ws', () => ({ WebSocket: FakeWebSocket, default: FakeWebSocket }));
 
 import {
-  createResponsesWebSocketFetch,
+  createResponsesWebSocketFetch as createResponsesWebSocketFetchBase,
   resetResponsesWebSocketConnectionsForTests,
   responsesWebSocketPartitionKey,
   responsesWebSocketPromptFingerprint,
@@ -45,6 +45,15 @@ import { saveStoredResponsesCheckpoint } from '../src/oauth/responses-checkpoint
 import { sdkUpstreamErrorDetails } from '../src/upstream-error.js';
 
 const WS_URL = 'wss://chatgpt.com/backend-api/codex/responses';
+
+const createResponsesWebSocketFetch: typeof createResponsesWebSocketFetchBase = (
+  url,
+  log,
+  options = {},
+) => createResponsesWebSocketFetchBase(url, log, {
+  ...options,
+  webSocketConstructor: FakeWebSocket as never,
+});
 
 async function readAll(res: Response): Promise<string> {
   const reader = res.body!.getReader();

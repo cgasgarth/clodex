@@ -8,8 +8,8 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { build } from 'tsup';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'bun:test';
+import { buildBunTestEntry } from './bun-build.js';
 
 interface WorkerProcess {
   child: ChildProcess;
@@ -28,25 +28,11 @@ function temporaryRoot(): string {
 
 async function buildWorker(root: string): Promise<string> {
   const outDir = join(root, 'worker-build');
-  await build({
-    entry: [
-      fileURLToPath(
-        new URL('./fixtures/config-write-worker.ts', import.meta.url),
-      ),
-    ],
+  return buildBunTestEntry(
+    fileURLToPath(new URL('./fixtures/config-write-worker.ts', import.meta.url)),
     outDir,
-    outExtension: () => ({ js: '.mjs' }),
-    format: ['esm'],
-    platform: 'node',
-    target: 'node22',
-    splitting: false,
-    sourcemap: false,
-    external: ['@napi-rs/keyring'],
-    clean: false,
-    silent: true,
-    config: false,
-  });
-  return join(outDir, 'config-write-worker.mjs');
+    'config-write-worker.mjs',
+  );
 }
 
 function workerEnvironment(

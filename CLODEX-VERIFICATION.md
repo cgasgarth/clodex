@@ -11,7 +11,7 @@ real commands (including `claude -p`) but NEVER add them to the automated test s
 - A1. `package.json` name is `@bman654/clodex` (scoped — npm's name-similarity
   guard rejected unscoped `clodex`; `publishConfig.access: public`), bin exposes
   exactly `clodex` and `clodex-claude` (see section G).
-- A2. `node dist/cli.js --help` (fresh `pnpm build`) shows clodex branding; no
+- A2. `bun dist/cli.js --help` (fresh `bun run build`) shows clodex branding; no
   occurrence of `relay-ai`/`relay:` in any user-visible help/banner output.
 - A3. Config home is `~/.clodex/` with `CLODEX_HOME` override; no `RELAY_AI_*` env
   vars remain in src (grep clean, excluding migration code reading legacy paths).
@@ -54,7 +54,7 @@ real commands (including `claude -p`) but NEVER add them to the automated test s
 
 ## C. Preserved functionality
 
-- C1. `pnpm typecheck`, `pnpm test`, and `pnpm build` all pass cleanly (pnpm via corepack).
+- C1. `bun run typecheck`, `bun run test`, and `bun run build` all pass cleanly (Bun 1.3.14+).
 - C2. `clodex claude --dry-run` completes a simulated launch (endpoint mode) without
   writing state.
 - C3. Endpoint mode: `clodex server` starts; `GET /v1/models` (or `/models`) lists the
@@ -129,8 +129,7 @@ real commands (including `claude -p`) but NEVER add them to the automated test s
   heavily modified and streamlined for this single use case, full commit history
   preserved — and nothing more (no relay-ai feature docs, no badges/links beyond at
   most one to the original repo).
-- E3. "Get started" targets a ChatGPT/Codex-plan OAuth user: install (`npm install -g
-  clodex`), OAuth login, `clodex models`, `clodex patch`, `clodex claude` — in that
+- E3. "Get started" targets a ChatGPT/Codex-plan OAuth user: install (`bun add --global   clodex`), OAuth login, `clodex models`, `clodex patch`, `clodex claude` — in that
   order, each with a one-liner.
 - E4. Full CLI reference covers every kept command/flag; no stripped feature is
   mentioned anywhere in README, docs/, or help text.
@@ -138,7 +137,7 @@ real commands (including `claude -p`) but NEVER add them to the automated test s
   updater recognizes the existing format and prepends its generated release entry
   without clobbering the hand-written content. CLAUDE.md/AGENTS.md describe the
   trimmed architecture while preserving hard-won constraint notes.
-- E6. `npm pack --dry-run` succeeds and the tarball contains only what's needed
+- E6. `bun pm pack --dry-run` succeeds and the tarball contains only what's needed
   (dist, README, LICENSE, package.json — no stripped assets/ui files).
 - E7. Manifest-mode release-please config records the fork boundary's full
   `bootstrap-sha`, starts `.` at `0.0.0`, and the sole post-boundary bootstrap commit
@@ -146,7 +145,7 @@ real commands (including `claude -p`) but NEVER add them to the automated test s
   scanning inherited relay-ai history or leaving a persistent `release-as` override.
 - E8. `.github/workflows/release-please.yml` runs only on pushes to `main`, is gated
   by `CLODEX_PUBLISH_ENABLED`, and publishes inside the release-created path after
-  Node 24/pnpm frozen install, typecheck, test, and build. release-please itself
+  Bun 1.3.14 frozen install, typecheck, test, and build. release-please itself
   creates the tag and GitHub Release.
 - E9. Exact-pinned commitlint conventional config and a Husky v9 `commit-msg` hook
   reject invalid local commits; gated CI checks every pushed/PR commit range.
@@ -178,7 +177,7 @@ real commands (including `claude -p`) but NEVER add them to the automated test s
   (`CLODEX_CLAUDE_PATH` honored) and all args pass through. Child exit code is
   preserved; stdio is inherited.
 - G5. Packaging: `package.json` bin maps `clodex-claude` → `dist/claude-wrapper.js`;
-  tsup builds both entries; `npm pack --dry-run` shows `dist/claude-wrapper.js` and
+  Bun.build emits both entries; `bun pm pack --dry-run` shows `dist/claude-wrapper.js` and
   `docs/background-agents.md` in the tarball.
 - G6. README Bridge modes section contains two mermaid diagrams matching the code
   (proxy: clodex:/alias decision, OpenAI via OAuth WebSocket or API-key HTTPS with
@@ -193,7 +192,7 @@ real commands (including `claude -p`) but NEVER add them to the automated test s
 
 ## F. Meta
 
-- F1. No `claude -p`/E2E invocations exist inside `tests/` or any vitest file.
+- F1. No `claude -p`/E2E invocations exist inside `tests/` or any Bun test file.
 - F2. CLODEX-BRIEF.md's "Prime directive" was honored — the verifier's spot-check
   diffs (B8) found no gratuitous rewrites.
 - F3. All work is committed on `worktree-clodex` with a clean `git status`. `dist/`

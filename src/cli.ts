@@ -1232,7 +1232,7 @@ export async function runClaudeCommand(parsed: ParsedArgs): Promise<number> {
   if (!claudePath) {
     console.error(pc.red('\nError: claude binary not found on PATH.\n'));
     console.error('Install Claude Code:');
-    console.error('  npm install -g @anthropic-ai/claude-code\n');
+    console.error('  bun add --global @anthropic-ai/claude-code\n');
     return 1;
   }
 

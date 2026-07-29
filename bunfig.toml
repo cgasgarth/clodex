@@ -1,0 +1,5 @@
+[test]
+preload = ["./tests/bun-setup.ts"]
+
+[install]
+exact = true

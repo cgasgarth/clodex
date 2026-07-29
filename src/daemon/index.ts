@@ -138,7 +138,7 @@ function runtimeMatchesInstall(
   return runtime.ready
     && runtime.version === VERSION
     && runtime.cliPath === cliPath
-    && runtime.nodePath === process.execPath;
+    && runtime.bunPath === process.execPath;
 }
 
 export async function ensureDaemonRunning(
@@ -326,7 +326,7 @@ export async function runDaemonProcess(): Promise<number> {
     );
     runtime = createDaemonRuntimeState({
       pid: process.pid,
-      nodePath: process.execPath,
+      bunPath: process.execPath,
       cliPath: process.argv[1] ?? '',
       ready: false,
       proxyPort: proxy.handle.port,

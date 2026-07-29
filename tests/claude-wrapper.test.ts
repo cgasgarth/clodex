@@ -13,8 +13,8 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { rootCertificates } from 'node:tls';
 import { fileURLToPath } from 'node:url';
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { build } from 'tsup';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'bun:test';
+import { buildBunTestEntry } from './bun-build.js';
 
 interface WrapperResult {
   code: number | null;
@@ -155,21 +155,11 @@ function readLaunchEnv(): { baseUrl: string | null; httpProxy: string | null } {
 
 beforeAll(async () => {
   buildRoot = mkdtempSync(join(tmpdir(), 'clodex-wrapper-build-'));
-  await build({
-    entry: [join(projectRoot, 'src', 'claude-wrapper.ts')],
-    format: ['esm'],
-    target: 'node22',
-    platform: 'node',
-    outDir: buildRoot,
-    outExtension: () => ({ js: '.mjs' }),
-    clean: true,
-    dts: false,
-    minify: false,
-    silent: true,
-    sourcemap: false,
-    splitting: false,
-  });
-  wrapperPath = join(buildRoot, 'claude-wrapper.mjs');
+  wrapperPath = await buildBunTestEntry(
+    join(projectRoot, 'src', 'claude-wrapper.ts'),
+    buildRoot,
+    'claude-wrapper.mjs',
+  );
   expect(existsSync(wrapperPath)).toBe(true);
 });
 
@@ -203,8 +193,7 @@ afterEach(() => {
   rmSync(testRoot, { recursive: true, force: true });
 });
 
-// Windows and Node older than 22.15 keep the spawn fallback, which cannot
-// preserve the pid.
+// Windows keeps the spawn fallback, which cannot preserve the pid.
 const execReplacesProcessImage =
   process.platform !== 'win32' && typeof process.execve === 'function';
 
@@ -426,10 +415,10 @@ describe('clodex-claude process wrapper', () => {
       startedAt: new Date().toISOString(),
     }]);
     writeFileSync(join(clodexHome, 'daemon-runtime.json'), JSON.stringify({
-      protocolVersion: 2,
+      protocolVersion: 3,
       instanceId: 'test-daemon',
       pid: process.pid,
-      nodePath: process.execPath,
+      bunPath: process.execPath,
       cliPath: wrapperPath,
       startedAt: new Date().toISOString(),
       ready: true,

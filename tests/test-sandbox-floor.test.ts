@@ -1,6 +1,6 @@
 import { tmpdir, userInfo } from 'node:os';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'bun:test';
 import { getAppHome, getCredentialCleanupPath } from '../src/paths.js';
 import {
   getCredentialLockRoot,
@@ -8,14 +8,14 @@ import {
   getCredentialStateRoot,
 } from '../src/registry/lock.js';
 
-function expectInsideVitestSandbox(candidate: string): void {
+function expectInsideBunSandbox(candidate: string): void {
   const relativeToTemp = relative(resolve(tmpdir()), resolve(candidate));
 
   expect(relativeToTemp).not.toBe('');
   expect(relativeToTemp).not.toMatch(/^\.\.(?:[/\\]|$)/);
   expect(isAbsolute(relativeToTemp)).toBe(false);
   expect(relativeToTemp.split(/[/\\]/)).toContainEqual(
-    expect.stringMatching(/^clodex-vitest-sandbox-/),
+    expect.stringMatching(/^clodex-bun-sandbox-/),
   );
 }
 
@@ -29,7 +29,7 @@ function expectOutsideDirectory(candidate: string, directory: string): void {
 }
 
 describe('test sandbox floor', () => {
-  it('keeps the default app home inside a Vitest temp sandbox', () => {
+  it('keeps the default app home inside a Bun temp sandbox', () => {
     expect(process.env.CLODEX_HOME).toBeDefined();
     const clodexHome = process.env.CLODEX_HOME!;
     const relativeToTemp = relative(resolve(tmpdir()), resolve(clodexHome));
@@ -38,14 +38,13 @@ describe('test sandbox floor', () => {
     expect(relativeToTemp).not.toMatch(/^\.\.(?:[/\\]|$)/);
     expect(isAbsolute(relativeToTemp)).toBe(false);
     expect(basename(clodexHome)).toBe('clodex-home');
-    expect(basename(dirname(clodexHome))).toMatch(/^clodex-vitest-sandbox-/);
+    expect(basename(dirname(clodexHome))).toMatch(/^clodex-bun-sandbox-/);
     expect(getAppHome()).toBe(clodexHome);
     expect(getAppHome()).not.toBe(join(userInfo().homedir, '.clodex'));
   });
 
   it('keeps credential coordination and cleanup state away from the real home', async () => {
-    const actualOs = await vi.importActual<typeof import('node:os')>('node:os');
-    const realUserHome = actualOs.userInfo().homedir;
+    const realUserHome = process.env.CLODEX_TEST_REAL_HOME!;
     const coordinationPaths = [
       getCredentialLockRoot(),
       getCredentialMutationLockPath('keyring:test-account'),
@@ -55,7 +54,7 @@ describe('test sandbox floor', () => {
 
     expect(realUserHome).not.toBe(userInfo().homedir);
     for (const path of coordinationPaths) {
-      expectInsideVitestSandbox(path);
+      expectInsideBunSandbox(path);
       expectOutsideDirectory(path, realUserHome);
     }
   });

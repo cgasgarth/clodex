@@ -237,7 +237,11 @@ export function loadRegistryStrict(path = getProvidersPath()): ProviderRegistry 
   return registry;
 }
 
-export function saveRegistry(registry: ProviderRegistry, path = getProvidersPath()): void {
+export function saveRegistry(
+  registry: ProviderRegistry,
+  path = getProvidersPath(),
+  options: { afterTempWrite?: () => void } = {},
+): void {
   assertRegistryWriteOwnership(path);
   const payload = `${JSON.stringify(registry, null, 2)}\n`;
   const backup = `${path}.bak`;
@@ -251,6 +255,7 @@ export function saveRegistry(registry: ProviderRegistry, path = getProvidersPath
   const tmp = `${path}.${process.pid}.${randomUUID()}.tmp`;
   try {
     writeSecureFile(tmp, payload);
+    options.afterTempWrite?.();
     assertRegistryWriteOwnership(path);
     renameSync(tmp, path);
     syncParentDirectory(path);

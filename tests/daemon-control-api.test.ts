@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'bun:test';
 import { DaemonInferenceCollector } from '../src/daemon/collector.js';
 import { daemonControlRequest } from '../src/daemon/control-client.js';
 import { startDaemonControlApi } from '../src/daemon/control-api.js';
@@ -25,7 +25,7 @@ describe('daemon control API', () => {
     const requestStop = vi.fn();
     const runtime = createDaemonRuntimeState({
       pid: process.pid,
-      nodePath: process.execPath,
+      bunPath: process.execPath,
       cliPath: '/tmp/clodex/cli.js',
       ready: true,
       proxyPort: 12345,
