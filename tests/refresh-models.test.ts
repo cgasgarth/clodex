@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { describe, expect, it, vi, beforeEach } from 'bun:test';
 import { refreshProviderModels } from '../src/registry/refresh-models.js';
 import type { ProviderRegistry } from '../src/registry/types.js';
 

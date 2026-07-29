@@ -9,10 +9,10 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import type { FetchFunction } from '@ai-sdk/provider-utils';
-import type { RawData, WebSocket as WsWebSocket } from 'ws';
 import { IMAGE_INPUT_TOKEN_ESTIMATE } from '../anthropic-endpoints.js';
 import { CODEX_RESPONSES_WEBSOCKETS_BETA } from '../constants.js';
-import { outboundWsProxyAgent } from '../outbound-proxy.js';
+import { outboundProxyUrlForTarget } from '../outbound-proxy.js';
+import { loadBunNativeWebSocket } from '../bun-websocket.js';
 import { anthropicErrorType, clampRetryAfterSeconds } from '../upstream-error.js';
 import {
   compactResponsesWindow,
@@ -57,6 +57,8 @@ export interface ResponsesWebSocketFetchOptions {
   compactThreshold?: number;
   /** Test seam for the unary compact request. */
   compactFetch?: typeof fetch;
+  /** Test seam; production uses Bun's native WebSocket client. */
+  webSocketConstructor?: WebSocketConstructor;
   compactTimeoutMs?: number;
   /** Private durable store for compacted native-compaction recovery state. */
   checkpointStoreDir?: string;
@@ -89,6 +91,14 @@ export function withResponsesWebSocketDiagnosticContext<T>(
 }
 
 type JsonObject = Record<string, unknown>;
+type RawData = Buffer | ArrayBuffer | Buffer[];
+
+interface ResponsesWebSocket {
+  send(data: string, callback?: (error?: Error) => void): void;
+  close(code?: number, reason?: string): void;
+  on(event: string, listener: (...args: any[]) => void): this;
+  _socket?: { unref?: () => void };
+}
 
 interface OutputAccumulator {
   type?: string;
@@ -148,7 +158,7 @@ interface ConnectionEntry {
   key?: string;
   checkpointKey?: string;
   checkpointStoreDir?: string;
-  socket: WsWebSocket;
+  socket: ResponsesWebSocket;
   persistent: boolean;
   generation: 'nursery' | 'established' | 'isolated';
   open: boolean;
@@ -1157,6 +1167,21 @@ function responseErrorCode(event: unknown): string | undefined {
   return typeof responseError?.code === 'string' ? responseError.code : undefined;
 }
 
+/**
+ * Error CLASS of a frame, e.g. `usage_limit_reached`. Deliberately does not
+ * fall back to the frame's own `type`: on an error chunk that is the chunk
+ * discriminator (`'error'`), which names nothing.
+ */
+function responseErrorType(event: unknown): string | undefined {
+  if (!event || typeof event !== 'object') return undefined;
+  const record = event as JsonObject;
+  const error = record.error && typeof record.error === 'object' ? record.error as JsonObject : undefined;
+  if (typeof error?.type === 'string') return error.type;
+  const response = record.response && typeof record.response === 'object' ? record.response as JsonObject : undefined;
+  const responseError = response?.error && typeof response.error === 'object' ? response.error as JsonObject : undefined;
+  return typeof responseError?.type === 'string' ? responseError.type : undefined;
+}
+
 function responseRetryAfterSeconds(event: unknown): number | undefined {
   if (!event || typeof event !== 'object') return undefined;
   const record = event as JsonObject;
@@ -1168,6 +1193,38 @@ function responseRetryAfterSeconds(event: unknown): number | undefined {
     const value = error.retry_after_seconds ?? error.retry_after;
     if (typeof value === 'number') return value;
     if (typeof value === 'string' && /^\d+(?:\.\d+)?$/.test(value.trim())) return Number(value);
+  }
+  return undefined;
+}
+
+/**
+ * HTTP status carried by an in-band error frame. The Codex backend reports it
+ * as a top-level `status` (e.g. 400 alongside an `unsupported_parameter`
+ * error); `response.status` is the response lifecycle state, not a status code,
+ * so it is deliberately not consulted here.
+ */
+function responseErrorStatus(event: unknown): number | undefined {
+  if (!event || typeof event !== 'object') return undefined;
+  const record = event as JsonObject;
+  for (const candidate of [record.status, (record.error as JsonObject | undefined)?.status]) {
+    if (typeof candidate === 'number' && Number.isInteger(candidate)
+      && candidate >= 400 && candidate <= 599) {
+      return candidate;
+    }
+  }
+  return undefined;
+}
+
+function responseErrorMessage(event: unknown): string | undefined {
+  if (!event || typeof event !== 'object') return undefined;
+  const record = event as JsonObject;
+  const response = record.response && typeof record.response === 'object'
+    ? record.response as JsonObject
+    : undefined;
+  for (const candidate of [record.error, response?.error, record]) {
+    if (!candidate || typeof candidate !== 'object') continue;
+    const message = (candidate as JsonObject).message;
+    if (typeof message === 'string' && message.trim()) return message.trim();
   }
   return undefined;
 }
@@ -1842,8 +1899,8 @@ function outgoingPayload(payload: JsonObject): string {
 
 type WebSocketConstructor = new (
   url: string,
-  options: { headers: Record<string, string>; agent?: import('node:http').Agent },
-) => WsWebSocket;
+  options: { headers: Record<string, string>; proxy?: string },
+) => ResponsesWebSocket;
 
 function sendContext(entry: ConnectionEntry, ctx: RequestContext): void {
   const outgoing = outgoingPayload(ctx.sendPayload);
@@ -1971,7 +2028,24 @@ function handleSocketMessage(entry: ConnectionEntry, data: RawData): void {
     );
     return;
   }
-  if (FAILURE_EVENT_TYPES.has(type ?? '')) {
+  // A bare `error` frame carrying an HTTP status is a rejected request, not a
+  // response: forwarding it verbatim ends the stream with no content, so the
+  // client sees an empty 200 and reports a generic failure instead of the
+  // upstream reason. Map it to a real error frame while nothing has been
+  // emitted yet — once model data is downstream the stream is already
+  // committed, and the existing partial-output path must keep handling it.
+  //
+  // Resolved here, above the generic failure record, only so that record can be
+  // suppressed when the rejection branch below emits its own. The branch itself
+  // must stay after the `willRetry` return — ahead of it, it would swallow a
+  // `previous_response_not_found` frame (which carries a 400) and kill the retry.
+  const errorStatus = type === 'error' && !ctx.emittedModelData
+    ? responseErrorStatus(event)
+    : undefined;
+  // One rejection, one diagnostic record. Without this gate a rejected request
+  // emits both this record and `failContext`'s, under different `source` values
+  // with disjoint fields, reading as two failures of one request.
+  if (FAILURE_EVENT_TYPES.has(type ?? '') && (errorStatus === undefined || willRetry)) {
     emitResponseErrorDiagnostic(entry, ctx, {
       source: 'response_event',
       upstreamEventType: type,
@@ -1986,6 +2060,45 @@ function handleSocketMessage(entry: ConnectionEntry, data: RawData): void {
     resetContextForRetry(ctx);
     const replacement = ctx.createReplacement();
     dispatchContext(replacement, ctx);
+    return;
+  }
+
+  if (errorStatus !== undefined) {
+    // The AI SDK strips unknown frame fields, so a backoff hint survives only
+    // baked into the message text — same reason the connection-limit branch
+    // above spells it out. Clamped, so a hostile hint cannot park a client past
+    // the 120s no-event stream abort.
+    // Only when upstream actually gave one. `clampRetryAfterSeconds` supplies a
+    // 5s DEFAULT for a missing hint, so clamping unconditionally would have
+    // every 429 assert a backoff upstream never stated — and that value becomes
+    // a real `retry-after` header downstream. Worse on a plan-level limit,
+    // where the reason says hours: a prose-only "retry after 1800s" would get
+    // "; retry after 5s" appended, and the client reads the first match.
+    const statedRetryAfter = errorStatus === 429 ? responseRetryAfterSeconds(event) : undefined;
+    const retryAfterSeconds = statedRetryAfter === undefined
+      ? undefined
+      : clampRetryAfterSeconds(statedRetryAfter);
+    const reason = responseErrorMessage(event) ?? `OpenAI rejected the request (HTTP ${errorStatus})`;
+    failContext(
+      entry,
+      ctx,
+      retryAfterSeconds === undefined ? reason : `${reason}; retry after ${retryAfterSeconds}s`,
+      {
+        source: 'error_frame',
+        // Names the failure. Without it this record — now the ONLY one for a
+        // rejection — can carry no indication of what failed, since a bare
+        // error frame often has no `code` at all.
+        errorType: boundedDiagnosticIdentifier(responseErrorType(event)),
+        // Upstream-controlled, so bounded like every other identifier in this
+        // file's diagnostics. The connection-limit branch can pass its code raw
+        // only because it has just been compared `===` to a known constant.
+        errorCode: boundedDiagnosticIdentifier(errorCode),
+        mappedStatusCode: errorStatus,
+        ...(retryAfterSeconds !== undefined ? { retryAfterSeconds } : {}),
+      },
+      errorStatus,
+      retryAfterSeconds,
+    );
     return;
   }
 
@@ -2054,11 +2167,11 @@ function createConnection(
   checkpointStoreDir: string | undefined,
   options: ConnectionEntry['options'],
   debug: ConnectionEntry['debug'],
-  /** Optional HTTP(S)_PROXY CONNECT-tunnel agent (see src/outbound-proxy.ts). */
-  agent?: import('node:http').Agent,
+  /** Optional HTTP(S)_PROXY URL consumed by Bun's native WebSocket client. */
+  proxy?: string,
 ): ConnectionEntry {
   const now = options.now();
-  const socket = new WebSocket(wsUrl, agent ? { headers, agent } : { headers });
+  const socket = new WebSocket(wsUrl, proxy ? { headers, proxy } : { headers });
   const entry: ConnectionEntry = {
     debugId: nextConnectionDebugId++,
     lineageId: nextLineageDebugId++,
@@ -2186,11 +2299,10 @@ export function createResponsesWebSocketFetch(
     ? options.checkpointStoreDir
     : undefined;
 
-  return async (requestUrl, init): Promise<Response> => {
-    const { WebSocket } = await import('ws');
-    // ws does not honor HTTP(S)_PROXY env vars itself; tunnel through the
-    // configured outbound proxy when one applies to this wss URL.
-    const proxyAgent = await outboundWsProxyAgent(wsUrl);
+  return (async (requestUrl, init): Promise<Response> => {
+    const WebSocket = options.webSocketConstructor
+      ?? loadBunNativeWebSocket() as unknown as WebSocketConstructor;
+    const proxyUrl = outboundProxyUrlForTarget(wsUrl);
     const headers = toHeaderRecord(init?.headers);
     headers['OpenAI-Beta'] = CODEX_RESPONSES_WEBSOCKETS_BETA;
 
@@ -2278,7 +2390,7 @@ export function createResponsesWebSocketFetch(
               checkpointStoreDir,
               resolvedOptions,
               debug,
-              proxyAgent,
+              proxyUrl,
             ),
           };
           ctx = hiddenContext;
@@ -2890,7 +3002,7 @@ export function createResponsesWebSocketFetch(
             checkpointStoreDir,
             resolvedOptions,
             debug,
-            proxyAgent,
+            proxyUrl,
           ),
         };
         activeContext = ctx;
@@ -2905,7 +3017,7 @@ export function createResponsesWebSocketFetch(
           checkpointStoreDir,
           resolvedOptions,
           debug,
-          proxyAgent,
+          proxyUrl,
         );
         if (decision === 'history_mismatch_reused_head') beginRecycledLineage(entry);
         if (decision === 'compaction_checkpoint' && selectedCheckpoint) {
@@ -2942,5 +3054,5 @@ export function createResponsesWebSocketFetch(
       status: 200,
       headers: { 'content-type': 'text/event-stream; charset=utf-8' },
     });
-  };
+  }) as FetchFunction;
 }

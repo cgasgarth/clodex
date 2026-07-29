@@ -1,4 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { importActual } from './bun-import-actual.js';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'bun:test';
 import * as p from '@clack/prompts';
 import type { ModelInfo } from '../src/types.js';
 import type { ServerModelInfo } from '../src/server/models.js';
@@ -117,8 +118,9 @@ const discovery = vi.hoisted(() => ({
   unregister: vi.fn(),
 }));
 
-vi.mock('../src/server-runtime.js', async importOriginal => {
-  const actual = await importOriginal<typeof import('../src/server-runtime.js')>();
+vi.mock('../src/server-runtime.js', () => {
+  const importOriginal = <T>() => importActual<T>('../src/server-runtime.js', import.meta.url);
+  const actual = importOriginal<typeof import('../src/server-runtime.js')>();
   return {
     ...actual,
     registerServerRuntimeState: discovery.register,

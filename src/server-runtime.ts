@@ -47,6 +47,7 @@ export interface ServerRuntimeState {
 }
 
 interface HomeEnv {
+  [name: string]: string | undefined;
   HOME?: string;
   CLODEX_HOME?: string;
   USERPROFILE?: string;
@@ -63,7 +64,7 @@ export function getServerRuntimeLockPath(env: HomeEnv = process.env): string {
 /** `--no-discovery` flag, with CLODEX_NO_DISCOVERY=1 as the env fallback. */
 export function isDiscoveryDisabled(
   flag: boolean | undefined,
-  env: { CLODEX_NO_DISCOVERY?: string } = process.env,
+  env: { [name: string]: string | undefined; CLODEX_NO_DISCOVERY?: string } = process.env,
 ): boolean {
   if (flag !== undefined) return flag;
   const raw = env.CLODEX_NO_DISCOVERY?.trim().toLowerCase();

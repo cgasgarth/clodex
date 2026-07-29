@@ -1,4 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { importActual } from './bun-import-actual.js';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'bun:test';
 import type { ProviderRegistry } from '../src/registry/types.js';
 import { credentialInstanceAuthRef } from '../src/credential-helper.js';
 
@@ -18,8 +19,8 @@ const journalState = vi.hoisted(() => ({
   pending: new Set<string>(),
 }));
 
-vi.mock('../src/env.js', async importOriginal => ({
-  ...(await importOriginal<typeof import('../src/env.js')>()),
+vi.mock('../src/env.js', () => ({
+  ...(importActual<typeof import('../src/env.js')>('../src/env.js', import.meta.url)),
   deleteProviderCredential: vi.fn(),
   provisionProviderCredential: vi.fn(),
   saveProviderCredential: vi.fn(),

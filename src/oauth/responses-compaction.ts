@@ -68,14 +68,20 @@ export function resolveOpenAiCompactionThreshold(
   const configured = env.CLODEX_OPENAI_COMPACTION?.trim().toLowerCase();
   if (!configured || !ENABLED_VALUES.has(configured)) return undefined;
 
+  const modelSafeThreshold = Number.isFinite(contextWindow) && (contextWindow ?? 0) > 0
+    ? Math.floor(contextWindow! * OPENAI_COMPACTION_DEFAULT_RATIO)
+    : undefined;
   const explicit = env.CLODEX_OPENAI_COMPACT_THRESHOLD?.trim();
   if (explicit) {
     const parsed = Number(explicit);
-    if (Number.isSafeInteger(parsed) && parsed > 0) return parsed;
+    if (Number.isSafeInteger(parsed) && parsed > 0) {
+      return modelSafeThreshold === undefined
+        ? parsed
+        : Math.min(parsed, modelSafeThreshold);
+    }
   }
 
-  if (!Number.isFinite(contextWindow) || (contextWindow ?? 0) <= 0) return undefined;
-  return Math.floor(contextWindow! * OPENAI_COMPACTION_DEFAULT_RATIO);
+  return modelSafeThreshold;
 }
 
 export function responsesCompactUrl(input: string | URL | Request): string {

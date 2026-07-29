@@ -4,6 +4,7 @@ import { join } from 'node:path';
 export const APP_DIR_NAME = 'clodex';
 
 interface HomeEnv {
+  [name: string]: string | undefined;
   HOME?: string;
   CLODEX_HOME?: string;
   USERPROFILE?: string;

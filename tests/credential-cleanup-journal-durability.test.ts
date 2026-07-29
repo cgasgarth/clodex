@@ -1,7 +1,8 @@
+import { importActual } from './bun-import-actual.js';
 import type { PathLike } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'bun:test';
 
 const fsState = vi.hoisted(() => ({
   journalPath: '',
@@ -16,8 +17,9 @@ function ioError(message: string): NodeJS.ErrnoException {
   return Object.assign(new Error(message), { code: 'EIO' });
 }
 
-vi.mock('node:fs', async importOriginal => {
-  const actual = await importOriginal<typeof import('node:fs')>();
+vi.mock('node:fs', () => {
+  const importOriginal = <T>() => importActual<T>('node:fs', import.meta.url);
+  const actual = importOriginal<typeof import('node:fs')>();
   const isJournalTemp = (path: string | undefined): boolean =>
     path?.startsWith(`${fsState.journalPath}.`) === true
     && path.endsWith('.tmp')

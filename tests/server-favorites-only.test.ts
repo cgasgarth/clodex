@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect } from 'bun:test';
 import { filterServerModelsByFavorites } from '../src/server/catalog-filter.js';
 import { MAX_MODEL_CATALOG } from '../src/constants.js';
 import { getServerFavoritesOnly, setServerFavoritesOnly } from '../src/config.js';

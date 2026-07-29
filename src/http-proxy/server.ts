@@ -168,6 +168,8 @@ export interface HttpProxyOptions {
   adapterHandle?: ProxyHandle;
   /** Test hook for exercising adapter request transport failures. */
   adapterRequest?: typeof http.request;
+  /** Test hook for simulating a server-observed downstream disconnect. */
+  onMitmResponse?: (response: http.ServerResponse) => void;
   /** Test hook; production emits a progress record every 30 seconds. */
   responseProgressIntervalMs?: number;
   /** Resolve a managed-account credential from the launch ticket for this request. */
@@ -269,7 +271,13 @@ function copyResponse(
   res.writeHead(statusCode, upstream.statusMessage, upstream.rawHeaders);
   upstream.once('error', err => {
     logErrorResponse(` [stream error: ${err.message}]`);
-    res.destroy();
+    // Let the forwarding lifecycle's error listener classify the upstream
+    // failure before closing the downstream response. EventEmitter listeners
+    // run synchronously, and an immediate destroy can otherwise be observed as
+    // a downstream disconnect first under Bun.
+    queueMicrotask(() => {
+      if (!res.destroyed) res.destroy();
+    });
   });
   upstream.pipe(res);
 }
@@ -440,7 +448,8 @@ function forwardRawAnthropicRequest(
         chunks,
         terminationSource: isLocalShutdown() ? 'local_shutdown' : 'downstream_client',
       });
-      upstream.destroy(new Error('Client disconnected'));
+      upstream.destroy();
+      upstream.socket?.destroy();
       done();
     });
     upstream.once('error', err => {
@@ -487,7 +496,20 @@ function forwardToAdapter(
   },
   isLocalShutdown: () => boolean = () => false,
   launchTicket?: string,
+  shutdownSignal?: AbortSignal,
 ): Promise<void> {
+  if (adapterRequest === http.request) {
+    return forwardToAdapterWithFetch(
+      req,
+      res,
+      rawBody,
+      adapter,
+      lifecycle,
+      isLocalShutdown,
+      launchTicket,
+      shutdownSignal,
+    );
+  }
   return new Promise(resolve => {
     const startedAt = Date.now();
     let lastActivityAt = startedAt;
@@ -568,8 +590,9 @@ function forwardToAdapter(
         chunks,
         terminationSource: isLocalShutdown() ? 'local_shutdown' : 'downstream_client',
       });
-      adapterResponse?.destroy(new Error('Client disconnected'));
-      upstream?.destroy(new Error('Client disconnected'));
+      adapterResponse?.destroy();
+      upstream?.destroy();
+      upstream?.socket?.destroy();
       resolve();
     });
 
@@ -700,6 +723,183 @@ function forwardToAdapter(
   });
 }
 
+async function forwardToAdapterWithFetch(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  rawBody: Buffer,
+  adapter: ProxyHandle,
+  lifecycle: {
+    logPath: string;
+    requestId: string;
+    claudeSessionId?: string;
+    modelId: string;
+    provider: string;
+    progressIntervalMs: number;
+  } | undefined,
+  isLocalShutdown: () => boolean,
+  launchTicket?: string,
+  shutdownSignal?: AbortSignal,
+): Promise<void> {
+  const startedAt = Date.now();
+  let lastActivityAt = startedAt;
+  let firstByteAt: number | undefined;
+  let statusCode: number | undefined;
+  let bytes = 0;
+  let chunks = 0;
+  let failed = false;
+  let clientDisconnected = false;
+  const abort = new AbortController();
+  const writeLifecycle = (
+    event: Parameters<typeof writeInferenceResponseLifecycleLog>[1]['event'],
+    extra: Partial<Parameters<typeof writeInferenceResponseLifecycleLog>[1]> = {},
+  ) => {
+    if (!lifecycle) return;
+    writeInferenceResponseLifecycleLog(lifecycle.logPath, {
+      event,
+      requestId: lifecycle.requestId,
+      claudeSessionId: lifecycle.claudeSessionId,
+      modelId: lifecycle.modelId,
+      provider: lifecycle.provider,
+      route: 'translated',
+      ...extra,
+    });
+  };
+  const responsePhase = (): InferenceResponsePhase => {
+    if (statusCode === undefined) return 'waiting_for_headers';
+    if (firstByteAt === undefined) return 'waiting_for_first_byte';
+    return 'streaming';
+  };
+  const progressTimer = lifecycle
+    ? setInterval(() => {
+        const now = Date.now();
+        writeLifecycle('response_progress', {
+          statusCode,
+          phase: responsePhase(),
+          durationMs: now - startedAt,
+          ...(firstByteAt !== undefined ? { timeToFirstByteMs: firstByteAt - startedAt } : {}),
+          idleMs: now - lastActivityAt,
+          bytes,
+          chunks,
+        });
+      }, lifecycle.progressIntervalMs)
+    : undefined;
+  progressTimer?.unref();
+  const stopProgress = () => {
+    if (progressTimer) clearInterval(progressTimer);
+  };
+
+  res.once('finish', () => {
+    stopProgress();
+    if (failed || clientDisconnected) return;
+    const now = Date.now();
+    writeLifecycle('response_completed', {
+      statusCode,
+      durationMs: now - startedAt,
+      ...(firstByteAt !== undefined ? { timeToFirstByteMs: firstByteAt - startedAt } : {}),
+      bytes,
+      chunks,
+    });
+  });
+  const disconnect = (terminationSource: 'local_shutdown' | 'downstream_client') => {
+    stopProgress();
+    if (res.writableFinished || failed || clientDisconnected) return;
+    clientDisconnected = true;
+    const now = Date.now();
+    writeLifecycle('response_client_disconnected', {
+      statusCode,
+      phase: responsePhase(),
+      durationMs: now - startedAt,
+      ...(firstByteAt !== undefined ? { timeToFirstByteMs: firstByteAt - startedAt } : {}),
+      idleMs: now - lastActivityAt,
+      bytes,
+      chunks,
+      terminationSource,
+    });
+    abort.abort(new Error('Client disconnected'));
+  };
+  const onShutdown = () => disconnect('local_shutdown');
+  shutdownSignal?.addEventListener('abort', onShutdown, { once: true });
+  res.once('close', () => disconnect(
+    isLocalShutdown() ? 'local_shutdown' : 'downstream_client',
+  ));
+
+  try {
+    const response = await fetch(`http://127.0.0.1:${adapter.port}${req.url ?? '/'}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': adapter.token,
+        ...(typeof req.headers['x-claude-code-session-id'] === 'string'
+          ? { 'x-claude-code-session-id': req.headers['x-claude-code-session-id'] }
+          : {}),
+        ...(lifecycle ? { 'x-relay-request-id': lifecycle.requestId } : {}),
+        ...(launchTicket ? { 'x-clodex-launch-ticket': launchTicket } : {}),
+      },
+      body: new Uint8Array(rawBody),
+      signal: abort.signal,
+    });
+    if (clientDisconnected) return;
+    statusCode = response.status;
+    lastActivityAt = Date.now();
+    const responseHeaders = Object.fromEntries(response.headers);
+    res.writeHead(response.status, response.statusText, responseHeaders);
+    const captureUsage = lifecycle
+      && response.headers.get('content-type')?.includes('text/event-stream')
+      ? createResponseUsageCapture(usage => writeLifecycle('response_usage', usage))
+      : undefined;
+    if (response.body) {
+      for await (const value of response.body) {
+        const chunk = Buffer.from(value);
+        const now = Date.now();
+        if (firstByteAt === undefined) {
+          firstByteAt = now;
+          writeLifecycle('response_started', {
+            statusCode,
+            durationMs: now - startedAt,
+            timeToFirstByteMs: now - startedAt,
+          });
+        }
+        lastActivityAt = now;
+        bytes += chunk.length;
+        chunks += 1;
+        captureUsage?.(chunk);
+        if (!res.write(chunk)) {
+          await new Promise<void>(resolve => res.once('drain', resolve));
+        }
+      }
+    }
+    if (!res.writableEnded) res.end();
+  } catch (error) {
+    if (clientDisconnected || abort.signal.aborted) return;
+    failed = true;
+    stopProgress();
+    const err = error instanceof Error ? error : new Error(String(error));
+    const now = Date.now();
+    writeLifecycle('response_failed', {
+      statusCode: statusCode ?? 502,
+      phase: responsePhase(),
+      durationMs: now - startedAt,
+      ...(firstByteAt !== undefined ? { timeToFirstByteMs: firstByteAt - startedAt } : {}),
+      idleMs: now - lastActivityAt,
+      bytes,
+      chunks,
+      errorType: err.name,
+      errorCode: (err as NodeJS.ErrnoException).code,
+      failureSource: statusCode === undefined ? 'adapter_request_error' : 'adapter_response_error',
+      terminationSource: 'upstream_failure',
+    });
+    if (!res.headersSent) {
+      res.writeHead(502, { 'Content-Type': 'text/plain' });
+      res.end(`Relay adapter unreachable: ${err.message}`);
+    } else if (!res.writableEnded) {
+      res.destroy();
+    }
+  } finally {
+    shutdownSignal?.removeEventListener('abort', onShutdown);
+    stopProgress();
+  }
+}
+
 function forwardPlainHttp(req: http.IncomingMessage, res: http.ServerResponse): void {
   let target: URL;
   try {
@@ -763,6 +963,7 @@ export async function startHttpProxy(options: HttpProxyOptions): Promise<HttpPro
   }
   const adapterAgent = adapter ? new http.Agent({ keepAlive: true }) : undefined;
   let shuttingDown = false;
+  const shutdownController = new AbortController();
   const launchTicketsByClient = new Map<string, string>();
 
   const socketIdentity = (socket: unknown): string => {
@@ -775,6 +976,17 @@ export async function startHttpProxy(options: HttpProxyOptions): Promise<HttpPro
     cert: certificates.serverCert,
     minVersion: 'TLSv1.2',
   }, async (req, res) => {
+    options.onMitmResponse?.(res);
+    // Bun's node:https compatibility layer does not always turn an inbound
+    // `Connection: close` into a full TLS close after ServerResponse finishes.
+    // Honor the HTTP/1.1 contract explicitly so completed Claude requests do
+    // not retain half-open MITM sockets.
+    if (req.headers.connection?.toLowerCase().includes('close')) {
+      res.shouldKeepAlive = false;
+      res.once('finish', () => {
+        if (!req.socket.destroyed) req.socket.end();
+      });
+    }
     let rawBody: Buffer;
     try {
       rawBody = await readRawBody(req);
@@ -900,6 +1112,7 @@ export async function startHttpProxy(options: HttpProxyOptions): Promise<HttpPro
             : undefined,
           () => shuttingDown,
           launchTicket,
+          shutdownController.signal,
         );
         return;
       }
@@ -956,6 +1169,20 @@ export async function startHttpProxy(options: HttpProxyOptions): Promise<HttpPro
   });
 
   const sockets = new Set<Socket>();
+  const mitmSocketsByClientPort = new Map<number, Socket>();
+  mitmServer.on('connection', socket => {
+    sockets.add(socket);
+    if (socket.remotePort !== undefined) {
+      mitmSocketsByClientPort.set(socket.remotePort, socket);
+    }
+    socket.once('close', () => {
+      sockets.delete(socket);
+      if (socket.remotePort !== undefined) {
+        mitmSocketsByClientPort.delete(socket.remotePort);
+      }
+    });
+  });
+  const mitmAddress = await listenTcpServer(mitmServer, 0, '127.0.0.1');
   const proxyServer = http.createServer(forwardPlainHttp);
   proxyServer.on('connection', socket => {
     sockets.add(socket);
@@ -967,12 +1194,43 @@ export async function startHttpProxy(options: HttpProxyOptions): Promise<HttpPro
         ? req.headers['proxy-authorization'][0]
         : req.headers['proxy-authorization'];
       const launchTicket = parseProxyLaunchTicket(authorization);
-      const identity = socketIdentity(clientSocket);
-      if (launchTicket) launchTicketsByClient.set(identity, launchTicket);
-      clientSocket.once('close', () => launchTicketsByClient.delete(identity));
-      clientSocket.write('HTTP/1.1 200 Connection Established\r\n\r\n');
-      if (head.length > 0) clientSocket.unshift(head);
-      mitmServer.emit('connection', clientSocket);
+      // Bun does not support Node's undocumented pattern of transferring an
+      // accepted socket into an unbound https.Server via emit('connection').
+      // Tunnel the CONNECT stream through a normal loopback TLS listener.
+      const bridge = net.connect(mitmAddress.port, '127.0.0.1');
+      sockets.add(bridge);
+      let bridgeIdentity: string | undefined;
+      bridge.once('connect', () => {
+        bridgeIdentity = socketIdentity({
+          remoteAddress: bridge.localAddress,
+          remotePort: bridge.localPort,
+        });
+        if (launchTicket) launchTicketsByClient.set(bridgeIdentity, launchTicket);
+        clientSocket.write('HTTP/1.1 200 Connection Established\r\n\r\n');
+        if (head.length > 0) bridge.write(head);
+        clientSocket.pipe(bridge);
+        bridge.pipe(clientSocket);
+      });
+      bridge.once('close', () => {
+        sockets.delete(bridge);
+        if (bridgeIdentity) launchTicketsByClient.delete(bridgeIdentity);
+        if (!clientSocket.destroyed) clientSocket.destroy();
+      });
+      const closeBridge = () => {
+        if (!bridge.destroyed) bridge.destroy();
+        const mitmSocket = bridge.localPort === undefined
+          ? undefined
+          : mitmSocketsByClientPort.get(bridge.localPort);
+        if (mitmSocket && !mitmSocket.destroyed) mitmSocket.destroy();
+      };
+      clientSocket.once('end', closeBridge);
+      clientSocket.once('close', closeBridge);
+      clientSocket.once('error', closeBridge);
+      bridge.once('error', () => {
+        if (!clientSocket.destroyed) {
+          clientSocket.end('HTTP/1.1 502 Bad Gateway\r\n\r\n', () => clientSocket.destroy());
+        }
+      });
       return;
     }
 
@@ -1020,6 +1278,7 @@ export async function startHttpProxy(options: HttpProxyOptions): Promise<HttpPro
     );
   } catch (err) {
     adapterAgent?.destroy();
+    mitmServer.close();
     if (ownsAdapter) adapter?.close();
     throw err;
   }
@@ -1036,9 +1295,10 @@ export async function startHttpProxy(options: HttpProxyOptions): Promise<HttpPro
     webSocketDiagnosticsLogPath: options.webSocketDiagnosticsLogPath,
     close: async () => {
       shuttingDown = true;
+      shutdownController.abort(new Error('Local proxy shutdown'));
       for (const socket of sockets) socket.destroy();
       await new Promise<void>(resolve => proxyServer.close(() => resolve()));
-      mitmServer.close();
+      await new Promise<void>(resolve => mitmServer.close(() => resolve()));
       if (ownsAdapter) adapter?.close();
     },
   };

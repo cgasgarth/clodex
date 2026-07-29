@@ -89,28 +89,23 @@ migration.
 ## Development
 
 ```bash
-corepack enable          # activates the pinned pnpm version
-pnpm install
-pnpm build               # compile TypeScript → dist/
-pnpm test                # vitest
-pnpm typecheck           # tsc --noEmit
-pnpm dev                 # watch mode
+bun install --frozen-lockfile
+bun run build
+bun run test
+bun run typecheck
+bun run dev
 
-pnpm vitest run tests/patcher.test.ts    # a single test file
+bun test tests/patcher.test.ts
 ```
 
-Development targets **Node 24** (`.nvmrc` pins the version; CI runs 24). The published
-package supports **Node >= 22**, so don't use APIs newer than Node 22 in `src/`.
-
-The package manager is **pnpm**, pinned via `packageManager` in `package.json` and
-activated through corepack. Dependencies are **exact-pinned** — no `^` or `~`. Note that
-`pnpm-workspace.yaml` sets `minimumReleaseAge`, so a dependency version younger than ten
-days can't be resolved; already-locked versions install normally.
+Development and the published CLI require **Bun >= 1.3.14**. `packageManager`,
+`engines.bun`, and `bun.lock` define the toolchain. Dependencies are exact-pinned.
+Do not add Node, npm, pnpm, Vitest, or tsup execution paths.
 
 Before opening a PR, run:
 
 ```bash
-pnpm typecheck && pnpm test && pnpm build
+bun run typecheck && bun run test && bun run build
 ```
 
 CI runs exactly these three on every pull request.
@@ -156,7 +151,7 @@ real `~/.clodex`.
 ## A few hard rules
 
 - **Never commit `dist/`.** It's gitignored and rebuilt by CI.
-- **Never run `npm publish`.** Releases are automated; publishing is staged via CI and
+- **Never publish locally.** Releases are automated through CI and
   approved by a maintainer.
 - **Never hardcode a version string.** `package.json` is the single source of truth.
 - **Never add `claude -p` end-to-end tests to the automated suite.** They're manual only.

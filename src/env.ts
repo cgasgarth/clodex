@@ -104,6 +104,11 @@ export function buildChildEnv(
  */
 export function buildHttpProxyChildEnv(proxyPort: number, caCertPath: string): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...process.env };
+  // Bun's process.env proxy does not enumerate variables assigned after process
+  // startup. Read the known proxy-bypass keys directly before filtering them.
+  for (const name of ['NO_PROXY', 'no_proxy'] as const) {
+    if (process.env[name] !== undefined) env[name] = process.env[name];
+  }
   for (const name of CONFLICTING_ENV_VARS) {
     if (name === 'ANTHROPIC_API_KEY' || name === 'ANTHROPIC_AUTH_TOKEN' || name === 'ANTHROPIC_MODEL') continue;
     delete env[name];

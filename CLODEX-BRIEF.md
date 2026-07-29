@@ -153,7 +153,7 @@ Replace README.md entirely:
   from the original relay-ai project, heavily modified and streamlined for this one
   use case, with the full commit history preserved. No other attribution content.
 - "Get started" section assuming a ChatGPT/Codex plan (OAuth) user:
-  `npm install -g @bman654/clodex`, the OAuth login step, `clodex models` (pick favorites/
+  `bun add --global @bman654/clodex`, the OAuth login step, `clodex models` (pick favorites/
   aliases), `clodex patch`, `clodex claude`. Each with a one-line explanation.
 - Then a full CLI reference for every kept command and flag.
 - No references to stripped features (ui, gemini, codex client, antigravity, vertex,
@@ -166,7 +166,7 @@ Replace README.md entirely:
 ## Testing rules
 
 - Load/follow the existing test conventions. Keep all tests for kept modules; they
-  must pass (`npm test`), plus `npm run typecheck` and `npm run build`.
+  must pass (`bun run test`), plus `bun run typecheck` and `bun run build`.
 - Update kept tests for renames (`clodex:` prefix, env vars, help text) — do not
   weaken assertions.
 - New features get unit tests for their pure parts (patch-map building, manifest
@@ -184,6 +184,6 @@ Replace README.md entirely:
 - The machine has working OpenAI OAuth credentials under `~/.relay-ai` — the
   migration copy makes real end-to-end testing possible. Do not delete or mutate
   `~/.relay-ai` itself.
-- Do not run `npm publish`. Do not push. Do not touch the user's global claude
+- Do not publish locally. Do not push. Do not touch the user's global claude
   binary with the patcher during implementation unless verifying patch behavior —
   and always restore it afterward.

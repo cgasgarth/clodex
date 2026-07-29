@@ -9,10 +9,10 @@ The complete architecture guide, hard-won constraints, release workflow, and tes
 ## Quick reference
 
 ```bash
-pnpm build          # compile TypeScript → dist/cli.js (tsup, ESM)
-pnpm test           # vitest
-pnpm typecheck      # tsc --noEmit
-pnpm vitest run tests/patcher.test.ts   # single test file
+bun run build
+bun run test
+bun run typecheck
+bun test tests/patcher.test.ts
 ```
 
 ## Non-negotiables (details in CLAUDE.md)
@@ -21,4 +21,4 @@ pnpm vitest run tests/patcher.test.ts   # single test file
 - The proxy-mode MITM must echo the exact requested model id in responses (auto-compaction depends on it).
 - Anthropic-passthrough base URLs must NOT include `/v1`.
 - `claude -p` end-to-end tests are manual only — never add them to the automated test suite.
-- Never `npm publish` locally; releases are tag-driven CI.
+- Never publish locally; releases are tag-driven CI.

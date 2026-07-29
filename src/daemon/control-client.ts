@@ -1,4 +1,3 @@
-import http from 'node:http';
 import { getDaemonControlSocketPath } from '../paths.js';
 
 export interface DaemonControlRequestOptions {
@@ -13,45 +12,34 @@ export async function daemonControlRequest<T>(
   options: DaemonControlRequestOptions = {},
 ): Promise<T> {
   const body = options.body === undefined ? undefined : JSON.stringify(options.body);
-  return new Promise<T>((resolve, reject) => {
-    const request = http.request({
-      socketPath: options.socketPath ?? getDaemonControlSocketPath(),
-      path,
+  const timeout = AbortSignal.timeout(options.timeoutMs ?? 2_000);
+  let response: Response;
+  try {
+    response = await fetch(`http://clodex.local${path}`, {
+      unix: options.socketPath ?? getDaemonControlSocketPath(),
       method: options.method ?? 'GET',
-      headers: body
-        ? {
-            'content-type': 'application/json',
-            'content-length': Buffer.byteLength(body),
-          }
-        : undefined,
-    }, response => {
-      const chunks: Buffer[] = [];
-      response.on('data', chunk => chunks.push(Buffer.from(chunk)));
-      response.once('end', () => {
-        const raw = Buffer.concat(chunks).toString('utf8');
-        let parsed: unknown = null;
-        try {
-          parsed = raw ? JSON.parse(raw) : null;
-        } catch {
-          reject(new Error(`Invalid daemon response (${response.statusCode ?? 0})`));
-          return;
-        }
-        if ((response.statusCode ?? 500) >= 400) {
-          const message = parsed && typeof parsed === 'object'
-            && typeof (parsed as { error?: unknown }).error === 'string'
-            ? (parsed as { error: string }).error
-            : `Daemon request failed (${response.statusCode ?? 0})`;
-          reject(new Error(message));
-          return;
-        }
-        resolve(parsed as T);
-      });
+      headers: body ? { 'content-type': 'application/json' } : undefined,
+      body,
+      signal: timeout,
     });
-    request.setTimeout(options.timeoutMs ?? 2_000, () => {
-      request.destroy(new Error('Clodex daemon request timed out'));
-    });
-    request.once('error', reject);
-    if (body) request.write(body);
-    request.end();
-  });
+  } catch (error) {
+    if (timeout.aborted) throw new Error('Clodex daemon request timed out');
+    throw error;
+  }
+
+  const raw = await response.text();
+  let parsed: unknown = null;
+  try {
+    parsed = raw ? JSON.parse(raw) : null;
+  } catch {
+    throw new Error(`Invalid daemon response (${response.status})`);
+  }
+  if (!response.ok) {
+    const message = parsed && typeof parsed === 'object'
+      && typeof (parsed as { error?: unknown }).error === 'string'
+      ? (parsed as { error: string }).error
+      : `Daemon request failed (${response.status})`;
+    throw new Error(message);
+  }
+  return parsed as T;
 }

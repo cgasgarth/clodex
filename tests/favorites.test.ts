@@ -1,5 +1,5 @@
 // tests/favorites.test.ts
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect } from 'bun:test';
 import { MAX_MODEL_CATALOG } from '../src/constants.js';
 import { addFavorite, removeFavorite, isFavorite } from '../src/favorites.js';
 import type { FavoriteModel } from '../src/types.js';

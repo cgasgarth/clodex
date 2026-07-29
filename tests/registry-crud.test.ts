@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { importActual } from './bun-import-actual.js';
+import { beforeEach, describe, expect, it, vi } from 'bun:test';
 import type { ProviderRegistry } from '../src/registry/types.js';
 
 const registryState = vi.hoisted(() => ({
@@ -16,8 +17,8 @@ const journalState = vi.hoisted(() => ({
   pending: new Set<string>(),
 }));
 
-vi.mock('../src/env.js', async importOriginal => ({
-  ...await importOriginal<typeof import('../src/env.js')>(),
+vi.mock('../src/env.js', () => ({
+  ...importActual<typeof import('../src/env.js')>('../src/env.js', import.meta.url),
   deleteProviderCredential: vi.fn(),
 }));
 vi.mock('../src/registry/io.js', () => ({

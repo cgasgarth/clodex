@@ -2,9 +2,6 @@
 // Primary path: the GUI server handles /oauth/callback when the UI is open.
 // This is only used when running `clodex providers auth <provider>` without the GUI.
 
-import http from 'node:http';
-import { listenTcpServer } from '../listener-ready.js';
-
 export interface CallbackParams {
   code: string;
   state: string;
@@ -30,23 +27,29 @@ export async function startCallbackServer(): Promise<CallbackServer> {
   let codeResolve: ((p: CallbackParams) => void) | undefined;
   let codeReject: ((e: Error) => void) | undefined;
 
-  const server = http.createServer((req, res) => {
-    const u = new URL(req.url ?? '/', 'http://localhost');
-    if (u.pathname !== '/callback' && u.pathname !== '/oauth/callback') {
-      res.writeHead(404); res.end(); return;
-    }
-    const code = u.searchParams.get('code') ?? '';
-    const state = u.searchParams.get('state') ?? '';
-    const error = u.searchParams.get('error') ?? '';
-    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-    res.end(SUCCESS_HTML);
-    codeResolve?.({ code, state, error: error || undefined });
+  const server = Bun.serve({
+    hostname: '127.0.0.1',
+    port: 0,
+    fetch(req) {
+      const u = new URL(req.url);
+      if (u.pathname !== '/callback' && u.pathname !== '/oauth/callback') {
+        return new Response(null, { status: 404 });
+      }
+      const code = u.searchParams.get('code') ?? '';
+      const state = u.searchParams.get('state') ?? '';
+      const error = u.searchParams.get('error') ?? '';
+      codeResolve?.({ code, state, error: error || undefined });
+      return new Response(SUCCESS_HTML, {
+        headers: { 'Content-Type': 'text/html; charset=utf-8' },
+      });
+    },
   });
+  const port = server.port;
+  if (port === undefined) throw new Error('OAuth callback server did not bind to a TCP port');
 
-  const address = await listenTcpServer(server, 0, '127.0.0.1');
   return {
-    port: address.port,
-    redirectUri: `http://127.0.0.1:${address.port}/callback`,
+    port,
+    redirectUri: `http://127.0.0.1:${port}/callback`,
     waitForCallback(timeoutMs = 300_000) {
       return new Promise<CallbackParams>((resolve, reject) => {
         codeResolve = resolve;
@@ -57,6 +60,6 @@ export async function startCallbackServer(): Promise<CallbackServer> {
         );
       });
     },
-    close() { server.close(); codeReject?.(new Error('Server closed')); },
+    close() { void server.stop(true); codeReject?.(new Error('Server closed')); },
   };
 }

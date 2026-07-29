@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import {
   chmodSync,
   mkdtempSync,
@@ -175,7 +175,7 @@ describe('credential cleanup journal', () => {
     );
   });
 
-  it.runIf(typeof process.getuid === 'function')(
+  (typeof process.getuid === 'function' ? it : it.skip)(
     'rejects a journal with group or other permissions',
     async () => {
       writeFileSync(getCredentialCleanupPath(), JSON.stringify({

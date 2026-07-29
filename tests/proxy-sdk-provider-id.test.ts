@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { importActual } from './bun-import-actual.js';
+import { afterEach, describe, expect, it, vi } from 'bun:test';
 import http from 'node:http';
 import { createLanguageModel } from '../src/provider-factory.js';
 import { generateAnthropicResponse } from '../src/sdk-adapter.js';
@@ -7,16 +8,18 @@ import { startProxyCatalog, type ProxyRoute } from '../src/proxy.js';
 const ORIGINAL_COMPACTION_FLAG = process.env.CLODEX_OPENAI_COMPACTION;
 const ORIGINAL_COMPACTION_THRESHOLD = process.env.CLODEX_OPENAI_COMPACT_THRESHOLD;
 
-vi.mock('../src/provider-factory.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../src/provider-factory.js')>();
+vi.mock('../src/provider-factory.js', () => {
+  const importOriginal = <T>() => importActual<T>('../src/provider-factory.js', import.meta.url);
+  const actual = importOriginal<typeof import('../src/provider-factory.js')>();
   return {
     ...actual,
     createLanguageModel: vi.fn().mockResolvedValue({}),
   };
 });
 
-vi.mock('../src/sdk-adapter.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../src/sdk-adapter.js')>();
+vi.mock('../src/sdk-adapter.js', () => {
+  const importOriginal = <T>() => importActual<T>('../src/sdk-adapter.js', import.meta.url);
+  const actual = importOriginal<typeof import('../src/sdk-adapter.js')>();
   return {
     ...actual,
     generateAnthropicResponse: vi.fn().mockResolvedValue({

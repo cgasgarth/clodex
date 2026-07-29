@@ -10,13 +10,13 @@ import {
 import { dirname } from 'node:path';
 import { getDaemonRuntimePath } from '../paths.js';
 
-export const DAEMON_PROTOCOL_VERSION = 2;
+export const DAEMON_PROTOCOL_VERSION = 3;
 
 export interface DaemonRuntimeState {
   protocolVersion: number;
   instanceId: string;
   pid: number;
-  nodePath: string;
+  bunPath: string;
   cliPath: string;
   startedAt: string;
   ready: boolean;
@@ -28,6 +28,7 @@ export interface DaemonRuntimeState {
 }
 
 interface HomeEnv {
+  [name: string]: string | undefined;
   HOME?: string;
   CLODEX_HOME?: string;
   USERPROFILE?: string;
@@ -41,8 +42,8 @@ function validState(value: unknown): value is DaemonRuntimeState {
     && state.instanceId.length > 0
     && Number.isInteger(state.pid)
     && (state.pid ?? 0) > 0
-    && typeof state.nodePath === 'string'
-    && state.nodePath.length > 0
+    && typeof state.bunPath === 'string'
+    && state.bunPath.length > 0
     && typeof state.cliPath === 'string'
     && state.cliPath.length > 0
     && typeof state.startedAt === 'string'

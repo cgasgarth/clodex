@@ -634,8 +634,8 @@ function streamAbortError(signal?: AbortSignal): Error {
 
 /**
  * Forward caller cancellation into a Relay-owned controller without creating
- * an AbortSignal.any() composite. Node 24 retains source-aborted composite
- * signals in its internal gcPersistentSignals set when listeners remain.
+ * an AbortSignal.any() composite. Some runtimes retain source-aborted
+ * composites while listeners remain.
  */
 function forwardAbortSignal(source: AbortSignal | undefined, target: AbortController): () => void {
   if (!source) return () => {};
@@ -867,6 +867,7 @@ export async function streamAnthropicResponse(
   write: WriteFn,
   log?: LogFn,
   observer?: AnthropicStreamObserver,
+  dependencies: { streamText?: typeof streamText } = {},
 ): Promise<void> {
   const idleTimeoutMs = observer?.idleTimeoutMs ?? SDK_STREAM_IDLE_TIMEOUT_MS;
   const idleAbort = new AbortController();
@@ -883,7 +884,7 @@ export async function streamAnthropicResponse(
   // Do not combine streamText's total/chunk timeout signals here. In AI SDK
   // 7.0.22 that composition retains completed StreamTextResult graphs. Relay
   // owns the timers and explicitly settles its controller after consumption.
-  const result = streamText({
+  const result = (dependencies.streamText ?? streamText)({
     model,
     ...params,
     abortSignal,
@@ -912,8 +913,8 @@ export async function streamAnthropicResponse(
     clearTimeout(idleTimer);
     clearTimeout(totalTimer);
     // Settle the direct Relay-owned signal only after stream consumption. Do not
-    // replace this with AbortSignal.any(): source-driven abort leaves Node's
-    // dependent composite rooted in gcPersistentSignals on Node 24.
+    // replace this with AbortSignal.any(): source-driven abort can retain the
+    // dependent composite after the request has completed.
     if (!idleAbort.signal.aborted) idleAbort.abort();
   }
 }
@@ -927,6 +928,8 @@ export async function generateAnthropicResponse(
     abortSignal?: AbortSignal;
     onPart?: (partType: string) => void;
     idleTimeoutMs?: number;
+    streamText?: typeof streamText;
+    generateText?: typeof generateText;
   },
 ): Promise<Record<string, unknown>> {
   let text: string;
@@ -952,7 +955,7 @@ export async function generateAnthropicResponse(
     );
     // See the streaming path above: Relay owns these timers and explicitly
     // settles its controller when the stream has been fully reduced.
-    const r = streamText({
+    const r = (options.streamText ?? streamText)({
       model,
       ...params,
       abortSignal,
@@ -1011,7 +1014,7 @@ export async function generateAnthropicResponse(
       SDK_TOTAL_TIMEOUT_MS,
     );
     try {
-      const r = await generateText({
+    const r = await (options?.generateText ?? generateText)({
         model,
         ...params,
         abortSignal: generateAbort.signal,

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'bun:test';
 import {
   compactRequestPayload,
   compactResponsesWindow,
@@ -18,6 +18,18 @@ describe('Responses standalone compaction', () => {
       CLODEX_OPENAI_COMPACTION: 'true',
       CLODEX_OPENAI_COMPACT_THRESHOLD: '12345',
     })).toBe(12_345);
+    expect(resolveOpenAiCompactionThreshold(128_000, {
+      CLODEX_OPENAI_COMPACTION: 'true',
+      CLODEX_OPENAI_COMPACT_THRESHOLD: '278000',
+    })).toBe(115_200);
+    expect(resolveOpenAiCompactionThreshold(1_000_000, {
+      CLODEX_OPENAI_COMPACTION: 'true',
+      CLODEX_OPENAI_COMPACT_THRESHOLD: '278000',
+    })).toBe(278_000);
+    expect(resolveOpenAiCompactionThreshold(undefined, {
+      CLODEX_OPENAI_COMPACTION: 'true',
+      CLODEX_OPENAI_COMPACT_THRESHOLD: '278000',
+    })).toBe(278_000);
     expect(resolveOpenAiCompactionThreshold(272_000, {
       CLODEX_OPENAI_COMPACTION: 'true',
       CLODEX_OPENAI_COMPACT_THRESHOLD: 'not-a-token-count',

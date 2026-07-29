@@ -1,5 +1,5 @@
 // tests/prompts.test.ts
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect } from 'bun:test';
 import {
   filterModelsBySearch,
   sliceModelPage,

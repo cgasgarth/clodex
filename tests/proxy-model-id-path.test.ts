@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach } from 'bun:test';
 import http from 'node:http';
 import { startProxy, type ProxyHandle } from '../src/proxy.js';
 

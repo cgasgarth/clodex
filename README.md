@@ -19,7 +19,7 @@ Contributions are welcome — see [CONTRIBUTING.md](./CONTRIBUTING.md) for how t
 ## Quick Start (ChatGPT/Codex plan)
 
 ```bash
-npm install -g @bman654/clodex # 1. install the CLI (Node 22+)
+bun add --global @bman654/clodex # 1. install the CLI (Bun 1.3.14+)
 clodex providers auth openai   # 2. sign in with your ChatGPT/Codex plan
 clodex models                  # 3. pick favorite models and aliases
 clodex models --alias sol=clodex:openai-oauth:gpt-5.6-sol

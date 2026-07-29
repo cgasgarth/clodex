@@ -29,7 +29,7 @@ function xmlEscape(value: string): string {
 }
 
 export function daemonLaunchAgentPlist(
-  nodePath: string,
+  bunPath: string,
   cliPath: string,
   env: NodeJS.ProcessEnv = process.env,
 ): string {
@@ -54,7 +54,7 @@ export function daemonLaunchAgentPlist(
   <string>${DAEMON_LAUNCH_AGENT_LABEL}</string>
   <key>ProgramArguments</key>
   <array>
-    <string>${xmlEscape(nodePath)}</string>
+    <string>${xmlEscape(bunPath)}</string>
     <string>${xmlEscape(cliPath)}</string>
     <string>daemon</string>
     <string>run</string>
@@ -97,7 +97,7 @@ function launchctl(args: string[]): void {
 
 export function installDaemonLaunchAgent(
   cliPath: string,
-  nodePath = process.execPath,
+  bunPath = process.execPath,
   env: NodeJS.ProcessEnv = process.env,
 ): string {
   if (process.platform !== 'darwin') {
@@ -106,7 +106,7 @@ export function installDaemonLaunchAgent(
   const path = getDaemonLaunchAgentPath(env);
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
   mkdirSync(`${getAppHome(env)}/logs`, { recursive: true, mode: 0o700 });
-  writeFileSync(path, daemonLaunchAgentPlist(nodePath, cliPath, env), { mode: 0o600 });
+  writeFileSync(path, daemonLaunchAgentPlist(bunPath, cliPath, env), { mode: 0o600 });
   chmodSync(path, 0o600);
   try {
     launchctl(['bootout', launchDomain(), path]);

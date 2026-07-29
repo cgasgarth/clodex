@@ -1,5 +1,5 @@
 // tests/cli.test.ts
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'bun:test';
 import {
   catalogUsesNativeContextOwner,
   parseArgs,

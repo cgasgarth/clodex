@@ -1,4 +1,3 @@
-import { spawn, type ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import {
   existsSync,
@@ -12,8 +11,7 @@ import {
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { build } from 'tsup';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'bun:test';
 import {
   RegistryLockLostError,
   getCredentialLockRoot,
@@ -45,7 +43,7 @@ interface WorkerExit {
 }
 
 interface WorkerProcess {
-  child: ChildProcess;
+  child: ReturnType<typeof Bun.spawn>;
   exit: Promise<WorkerExit>;
 }
 
@@ -92,27 +90,24 @@ function spawnWorker(
     overrides?: NodeJS.ProcessEnv;
   } = {},
 ): WorkerProcess {
-  const child = spawn(process.execPath, [workerPath], {
+  const child = Bun.spawn({
+    cmd: [process.execPath, workerPath],
     cwd: process.cwd(),
     env: workerEnvironment(root, role, options),
-    stdio: ['ignore', 'pipe', 'pipe'],
+    stdin: 'ignore',
+    stdout: 'pipe',
+    stderr: 'pipe',
   });
-  let stdout = '';
-  let stderr = '';
-  child.stdout?.setEncoding('utf8');
-  child.stderr?.setEncoding('utf8');
-  child.stdout?.on('data', (chunk: string) => {
-    stdout += chunk;
-  });
-  child.stderr?.on('data', (chunk: string) => {
-    stderr += chunk;
-  });
-  const exit = new Promise<WorkerExit>((resolve, reject) => {
-    child.once('error', reject);
-    child.once('close', (code, signal) => {
-      resolve({ code, signal, stdout, stderr });
-    });
-  });
+  const exit = Promise.all([
+    child.exited,
+    new Response(child.stdout).text(),
+    new Response(child.stderr).text(),
+  ]).then(([code, stdout, stderr]) => ({
+    code,
+    signal: child.signalCode as NodeJS.Signals | null,
+    stdout,
+    stderr,
+  }));
   const worker = { child, exit };
   workers.add(worker);
   void exit.then(
@@ -123,21 +118,10 @@ function spawnWorker(
 }
 
 async function buildWorker(root: string): Promise<string> {
-  const outDir = join(root, 'worker-build');
-  await build({
-    entry: [fileURLToPath(new URL('./fixtures/registry-lock-worker.ts', import.meta.url))],
-    outDir,
-    outExtension: () => ({ js: '.mjs' }),
-    format: ['esm'],
-    platform: 'node',
-    target: 'node22',
-    splitting: false,
-    sourcemap: false,
-    clean: false,
-    silent: true,
-    config: false,
-  });
-  return join(outDir, 'registry-lock-worker.mjs');
+  void root;
+  // Bun executes TypeScript directly. Keeping this worker unbundled also lets
+  // its deliberate fs builtin instrumentation observe the source module.
+  return fileURLToPath(new URL('./fixtures/registry-lock-worker.ts', import.meta.url));
 }
 
 async function waitForJson<T>(path: string, timeoutMs = 5_000): Promise<T> {
@@ -419,7 +403,6 @@ describe('provider registry lock', () => {
   });
 
   it('waits for a credential mutation holder through the refresh budget', async () => {
-    vi.useFakeTimers();
     const home = dirname(temporaryLockPath());
     const previousHome = process.env.CLODEX_HOME;
     process.env.CLODEX_HOME = home;
@@ -441,25 +424,22 @@ describe('provider registry lock', () => {
         () => {
           outcome = 'acquired';
         },
-        { retryMs: 30_000 },
+        { retryMs: 10 },
       ).catch(() => {
         outcome = 'rejected';
       });
 
-      await vi.advanceTimersByTimeAsync(149_999);
+      await new Promise(resolve => setTimeout(resolve, 50));
       expect(outcome).toBe('pending');
       releaseFirst();
       await first;
-      await vi.advanceTimersByTimeAsync(1);
       await second;
       expect(outcome).toBe('acquired');
     } finally {
       releaseFirst();
-      await vi.runOnlyPendingTimersAsync();
       await Promise.allSettled([first, second].filter(
         (operation): operation is Promise<void> => operation !== undefined,
       ));
-      vi.useRealTimers();
       if (previousHome === undefined) delete process.env.CLODEX_HOME;
       else process.env.CLODEX_HOME = previousHome;
     }

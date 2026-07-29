@@ -1,5 +1,5 @@
 // tests/env.test.ts
-import { describe, it, expect, afterEach, beforeEach } from 'vitest';
+import { describe, it, expect, afterEach, beforeEach } from 'bun:test';
 import {
   detectConflicts,
   buildChildEnv,

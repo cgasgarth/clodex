@@ -1,10 +1,10 @@
-import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { accessSync, constants, statSync } from 'node:fs';
 import { isAbsolute, normalize, resolve } from 'node:path';
 import { getAppHome } from './paths.js';
 
 export const CREDENTIAL_HELPER_ENV = 'CLODEX_CREDENTIAL_HELPER';
+export const CREDENTIAL_HELPER_TIMEOUT_ENV = 'CLODEX_CREDENTIAL_HELPER_TIMEOUT_MS';
 export const CREDENTIAL_HELPER_SERVICE = 'clodex';
 
 const CREDENTIAL_ACCOUNT_INSTANCE_SEPARATOR = '::credential::';
@@ -14,6 +14,13 @@ const HELPER_TIMEOUT_MS = 10_000;
 const HELPER_MAX_OUTPUT_BYTES = 1024 * 1024;
 
 type HelperOperation = 'get' | 'set' | 'delete';
+
+function credentialHelperTimeoutMs(): number {
+  const configured = Number(process.env[CREDENTIAL_HELPER_TIMEOUT_ENV]);
+  return Number.isFinite(configured) && configured >= 1 && configured <= 60_000
+    ? configured
+    : HELPER_TIMEOUT_MS;
+}
 
 interface HelperResult {
   code: number;
@@ -103,57 +110,75 @@ async function runCredentialHelper(
     );
   }
 
-  return new Promise<HelperResult>((resolve, reject) => {
-    const child = spawn(
-      helper.path,
-      [operation, CREDENTIAL_HELPER_SERVICE, account],
-      { shell: false, stdio: ['pipe', 'pipe', 'pipe'] },
-    );
-    const stdout: Buffer[] = [];
-    let stdoutBytes = 0;
-    let settled = false;
+  let child: ReturnType<typeof Bun.spawn>;
+  try {
+    child = Bun.spawn({
+      cmd: [helper.path, operation, CREDENTIAL_HELPER_SERVICE, account],
+      stdin: 'pipe',
+      stdout: 'pipe',
+      stderr: 'ignore',
+      env: process.env,
+    });
+  } catch {
+    throw new Error(`credential helper ${operation} could not start`);
+  }
 
-    const finishReject = (message: string): void => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      child.stdin.destroy();
-      child.stdout.destroy();
-      child.stderr.destroy();
-      child.kill('SIGKILL');
-      reject(new Error(message));
-    };
+  const stdin = child.stdin;
+  const stdout = child.stdout;
+  if (!stdin || typeof stdin === 'number' || !stdout || typeof stdout === 'number') {
+    child.kill(9);
+    throw new Error(`credential helper ${operation} could not start`);
+  }
+  if (input !== undefined) stdin.write(input);
+  stdin.end();
 
-    const timer = setTimeout(() => {
-      finishReject(`credential helper ${operation} timed out`);
-    }, HELPER_TIMEOUT_MS);
-
-    child.stdout.on('data', (chunk: Buffer | string) => {
-      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-      stdoutBytes += buffer.length;
-      if (stdoutBytes > HELPER_MAX_OUTPUT_BYTES) {
-        finishReject(`credential helper ${operation} returned too much output`);
-        return;
+  const readOutput = async (): Promise<string> => {
+    const reader = stdout.getReader();
+    const chunks: Uint8Array[] = [];
+    let bytes = 0;
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        bytes += value.byteLength;
+        if (bytes > HELPER_MAX_OUTPUT_BYTES) {
+          child.kill(9);
+          throw new Error(`credential helper ${operation} returned too much output`);
+        }
+        chunks.push(value);
       }
-      stdout.push(buffer);
-    });
-    child.stderr.resume();
-    child.stdin.on('error', () => {
-      // The exit status remains authoritative when a helper closes stdin early.
-    });
-    child.on('error', () => {
-      finishReject(`credential helper ${operation} could not start`);
-    });
-    child.on('close', code => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      resolve({ code: code ?? 1, stdout: Buffer.concat(stdout).toString('utf8') });
-    });
+    } finally {
+      reader.releaseLock();
+    }
+    const output = new Uint8Array(bytes);
+    let offset = 0;
+    for (const chunk of chunks) {
+      output.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    return new TextDecoder().decode(output);
+  };
 
-    if (input !== undefined) child.stdin.end(input);
-    else child.stdin.end();
+  const completion = Promise.all([child.exited, readOutput()]);
+  // Bun can leave a killed process's stdout reader pending even after the
+  // process exits. Race the operation itself, not just child.exited, so a
+  // wedged helper cannot retain the caller.
+  let timer: ReturnType<typeof setTimeout>;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      child.kill(9);
+      reject(new Error(`credential helper ${operation} timed out`));
+    }, credentialHelperTimeoutMs());
   });
+
+  try {
+    const [code, stdout] = await Promise.race([completion, timeout]);
+    return { code, stdout };
+  } finally {
+    clearTimeout(timer!);
+    if (child.exitCode === null) child.kill(9);
+    void completion.catch(() => {});
+  }
 }
 
 export async function readCredentialHelperAccount(account: string, helperId?: string): Promise<string | null> {

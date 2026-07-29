@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'bun:test';
 import {
   createDaemonRuntimeState,
   readDaemonRuntimeState,
@@ -22,7 +22,7 @@ describe('daemon runtime state', () => {
     const env = { CLODEX_HOME: root };
     const state = createDaemonRuntimeState({
       pid: process.pid,
-      nodePath: process.execPath,
+      bunPath: process.execPath,
       cliPath: '/tmp/clodex/cli.js',
       ready: true,
       proxyPort: 12345,

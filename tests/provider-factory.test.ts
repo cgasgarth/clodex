@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi } from 'bun:test';
 import {
   createLanguageModel,
   deepMergeProviderOptions,
@@ -293,6 +293,27 @@ describe('effortProviderOptions + deepMergeProviderOptions', () => {
     });
   });
 
+  // gpt-5.3-codex-spark 400s on `reasoning.summary`; the AI SDK adds
+  // summary: 'detailed' for any effort but 'none' unless it is pinned to null.
+  it.each(['low', 'medium', 'high', 'xhigh'])(
+    'suppresses the reasoning summary for codex-spark at %s effort',
+    (effort) => {
+      expect(effortProviderOptions('@ai-sdk/openai', effort, 'gpt-5.3-codex-spark'))
+        .toEqual({
+          openai: {
+            reasoningEffort: effort === 'xhigh' ? 'high' : effort,
+            reasoningSummary: null,
+          },
+        });
+    },
+  );
+
+  it('leaves the reasoning summary untouched for other Codex models', () => {
+    expect(effortProviderOptions('@ai-sdk/openai', 'high', 'gpt-5.1-codex-max')).toEqual({
+      openai: { reasoningEffort: 'high' },
+    });
+  });
+
   it('merges OpenAI thinking + effort without dropping store/include', () => {
     const merged = deepMergeProviderOptions(
       thinkingProviderOptions('@ai-sdk/openai'),
@@ -325,19 +346,15 @@ describe('effortProviderOptions + deepMergeProviderOptions', () => {
 
 describe('createLanguageModel', () => {
   it('passes the resolved native-compaction threshold into the OAuth transport', async () => {
-    vi.resetModules();
     const responsesFetch = vi.fn();
     const createResponsesWebSocketFetch = vi.fn(() => responsesFetch);
-    vi.doMock('../src/oauth/responses-websocket.js', async importOriginal => {
-      const actual = await importOriginal<typeof import('../src/oauth/responses-websocket.js')>();
-      return { ...actual, createResponsesWebSocketFetch };
-    });
     const responses = vi.fn((modelId: string) => ({ modelId, provider: 'openai-responses' }));
     const chat = vi.fn((modelId: string) => ({ modelId, provider: 'openai-chat' }));
     const createOpenAI = vi.fn(() => ({ responses, chat }));
-    vi.doMock('@ai-sdk/openai', () => ({ createOpenAI }));
-
-    const { createLanguageModel: create } = await import('../src/provider-factory.js');
+    const create = (spec: Parameters<typeof createLanguageModel>[0]) => createLanguageModel(spec, {
+      createOpenAI: createOpenAI as never,
+      createResponsesWebSocketFetch: createResponsesWebSocketFetch as never,
+    });
     await create({
       npm: '@ai-sdk/openai',
       modelId: 'gpt-5.6-sol',
@@ -375,29 +392,24 @@ describe('createLanguageModel', () => {
         checkpointStoreDir: undefined,
       }),
     );
-    vi.doUnmock('../src/oauth/responses-websocket.js');
-    vi.doUnmock('@ai-sdk/openai');
   });
 
   it('prefers the current OpenAI OAuth token account claim over stored metadata', async () => {
-    vi.resetModules();
     const responses = vi.fn((modelId: string) => ({ modelId, provider: 'openai-responses' }));
     const chat = vi.fn((modelId: string) => ({ modelId, provider: 'openai-chat' }));
     const createOpenAI = vi.fn(() => ({ responses, chat }));
-    vi.doMock('@ai-sdk/openai', () => ({ createOpenAI }));
 
     const header = Buffer.from('{}').toString('base64url');
     const payload = Buffer.from(JSON.stringify({ chatgpt_account_id: 'acct-123' })).toString('base64url');
     const accessToken = `${header}.${payload}.sig`;
 
-    const { createLanguageModel: create } = await import('../src/provider-factory.js');
-    await create({
+    await createLanguageModel({
       npm: '@ai-sdk/openai',
       modelId: 'gpt-5.5',
       apiKey: accessToken,
       authType: 'oauth',
       oauthAccountId: 'stored-acct-456',
-    });
+    }, { createOpenAI: createOpenAI as never });
 
     expect(createOpenAI).toHaveBeenCalledWith({
       apiKey: accessToken,
@@ -409,11 +421,9 @@ describe('createLanguageModel', () => {
       },
     });
     expect(responses).toHaveBeenCalledWith('gpt-5.5');
-    vi.doUnmock('@ai-sdk/openai');
   });
 
   it('falls back to the stored OpenAI account id when the current token has no account claim', async () => {
-    vi.resetModules();
     const responses = vi.fn((modelId: string) => ({
       modelId,
       provider: 'openai-responses',
@@ -423,16 +433,14 @@ describe('createLanguageModel', () => {
       provider: 'openai-chat',
     }));
     const createOpenAI = vi.fn(() => ({ responses, chat }));
-    vi.doMock('@ai-sdk/openai', () => ({ createOpenAI }));
 
-    const { createLanguageModel: create } = await import('../src/provider-factory.js');
-    await create({
+    await createLanguageModel({
       npm: '@ai-sdk/openai',
       modelId: 'gpt-5.5',
       apiKey: 'opaque-access-token',
       authType: 'oauth',
       oauthAccountId: 'stored-acct-456',
-    });
+    }, { createOpenAI: createOpenAI as never });
 
     expect(createOpenAI).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -441,17 +449,14 @@ describe('createLanguageModel', () => {
         }),
       }),
     );
-    vi.doUnmock('@ai-sdk/openai');
   });
 
   it('installs credential-header stripping for anonymous OpenAI providers', async () => {
     const responses = vi.fn((modelId: string) => ({ modelId, provider: 'openai-responses' }));
     const chat = vi.fn((modelId: string) => ({ modelId, provider: 'openai-chat' }));
     const createOpenAI = vi.fn(() => ({ responses, chat }));
-    vi.doMock('@ai-sdk/openai', () => ({ createOpenAI }));
 
-    const { createLanguageModel: create } = await import('../src/provider-factory.js');
-    await create({
+    await createLanguageModel({
       npm: '@ai-sdk/openai',
       modelId: 'anonymous-model',
       apiKey: '',
@@ -460,7 +465,7 @@ describe('createLanguageModel', () => {
         Authorization: 'Bearer configured-value',
         'X-Plan': 'free',
       },
-    });
+    }, { createOpenAI: createOpenAI as never });
 
     expect(createOpenAI).toHaveBeenCalledWith({
       apiKey: '',
@@ -476,86 +481,74 @@ describe('createLanguageModel', () => {
       headers: Record<string, string>;
     };
     await expectCredentialHeadersStripped(options.fetch, options.headers);
-    vi.doUnmock('@ai-sdk/openai');
   });
 
   it('forwards configured headers for authenticated OpenAI providers', async () => {
     const responses = vi.fn((modelId: string) => ({ modelId, provider: 'openai-responses' }));
     const chat = vi.fn((modelId: string) => ({ modelId, provider: 'openai-chat' }));
     const createOpenAI = vi.fn(() => ({ responses, chat }));
-    vi.doMock('@ai-sdk/openai', () => ({ createOpenAI }));
 
-    const { createLanguageModel: create } = await import('../src/provider-factory.js');
-    await create({
+    await createLanguageModel({
       npm: '@ai-sdk/openai',
       modelId: 'authenticated-model',
       apiKey: 'provider-key',
       authType: 'api',
       headers: { 'X-Plan': 'paid' },
-    });
+    }, { createOpenAI: createOpenAI as never });
 
     expect(createOpenAI).toHaveBeenCalledWith({
       apiKey: 'provider-key',
       headers: { 'X-Plan': 'paid' },
     });
     expect(responses).toHaveBeenCalledWith('authenticated-model');
-    vi.doUnmock('@ai-sdk/openai');
   });
 
   it('ignores discovery baseURL for @ai-sdk/anthropic (SDK default includes /v1)', async () => {
     const anthropicFactory = vi.fn((modelId: string) => ({ modelId, provider: 'anthropic' }));
     const createAnthropic = vi.fn(() => anthropicFactory);
-    vi.doMock('@ai-sdk/anthropic', () => ({ createAnthropic }));
 
-    const { createLanguageModel: create } = await import('../src/provider-factory.js');
-    await create({
+    await createLanguageModel({
       npm: '@ai-sdk/anthropic',
       modelId: 'claude-sonnet-4-6',
       apiKey: 'test-key',
       baseURL: 'https://api.anthropic.com',
-    });
+    }, { createAnthropic: createAnthropic as never });
 
     expect(createAnthropic).toHaveBeenCalledWith({ apiKey: 'test-key' });
     expect(createAnthropic).not.toHaveBeenCalledWith(
       expect.objectContaining({ baseURL: 'https://api.anthropic.com' }),
     );
-    vi.doUnmock('@ai-sdk/anthropic');
   });
 
   it('normalizes custom anthropic baseURL to include /v1', async () => {
     const anthropicFactory = vi.fn((modelId: string) => ({ modelId }));
     const createAnthropic = vi.fn(() => anthropicFactory);
-    vi.doMock('@ai-sdk/anthropic', () => ({ createAnthropic }));
 
-    const { createLanguageModel: create } = await import('../src/provider-factory.js');
-    await create({
+    await createLanguageModel({
       npm: '@ai-sdk/anthropic',
       modelId: 'claude-sonnet-4-6',
       apiKey: 'test-key',
       baseURL: 'https://proxy.example.com',
-    });
+    }, { createAnthropic: createAnthropic as never });
 
     expect(createAnthropic).toHaveBeenCalledWith({
       apiKey: 'test-key',
       baseURL: 'https://proxy.example.com/v1',
     });
-    vi.doUnmock('@ai-sdk/anthropic');
   });
 
   it('routes Claude Code Anthropic OAuth through Bearer auth with compatibility headers', async () => {
     const anthropicFactory = vi.fn((modelId: string) => ({ modelId, provider: 'anthropic-oauth' }));
     const createAnthropic = vi.fn(() => anthropicFactory);
-    vi.doMock('@ai-sdk/anthropic', () => ({ createAnthropic }));
 
-    const { createLanguageModel: create } = await import('../src/provider-factory.js');
-    await create({
+    await createLanguageModel({
       npm: '@ai-sdk/anthropic',
       modelId: 'claude-sonnet-4-6',
       apiKey: 'oauth-token',
       authType: 'oauth',
       providerId: 'claude-code',
       oauthAccountId: '11111111-1111-4111-8111-111111111111',
-    });
+    }, { createAnthropic: createAnthropic as never });
 
     expect(createAnthropic).toHaveBeenCalledWith({
       authToken: 'oauth-token',
@@ -569,23 +562,20 @@ describe('createLanguageModel', () => {
       expect.objectContaining({ apiKey: 'oauth-token' }),
     );
     expect(anthropicFactory).toHaveBeenCalledWith('claude-sonnet-4-6');
-    vi.doUnmock('@ai-sdk/anthropic');
   });
 
   it('forwards custom headers for openai-compatible custom endpoints', async () => {
     const factory = vi.fn((modelId: string) => ({ modelId }));
     const createOpenAICompatible = vi.fn(() => factory);
-    vi.doMock('@ai-sdk/openai-compatible', () => ({ createOpenAICompatible }));
 
-    const { createLanguageModel: create } = await import('../src/provider-factory.js');
-    await create({
+    await createLanguageModel({
       npm: '@ai-sdk/openai-compatible',
       modelId: 'glm-5.2',
       apiKey: 'sk-test',
       baseURL: 'https://api.z.ai/api/coding/paas/v4',
       providerId: 'custom-zai',
       headers: { 'X-Plan': 'coding' },
-    });
+    }, { createOpenAICompatible: createOpenAICompatible as never });
 
     expect(createOpenAICompatible).toHaveBeenCalledWith({
       name: 'custom-zai',
@@ -593,23 +583,20 @@ describe('createLanguageModel', () => {
       baseURL: 'https://api.z.ai/api/coding/paas/v4',
       headers: { 'X-Plan': 'coding' },
     });
-    vi.doUnmock('@ai-sdk/openai-compatible');
   });
 
   it('omits apiKey for anonymous openai-compatible providers', async () => {
     const factory = vi.fn((modelId: string) => ({ modelId }));
     const createOpenAICompatible = vi.fn(() => factory);
-    vi.doMock('@ai-sdk/openai-compatible', () => ({ createOpenAICompatible }));
 
-    const { createLanguageModel: create } = await import('../src/provider-factory.js');
-    await create({
+    await createLanguageModel({
       npm: '@ai-sdk/openai-compatible',
       modelId: 'tencent/hy3:free',
       apiKey: '',
       authType: 'none',
       baseURL: 'https://api.kilo.ai/api/gateway',
       providerId: 'kilo',
-    });
+    }, { createOpenAICompatible: createOpenAICompatible as never });
 
     expect(createOpenAICompatible).toHaveBeenCalledWith({
       name: 'kilo',
@@ -618,22 +605,19 @@ describe('createLanguageModel', () => {
     });
     const options = createOpenAICompatible.mock.calls[0]?.[0] as { fetch: typeof fetch };
     await expectCredentialHeadersStripped(options.fetch);
-    vi.doUnmock('@ai-sdk/openai-compatible');
   });
 
   it('strips generated credential headers for anonymous Anthropic providers', async () => {
     const anthropicFactory = vi.fn((modelId: string) => ({ modelId }));
     const createAnthropic = vi.fn(() => anthropicFactory);
-    vi.doMock('@ai-sdk/anthropic', () => ({ createAnthropic }));
 
-    const { createLanguageModel: create } = await import('../src/provider-factory.js');
-    await create({
+    await createLanguageModel({
       npm: '@ai-sdk/anthropic',
       modelId: 'anonymous-model',
       apiKey: '',
       authType: 'none',
       baseURL: 'https://anonymous.example',
-    });
+    }, { createAnthropic: createAnthropic as never });
 
     expect(createAnthropic).toHaveBeenCalledWith({
       apiKey: '',
@@ -644,28 +628,24 @@ describe('createLanguageModel', () => {
 
     const options = createAnthropic.mock.calls[0]?.[0] as { fetch: typeof fetch };
     await expectCredentialHeadersStripped(options.fetch);
-    vi.doUnmock('@ai-sdk/anthropic');
   });
 
   it('merges custom headers into a non-OAuth custom anthropic endpoint', async () => {
     const anthropicFactory = vi.fn((modelId: string) => ({ modelId }));
     const createAnthropic = vi.fn(() => anthropicFactory);
-    vi.doMock('@ai-sdk/anthropic', () => ({ createAnthropic }));
 
-    const { createLanguageModel: create } = await import('../src/provider-factory.js');
-    await create({
+    await createLanguageModel({
       npm: '@ai-sdk/anthropic',
       modelId: 'glm-5.2',
       apiKey: 'sk-test',
       baseURL: 'https://api.z.ai/api/anthropic',
       headers: { 'X-Plan': 'coding' },
-    });
+    }, { createAnthropic: createAnthropic as never });
 
     expect(createAnthropic).toHaveBeenCalledWith({
       apiKey: 'sk-test',
       baseURL: 'https://api.z.ai/api/anthropic/v1',
       headers: { 'X-Plan': 'coding' },
     });
-    vi.doUnmock('@ai-sdk/anthropic');
   });
 });

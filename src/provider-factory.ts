@@ -39,15 +39,18 @@ type SdkProviderFactory = (options: {
 
 const factoryCache = new Map<string, Promise<SdkProviderFactory>>();
 
-const fetchWithoutCredentialHeaders: typeof fetch = (input, init) => {
-  const headers = new Headers(
-    init?.headers ?? (input instanceof Request ? input.headers : undefined),
-  );
-  for (const name of [...headers.keys()]) {
-    if (isCredentialBearingHeader(name)) headers.delete(name);
-  }
-  return fetch(input, { ...init, headers });
-};
+const fetchWithoutCredentialHeaders: typeof fetch = Object.assign(
+  (input: URL | RequestInfo, init?: RequestInit): Promise<Response> => {
+    const headers = new Headers(
+      init?.headers ?? (input instanceof Request ? input.headers : undefined),
+    );
+    for (const name of [...headers.keys()]) {
+      if (isCredentialBearingHeader(name)) headers.delete(name);
+    }
+    return fetch(input, { ...init, headers });
+  },
+  { preconnect: fetch.preconnect },
+);
 
 /**
  * True when a model id must use the OpenAI/xAI Responses API instead of
@@ -119,6 +122,14 @@ export interface ProviderModelSpec {
   onWebSocketDiagnostic?: (event: ResponsesWebSocketDiagnosticEvent) => void;
 }
 
+export interface ProviderFactoryDependencies {
+  createOpenAI?: typeof import('@ai-sdk/openai')['createOpenAI'];
+  createAnthropic?: typeof import('@ai-sdk/anthropic')['createAnthropic'];
+  createOpenAICompatible?: typeof import('@ai-sdk/openai-compatible')['createOpenAICompatible'];
+  createResponsesWebSocketFetch?: typeof createResponsesWebSocketFetch;
+  loadSdkProviderFactory?: typeof loadSdkProviderFactory;
+}
+
 /** True when this provider routes through the SDK adapter (local providers + Zen/Go openai-format). */
 export function isSdkMigratedNpm(npm: string | undefined): boolean {
   return !!npm && npm !== '@ai-sdk/anthropic';
@@ -147,7 +158,7 @@ async function loadSdkProviderFactory(npm: string): Promise<SdkProviderFactory> 
       } catch (err) {
         const code = err && typeof err === 'object' && 'code' in err ? err.code : undefined;
         if (code === 'ERR_MODULE_NOT_FOUND') {
-          throw new Error(`SDK provider package not installed: ${npm}. Run: npm install ${npm}`);
+          throw new Error(`SDK provider package not installed: ${npm}. Run: bun add ${npm}`);
         }
         throw err;
       }
@@ -158,11 +169,15 @@ async function loadSdkProviderFactory(npm: string): Promise<SdkProviderFactory> 
   return cached;
 }
 
-export async function createLanguageModel(spec: ProviderModelSpec): Promise<LanguageModel> {
+export async function createLanguageModel(
+  spec: ProviderModelSpec,
+  dependencies: ProviderFactoryDependencies = {},
+): Promise<LanguageModel> {
   const { npm, modelId, apiKey, baseURL } = spec;
 
   if (npm === '@ai-sdk/openai') {
-    const { createOpenAI } = await import('@ai-sdk/openai');
+    const createOpenAI = dependencies.createOpenAI
+      ?? (await import('@ai-sdk/openai')).createOpenAI;
     const useResponsesEndpoint = shouldUseOpenAiResponsesEndpoint(modelId);
     const tokenAccountId = spec.authType === 'oauth'
       ? extractOpenAiAccountId({ access_token: apiKey })?.trim()
@@ -190,7 +205,10 @@ export async function createLanguageModel(spec: ProviderModelSpec): Promise<Lang
           // same connection-local previous_response_id continuation cache.
           ...(useResponsesEndpoint
             ? {
-                fetch: createResponsesWebSocketFetch(CODEX_RESPONSES_LITE_WS_URL, spec.onDebug, {
+                fetch: (dependencies.createResponsesWebSocketFetch ?? createResponsesWebSocketFetch)(
+                  CODEX_RESPONSES_LITE_WS_URL,
+                  spec.onDebug,
+                  {
                   providerId: spec.providerId ?? 'openai',
                   accountId,
                   compactThreshold: spec.openAiCompactThreshold,
@@ -198,7 +216,8 @@ export async function createLanguageModel(spec: ProviderModelSpec): Promise<Lang
                     ? getResponsesCheckpointsPath()
                     : undefined,
                   onDiagnostic: spec.onWebSocketDiagnostic,
-                }),
+                  },
+                ),
               }
             : {}),
         }
@@ -215,7 +234,8 @@ export async function createLanguageModel(spec: ProviderModelSpec): Promise<Lang
   // Registry stores root URL (no /v1) for GET /v1/models discovery — passing it here
   // makes the SDK call https://api.anthropic.com/messages → 404.
   if (npm === '@ai-sdk/anthropic') {
-    const { createAnthropic } = await import('@ai-sdk/anthropic');
+    const createAnthropic = dependencies.createAnthropic
+      ?? (await import('@ai-sdk/anthropic')).createAnthropic;
     const root = baseURL?.replace(/\/v1\/?$/, '').replace(/\/$/, '');
     const anthropicOptions: Parameters<typeof createAnthropic>[0] = spec.authType === 'oauth'
       ? {
@@ -249,7 +269,8 @@ export async function createLanguageModel(spec: ProviderModelSpec): Promise<Lang
   let model: LanguageModel;
 
   if (npm === '@ai-sdk/openai-compatible') {
-    const { createOpenAICompatible } = await import('@ai-sdk/openai-compatible');
+    const createOpenAICompatible = dependencies.createOpenAICompatible
+      ?? (await import('@ai-sdk/openai-compatible')).createOpenAICompatible;
     const options = {
       name: spec.providerId ?? 'openai-compatible',
       baseURL: baseURL ?? '',
@@ -261,7 +282,7 @@ export async function createLanguageModel(spec: ProviderModelSpec): Promise<Lang
       ...options,
     })(modelId);
   } else {
-    const create = await loadSdkProviderFactory(npm);
+    const create = await (dependencies.loadSdkProviderFactory ?? loadSdkProviderFactory)(npm);
     const provider = create({
       apiKey: spec.authType === 'none' ? '' : apiKey,
       ...(spec.authType === 'none' ? { fetch: fetchWithoutCredentialHeaders } : {}),
@@ -551,6 +572,17 @@ function mapCodexEffortToAnthropic(effort: string): string | undefined {
 
 function isGpt56Model(modelId: string): boolean {
   return /^gpt-5\.6(?:-|$)/i.test(modelId);
+}
+
+// gpt-5.3-codex-spark rejects `reasoning.summary` outright:
+//   400 unsupported_parameter — "Unsupported parameter: 'reasoning.summary' is
+//   not supported with the 'gpt-5.3-codex-spark' model." (param: reasoning.summary)
+// The AI SDK derives `summary: 'detailed'` from any effort other than 'none'
+// unless reasoningSummary is set explicitly, so every effort level that maps to
+// a value would otherwise fail. Passing null suppresses the field while leaving
+// effort control intact.
+function isReasoningSummaryUnsupportedModel(modelId: string): boolean {
+  return /codex-spark(?:-|$)/i.test(modelId);
 }
 
 function mapCodexEffortToOpenAI(effort: string, modelId?: string): string | undefined {
@@ -861,7 +893,10 @@ export function effortProviderOptions(
   if (npm === '@ai-sdk/openai' || npm === '@ai-sdk/azure') {
     if (!modelId || !modelPrefersResponsesApi(modelId)) return undefined;
     const reasoningEffort = mapCodexEffortToOpenAI(effort, modelId);
-    return reasoningEffort ? { openai: { reasoningEffort } } : undefined;
+    if (!reasoningEffort) return undefined;
+    return isReasoningSummaryUnsupportedModel(modelId)
+      ? { openai: { reasoningEffort, reasoningSummary: null } }
+      : { openai: { reasoningEffort } };
   }
 
   if (npm === '@ai-sdk/xai') {

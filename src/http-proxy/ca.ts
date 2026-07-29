@@ -125,7 +125,7 @@ export function ensureHttpProxyCertificates(): HttpProxyCertificates {
   };
 }
 
-/** Preserve an existing corporate/custom Node CA bundle alongside Relay's CA. */
+/** Preserve an existing corporate/custom CA bundle alongside Clodex's CA. */
 export function ensureHttpProxyCaBundle(
   relayCaCertPath: string,
   additionalCaCertPath: string | undefined,

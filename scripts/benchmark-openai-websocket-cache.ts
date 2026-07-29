@@ -1,4 +1,4 @@
-import WebSocket from 'ws';
+import { BunNativeWebSocket } from '../src/bun-websocket.js';
 import {
   CODEX_RESPONSES_LITE_VERSION,
   CODEX_RESPONSES_LITE_WS_URL,
@@ -32,8 +32,8 @@ const headers = {
   'OpenAI-Beta': CODEX_RESPONSES_WEBSOCKETS_BETA,
 };
 
-async function openSocket(): Promise<WebSocket> {
-  const socket = new WebSocket(CODEX_RESPONSES_LITE_WS_URL, { headers });
+async function openSocket(): Promise<BunNativeWebSocket> {
+  const socket = new BunNativeWebSocket(CODEX_RESPONSES_LITE_WS_URL, { headers });
   await new Promise<void>((resolve, reject) => {
     socket.once('open', resolve);
     socket.once('error', reject);
@@ -41,7 +41,7 @@ async function openSocket(): Promise<WebSocket> {
   return socket;
 }
 
-async function create(socket: WebSocket, payload: Record<string, unknown>): Promise<Usage> {
+async function create(socket: BunNativeWebSocket, payload: Record<string, unknown>): Promise<Usage> {
   return await new Promise<Usage>((resolve, reject) => {
     const cleanup = () => {
       socket.off('error', onError);
@@ -51,7 +51,7 @@ async function create(socket: WebSocket, payload: Record<string, unknown>): Prom
       cleanup();
       reject(error);
     };
-    const onMessage = (data: WebSocket.RawData) => {
+    const onMessage = (data: Buffer) => {
       const event = JSON.parse(data.toString()) as Record<string, unknown>;
       const type = typeof event.type === 'string' ? event.type : '';
       if (!['response.completed', 'response.failed', 'error'].includes(type)) return;

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'bun:test';
 import { createGatewayModelCatalog, formatGatewayAnthropicModels } from '../src/server/models.js';
 import type { ServerModelInfo } from '../src/server/models.js';
 import { maskGatewayModelId, unmaskGatewayModelId } from '../src/server/vendor-mask.js';

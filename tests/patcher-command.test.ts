@@ -6,7 +6,7 @@
 // That is enough to exercise the whole command — version resolution, pristine
 // backup selection, restore, and the manifest — without touching a real install.
 
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'bun:test';
 import * as p from '@clack/prompts';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -24,7 +24,6 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
-import { runLaunchPatchCheck, runPatchCommand, readPatchManifest } from '../src/patcher.js';
 
 const hoisted = vi.hoisted(() => ({
   sentinel: '\n#__CLAUDE_BUNDLE__\n',
@@ -32,7 +31,7 @@ const hoisted = vi.hoisted(() => ({
   readContentCalls: [] as string[],
 }));
 
-vi.mock('tweakcc', () => ({
+const tweakcc = {
   tryDetectInstallation: async ({ path }: { path?: string }) => {
     if (!path || !existsSync(path)) throw new Error(`no installation at ${path}`);
     return { path, version: 'fake', kind: 'native' as const };
@@ -49,7 +48,16 @@ vi.mock('tweakcc', () => ({
     const head = raw.slice(0, raw.indexOf(hoisted.sentinel));
     writeFileSync(installation.path, head + hoisted.sentinel + content, { mode: 0o755 });
   },
-}));
+};
+
+const {
+  runLaunchPatchCheck,
+  runPatchCommand: runPatchCommandWithDependencies,
+  readPatchManifest,
+} = await import('../src/patcher.js');
+const runPatchCommand = (
+  options: Parameters<typeof runPatchCommandWithDependencies>[0] = {},
+) => runPatchCommandWithDependencies({ ...options, tweakcc: tweakcc as never });
 
 /** A minified stand-in for the Claude Code bundle carrying every patch anchor. */
 const PRISTINE_BUNDLE = [

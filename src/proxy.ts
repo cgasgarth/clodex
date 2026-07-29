@@ -1,10 +1,8 @@
 // src/proxy.ts — Local Anthropic-to-OpenAI translation proxy
 // Adapted from cucoleadan/opencode-cowork-proxy (MIT)
-import { createServer } from 'node:http';
 import type { ServerResponse } from 'node:http';
-import type { AddressInfo } from 'node:net';
 import { appendFileSync, openSync, writeSync, closeSync } from 'node:fs';
-import { readBody, extractApiKey, sendJson } from './http-utils.js';
+import { decodeRequestBody, sendJson } from './http-utils.js';
 import { formatAnthropicModelEntry, formatAnthropicModelList } from './server/models.js';
 import {
   claudeCodeClientModelId,
@@ -60,8 +58,8 @@ import {
 import { withResponsesWebSocketDiagnosticContext } from './oauth/responses-websocket.js';
 import { resolveOpenAiCompactionThreshold } from './oauth/responses-compaction.js';
 import { resolveContextWindow } from './context-window.js';
-import { listenTcpServer } from './listener-ready.js';
 import { getOrCreateProxyToken } from './proxy-token.js';
+import { BunHttpResponse } from './bun-http-response.js';
 
 type ProxyLog = (message: string | (() => string)) => void;
 
@@ -389,8 +387,19 @@ export async function startProxyCatalog(
     ),
   );
 
-  const server = createServer(async (req, res) => {
-    plog(() => `${req.method} ${req.url}`);
+  let server: Bun.Server<undefined>;
+  try {
+    server = Bun.serve({
+      hostname: '127.0.0.1',
+      port,
+      idleTimeout: INTERNAL_ADAPTER_KEEPALIVE_TIMEOUT_MS / 1_000,
+      async fetch(req, bunServer) {
+        const requestUrl = new URL(req.url);
+        const requestPath = `${requestUrl.pathname}${requestUrl.search}`;
+        const response = new BunHttpResponse();
+        const res = response as unknown as ServerResponse;
+        const run = async () => {
+          plog(() => `${req.method} ${requestPath}`);
 
     // HEAD / — health check ping from Claude Code
     if (req.method === 'HEAD') {
@@ -400,8 +409,8 @@ export async function startProxyCatalog(
     }
 
     // GET /v1/models — Claude Code validates the model on startup and populates /model picker
-    if (req.method === 'GET' && req.url?.startsWith('/v1/models')) {
-      const modelPathMatch = req.url.match(/^\/v1\/models\/([^?]+)/);
+    if (req.method === 'GET' && requestPath.startsWith('/v1/models')) {
+      const modelPathMatch = requestPath.match(/^\/v1\/models\/([^?]+)/);
       if (modelPathMatch) {
         const id = decodeURIComponent(modelPathMatch[1]);
         const route = lookupRoute(byAlias, id);
@@ -419,11 +428,14 @@ export async function startProxyCatalog(
       return;
     }
 
-    const messagesEndpoint = anthropicMessagesEndpoint(req.url);
+    const messagesEndpoint = anthropicMessagesEndpoint(requestPath);
 
     // Anthropic message creation and token counting are distinct endpoints.
     if (req.method === 'POST' && messagesEndpoint) {
-      const inboundKey = extractApiKey(req);
+      bunServer.timeout(req, 0);
+      const inboundKey = req.headers.get('x-api-key')
+        ?? req.headers.get('authorization')?.replace(/^Bearer\s+/i, '').trim()
+        ?? null;
       const ticketPrefix = `${proxyToken}.`;
       const launchTicketFromKey = inboundKey?.startsWith(ticketPrefix)
         ? inboundKey.slice(ticketPrefix.length)
@@ -437,14 +449,14 @@ export async function startProxyCatalog(
       const abortForClientDisconnect = () => {
         if (!clientAbort.signal.aborted) clientAbort.abort(new Error('Client disconnected'));
       };
-      req.once('aborted', abortForClientDisconnect);
-      res.once('close', () => {
-        if (!res.writableFinished) abortForClientDisconnect();
-      });
+      req.signal.addEventListener('abort', abortForClientDisconnect, { once: true });
+      response.setClientCancelHandler(abortForClientDisconnect);
 
       let anthropicBody: any;
       try {
-        const raw = await readBody(req);
+        const rawBytes = Buffer.from(await req.arrayBuffer());
+        if (rawBytes.length > 50 * 1024 * 1024) throw new Error('Request body too large');
+        const raw = decodeRequestBody(rawBytes, req.headers.get('content-encoding') ?? undefined);
         anthropicBody = JSON.parse(raw);
       } catch {
         anthropicError(res, 400, 'Invalid JSON body');
@@ -453,10 +465,7 @@ export async function startProxyCatalog(
 
       const originalModel = anthropicBody.model;
       const clientWantsStream = Boolean(anthropicBody.stream);
-      const relayRequestIdRaw = req.headers['x-relay-request-id'];
-      const forwardedRequestId = Array.isArray(relayRequestIdRaw)
-        ? relayRequestIdRaw[0]
-        : relayRequestIdRaw;
+      const forwardedRequestId = req.headers.get('x-relay-request-id') ?? undefined;
       const relayRequestId = forwardedRequestId ?? randomUUID();
 
       // Per-request route resolution: look up the alias, fall back to default
@@ -481,10 +490,7 @@ export async function startProxyCatalog(
       }
       let route = resolvedRoute ?? defaultRoute;
       if (resolveRouteForRequest) {
-        const launchTicketHeader = req.headers['x-clodex-launch-ticket'];
-        const launchTicketFromHeader = Array.isArray(launchTicketHeader)
-          ? launchTicketHeader[0]
-          : launchTicketHeader;
+        const launchTicketFromHeader = req.headers.get('x-clodex-launch-ticket') ?? undefined;
         try {
           route = await resolveRouteForRequest(route, {
             launchTicket: launchTicketFromHeader ?? launchTicketFromKey,
@@ -536,8 +542,7 @@ export async function startProxyCatalog(
           return;
         }
 
-        const betaHeaderRaw = req.headers['anthropic-beta'];
-        const inboundBeta = Array.isArray(betaHeaderRaw) ? betaHeaderRaw.join(',') : betaHeaderRaw;
+        const inboundBeta = req.headers.get('anthropic-beta') ?? undefined;
         const forwardBody = { ...anthropicBody, model: route.realModelId };
         const targetUrl = `${upstreamUrl}/v1/messages/count_tokens`;
         const isOAuth = routeAuthType === 'oauth';
@@ -569,8 +574,7 @@ export async function startProxyCatalog(
       // Forward raw Anthropic body (with real model id) directly to the upstream.
       // No translation needed — the upstream speaks Anthropic natively.
       if (route.modelFormat === 'anthropic') {
-        const betaHeaderRaw = req.headers['anthropic-beta'];
-        const inboundBeta = Array.isArray(betaHeaderRaw) ? betaHeaderRaw.join(',') : betaHeaderRaw;
+        const inboundBeta = req.headers.get('anthropic-beta') ?? undefined;
         const forwardBody = { ...anthropicBody, model: route.realModelId };
         const targetUrl = `${upstreamUrl}/v1/messages`;
         const isOAuth = routeAuthType === 'oauth';
@@ -624,12 +628,8 @@ export async function startProxyCatalog(
       // format, endpoint selection, and provider quirks.
       if (usesSdkAdapter) {
         const openAiOAuth = route.npm === '@ai-sdk/openai' && route.authType === 'oauth';
-        const claudeSessionIdHeader = Array.isArray(req.headers['x-claude-code-session-id'])
-          ? req.headers['x-claude-code-session-id'][0]
-          : req.headers['x-claude-code-session-id'];
-        const claudeAgentIdHeader = Array.isArray(req.headers['x-claude-code-agent-id'])
-          ? req.headers['x-claude-code-agent-id'][0]
-          : req.headers['x-claude-code-agent-id'];
+        const claudeSessionIdHeader = req.headers.get('x-claude-code-session-id') ?? undefined;
+        const claudeAgentIdHeader = req.headers.get('x-claude-code-agent-id') ?? undefined;
         const claudeSessionId = extractClaudeSessionId(anthropicBody, claudeSessionIdHeader);
         if (inferenceLogPath && !forwardedRequestId) {
           writeInferenceRequestLog(inferenceLogPath, {
@@ -896,28 +896,41 @@ export async function startProxyCatalog(
     }
 
     // Everything else → 404
-    anthropicError(res, 404, `Unknown endpoint: ${req.method} ${req.url}`);
-  });
-  server.keepAliveTimeout = INTERNAL_ADAPTER_KEEPALIVE_TIMEOUT_MS;
-
-  let address: AddressInfo;
-  try {
-    address = await listenTcpServer(server, port, '127.0.0.1');
+    anthropicError(res, 404, `Unknown endpoint: ${req.method} ${requestPath}`);
+        };
+        void run().catch(error => {
+          plog(() => `request handler failed: ${error instanceof Error ? error.stack ?? error.message : String(error)}`);
+          if (!response.headersSent) {
+            anthropicError(res, 500, 'Internal proxy error');
+          } else {
+            response.destroy(error instanceof Error ? error : new Error(String(error)));
+          }
+        });
+        return response.response;
+      },
+    });
   } catch (error) {
     process.off('unhandledRejection', onRejection);
     process.off('uncaughtException', onException);
     throw error;
   }
+  const boundPort = server.port;
+  if (boundPort === undefined) {
+    await server.stop(true);
+    process.off('unhandledRejection', onRejection);
+    process.off('uncaughtException', onException);
+    throw new Error('Proxy did not bind to a TCP port');
+  }
   plog(() =>
-    `started on port ${address.port}, catalog=${routes.length} model(s), default=${defaultRoute.aliasId}`,
+    `started on port ${boundPort}, catalog=${routes.length} model(s), default=${defaultRoute.aliasId}`,
   );
   return {
-    port: address.port,
+    port: boundPort,
     token: proxyToken,
     close: () => {
       process.off('unhandledRejection', onRejection);
       process.off('uncaughtException', onException);
-      server.close();
+      void server.stop(true);
     },
   };
 }

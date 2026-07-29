@@ -1,4 +1,5 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { importActual } from './bun-import-actual.js';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'bun:test';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -37,8 +38,9 @@ const warnMock = vi.hoisted(() => vi.fn());
 const TEST_HELPER_ID = 'a'.repeat(64);
 const helperRef = (account: string): string => `helper:v1:${TEST_HELPER_ID}:${account}`;
 
-vi.mock('@clack/prompts', async importOriginal => {
-  const actual = await importOriginal<typeof import('@clack/prompts')>();
+vi.mock('@clack/prompts', () => {
+  const importOriginal = <T>() => importActual<T>('@clack/prompts', import.meta.url);
+  const actual = importOriginal<typeof import('@clack/prompts')>();
   return {
     ...actual,
     select: selectMock,
@@ -56,24 +58,27 @@ vi.mock('@clack/prompts', async importOriginal => {
   };
 });
 
-vi.mock('../src/registry/provider-auth.js', async importOriginal => {
-  const actual = await importOriginal<typeof import('../src/registry/provider-auth.js')>();
+vi.mock('../src/registry/provider-auth.js', () => {
+  const importOriginal = <T>() => importActual<T>('../src/registry/provider-auth.js', import.meta.url);
+  const actual = importOriginal<typeof import('../src/registry/provider-auth.js')>();
   return {
     ...actual,
     authenticateProvider: authenticateProviderMock,
   };
 });
 
-vi.mock('../src/registry/add-template.js', async importOriginal => {
-  const actual = await importOriginal<typeof import('../src/registry/add-template.js')>();
+vi.mock('../src/registry/add-template.js', () => {
+  const importOriginal = <T>() => importActual<T>('../src/registry/add-template.js', import.meta.url);
+  const actual = importOriginal<typeof import('../src/registry/add-template.js')>();
   return {
     ...actual,
     addProviderFromTemplate: addTemplateMock,
   };
 });
 
-vi.mock('../src/registry/provider-auth.js', async importOriginal => {
-  const actual = await importOriginal<typeof import('../src/registry/provider-auth.js')>();
+vi.mock('../src/registry/provider-auth.js', () => {
+  const importOriginal = <T>() => importActual<T>('../src/registry/provider-auth.js', import.meta.url);
+  const actual = importOriginal<typeof import('../src/registry/provider-auth.js')>();
   return {
     ...actual,
     authenticateProvider: authenticateProviderMock,
@@ -275,6 +280,21 @@ describe('providers auth command', () => {
 });
 
 describe('provider removal cleanup', () => {
+  let home: string;
+  const prevHome = process.env.CLODEX_HOME;
+
+  beforeEach(() => {
+    home = mkdtempSync(join(tmpdir(), 'clodex-provider-removal-'));
+    process.env.CLODEX_HOME = home;
+  });
+
+  afterEach(() => {
+    if (prevHome === undefined) delete process.env.CLODEX_HOME;
+    else process.env.CLODEX_HOME = prevHome;
+    rmSync(home, { recursive: true, force: true });
+    vi.restoreAllMocks();
+  });
+
   it('removes the provider and queues cleanup when deletion has an unknown outcome', async () => {
     const registry = emptyRegistry();
     registry.providers.push(openaiEntry({ authRef: helperRef('provider:openai') }));

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'bun:test';
 import { extractBearerToken, isAuthorized, sanitizeCredential } from '../src/server/auth.js';
 
 function request(headers: Record<string, string> = {}): Request {

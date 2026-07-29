@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'bun:test';
 import { DaemonInferenceCollector } from '../src/daemon/collector.js';
 import { DaemonMetricsStore } from '../src/daemon/metrics.js';
 import type { InferenceTraceEvent } from '../src/trace-log.js';

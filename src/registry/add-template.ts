@@ -47,7 +47,7 @@ async function probeTemplatePackage(template: ProviderTemplate): Promise<string 
     await import(template.npm);
     return null;
   } catch {
-    return `Could not load ${template.npm}. Run npm install in your clodex checkout.`;
+    return `Could not load ${template.npm}. Run bun install in your clodex checkout.`;
   }
 }
 

@@ -39,6 +39,7 @@ interface RegistryLockOptions {
   retryMs?: number;
   now?: () => number;
   isAlive?: (pid: number) => boolean;
+  onLockTempCreated?: (path: string) => void;
 }
 
 interface RegistryLockContext {
@@ -97,12 +98,14 @@ function parseLockOwner(raw: string): RegistryLockOwner | null {
 function createLockRecord(
   lockPath: string,
   owner: RegistryLockOwner,
+  onTempCreated?: (path: string) => void,
 ): RegistryLockSnapshot | null {
   const raw = JSON.stringify(owner);
   const tempPath = `${lockPath}.${process.pid}.${owner.token}.tmp`;
   let fd: number | undefined;
   try {
     fd = openSync(tempPath, 'wx', 0o600);
+    onTempCreated?.(tempPath);
     writeFileSync(fd, raw);
     fsyncSync(fd);
     const stats = fstatSync(fd);
@@ -261,7 +264,7 @@ function tryAcquireReaperGuard(
 
 export function tryAcquireRegistryLock(
   lockPath = getRegistryLockPath(),
-  options: Pick<RegistryLockOptions, 'now' | 'isAlive'> = {},
+  options: Pick<RegistryLockOptions, 'now' | 'isAlive' | 'onLockTempCreated'> = {},
 ): RegistryLockLease | null {
   const now = options.now?.() ?? Date.now();
   const alive = options.isAlive ?? isPidAlive;
@@ -274,7 +277,7 @@ export function tryAcquireRegistryLock(
       token: randomUUID(),
     };
     try {
-      const snapshot = createLockRecord(lockPath, owner);
+      const snapshot = createLockRecord(lockPath, owner, options.onLockTempCreated);
       if (snapshot) return createLease(lockPath, owner, snapshot);
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') continue;
@@ -421,7 +424,8 @@ export function getCredentialMutationLockPath(authRef: string): string {
 }
 
 function getNativeCredentialRoot(): string {
-  const nativeHome = userInfo().homedir;
+  const nativeHome = process.env['CLODEX_CREDENTIAL_HOME']?.trim()
+    || userInfo().homedir;
   if (!nativeHome || !isAbsolute(nativeHome)) {
     throw new Error('Could not determine the native user home for credential coordination');
   }

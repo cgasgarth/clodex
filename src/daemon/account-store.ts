@@ -30,6 +30,7 @@ export interface DaemonAccountState {
 }
 
 interface HomeEnv {
+  [name: string]: string | undefined;
   HOME?: string;
   CLODEX_HOME?: string;
   USERPROFILE?: string;

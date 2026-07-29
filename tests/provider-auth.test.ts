@@ -1,4 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { importActual } from './bun-import-actual.js';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -32,8 +33,9 @@ vi.mock('../src/oauth/openai.js', () => ({
     accountId: 'acct-123',
   })),
 }));
-vi.mock('../src/env.js', async importOriginal => {
-  const actual = await importOriginal<typeof import('../src/env.js')>();
+vi.mock('../src/env.js', () => {
+  const importOriginal = <T>() => importActual<T>('../src/env.js', import.meta.url);
+  const actual = importOriginal<typeof import('../src/env.js')>();
   return {
     ...actual,
     deleteProviderCredential: vi.fn(),
