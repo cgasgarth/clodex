@@ -11,7 +11,7 @@ import {
   DAEMON_CONTROL_IDLE_TIMEOUT_SECONDS,
   DASHBOARD_USAGE_REQUEST_TIMEOUT_MS,
   OPENAI_METADATA_TIMEOUT_MS,
-} from '../src/daemon/timeouts.js';
+} from '../src/timeouts.js';
 
 const roots: string[] = [];
 afterEach(() => {
@@ -20,7 +20,7 @@ afterEach(() => {
 
 describe('daemon control API', () => {
   it('keeps each timeout above the slower downstream operation', () => {
-    expect(OPENAI_METADATA_TIMEOUT_MS).toBe(30_000);
+    expect(OPENAI_METADATA_TIMEOUT_MS).toBe(60_000);
     expect(DASHBOARD_USAGE_REQUEST_TIMEOUT_MS).toBeGreaterThan(OPENAI_METADATA_TIMEOUT_MS);
     expect(DAEMON_CONTROL_IDLE_TIMEOUT_SECONDS * 1_000)
       .toBeGreaterThan(DASHBOARD_USAGE_REQUEST_TIMEOUT_MS);

@@ -2,7 +2,7 @@ import { chmodSync, mkdirSync, rmSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { VERSION } from '../constants.js';
 import { responsesWebSocketPoolSnapshot } from '../oauth/responses-websocket.js';
-import { DAEMON_CONTROL_IDLE_TIMEOUT_SECONDS } from './timeouts.js';
+import { DAEMON_CONTROL_IDLE_TIMEOUT_SECONDS } from '../timeouts.js';
 import type { DaemonRuntimeState } from './runtime.js';
 import type { DaemonInferenceCollector } from './collector.js';
 

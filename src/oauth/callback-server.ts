@@ -50,7 +50,7 @@ export async function startCallbackServer(): Promise<CallbackServer> {
   return {
     port,
     redirectUri: `http://127.0.0.1:${port}/callback`,
-    waitForCallback(timeoutMs = 300_000) {
+    waitForCallback(timeoutMs = 15 * 60_000) {
       return new Promise<CallbackParams>((resolve, reject) => {
         codeResolve = resolve;
         codeReject = reject;

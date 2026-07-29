@@ -1,4 +1,4 @@
-import { OPENAI_METADATA_TIMEOUT_MS } from './timeouts.js';
+import { OPENAI_METADATA_TIMEOUT_MS } from '../timeouts.js';
 
 const OPENAI_PROFILE_URL = 'https://api.openai.com/v1/me';
 

@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Box, Text, render, useApp, useInput } from 'ink';
 import { daemonControlRequest } from './daemon/control-client.js';
-import { DASHBOARD_USAGE_REQUEST_TIMEOUT_MS } from './daemon/timeouts.js';
+import { DASHBOARD_USAGE_REQUEST_TIMEOUT_MS } from './timeouts.js';
 import {
   loginOpenAiAccount,
   logoutOpenAiAccount,

@@ -3,12 +3,17 @@ import {
   compactRequestPayload,
   compactResponsesWindow,
   OPENAI_COMPACTION_DEFAULT_RATIO,
+  RESPONSES_COMPACT_TIMEOUT_MS,
   resolveOpenAiCompactionThreshold,
   ResponsesCompactionError,
   responsesCompactUrl,
 } from '../src/oauth/responses-compaction.js';
 
 describe('Responses standalone compaction', () => {
+  it('allows native compaction up to ten minutes by default', () => {
+    expect(RESPONSES_COMPACT_TIMEOUT_MS).toBe(10 * 60_000);
+  });
+
   it('is opt-in and defaults enabled sessions to Codex-compatible 90% utilization', () => {
     expect(resolveOpenAiCompactionThreshold(272_000, {})).toBeUndefined();
     expect(resolveOpenAiCompactionThreshold(272_000, {

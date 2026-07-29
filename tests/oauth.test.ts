@@ -94,7 +94,7 @@ describe('oauth refresh http', () => {
     expect(text).not.toHaveBeenCalled();
   });
 
-  it('aborts a hung refresh request after 30 seconds', async () => {
+  it('aborts a hung refresh request after 60 seconds', async () => {
     vi.useFakeTimers();
     const fetchMock = vi.fn(
       async (_url: string | URL | Request, init?: RequestInit): Promise<Response> =>
@@ -120,14 +120,14 @@ describe('oauth refresh http', () => {
     const signal = fetchMock.mock.calls[0]?.[1]?.signal as AbortSignal;
     const rejection = refresh.catch((error: unknown) => error);
 
-    await vi.advanceTimersByTimeAsync(29_999);
+    await vi.advanceTimersByTimeAsync(59_999);
     expect(signal.aborted).toBe(false);
     await vi.advanceTimersByTimeAsync(1);
     expect(signal.aborted).toBe(true);
     await expect(rejection).resolves.toMatchObject({ name: 'TimeoutError' });
   });
 
-  it('keeps the 30-second timeout active while reading the response body', async () => {
+  it('keeps the 60-second timeout active while reading the response body', async () => {
     vi.useFakeTimers();
     const fetchMock = vi.fn(
       async (_url: string | URL | Request, init?: RequestInit): Promise<Response> => {
@@ -154,7 +154,7 @@ describe('oauth refresh http', () => {
     const signal = fetchMock.mock.calls[0]?.[1]?.signal as AbortSignal;
     const rejection = refresh.catch((error: unknown) => error);
 
-    await vi.advanceTimersByTimeAsync(29_999);
+    await vi.advanceTimersByTimeAsync(59_999);
     expect(signal.aborted).toBe(false);
     await vi.advanceTimersByTimeAsync(1);
     expect(signal.aborted).toBe(true);

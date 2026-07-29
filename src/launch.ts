@@ -39,7 +39,7 @@ export function findClaudeBinary(): string | null {
 /** Version reported when the installed claude cannot be probed. */
 const FALLBACK_CLAUDE_VERSION = '2.1.183';
 
-const VERSION_PROBE_TIMEOUT_MS = 15_000;
+const VERSION_PROBE_TIMEOUT_MS = 30_000;
 
 /**
  * Probe `--version` of ONE SPECIFIC claude binary, returning null when it cannot

@@ -24,9 +24,10 @@ import type { CachedModel } from './types.js';
 import { loadRegistryStrict, saveRegistry } from './io.js';
 import { withRegistryWriteLock, withRegistryWriteLockSync } from './lock.js';
 import { classifyFreeStatus, isFreeStatus } from '../free-models.js';
+import { PROVIDER_METADATA_TIMEOUT_MS } from '../timeouts.js';
 
 export const PRICING_API_URL = 'https://ai-model-pricing.com/api/v1/pricing.json';
-const FETCH_TIMEOUT_MS = 15_000;
+const FETCH_TIMEOUT_MS = PROVIDER_METADATA_TIMEOUT_MS;
 const FILE_MODE = 0o600;
 
 export interface PricingTierRow {

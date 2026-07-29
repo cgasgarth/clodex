@@ -1,4 +1,4 @@
-import { OPENAI_METADATA_TIMEOUT_MS } from './timeouts.js';
+import { OPENAI_METADATA_TIMEOUT_MS } from '../timeouts.js';
 
 const CODEX_USAGE_URL = 'https://chatgpt.com/backend-api/wham/usage';
 

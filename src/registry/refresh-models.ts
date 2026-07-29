@@ -27,6 +27,7 @@ import { deriveBrand } from '../models.js';
 import { resolveContextWindow } from '../context-window.js';
 import { getInstalledClaudeVersion } from '../launch.js';
 import { classifyFreeStatus, isFreeStatus } from '../free-models.js';
+import { PROVIDER_METADATA_TIMEOUT_MS } from '../timeouts.js';
 
 export interface RefreshProviderResult {
   id: string;
@@ -180,7 +181,7 @@ async function fetchJsonWithAuth(
 async function refreshOpenAiOAuthModels(
   accessToken: string,
 ): Promise<{ models: CachedModel[]; source: 'live' | 'seed'; failureReason?: string }> {
-  const TIMEOUT_MS = 10_000;
+  const TIMEOUT_MS = PROVIDER_METADATA_TIMEOUT_MS;
   const seedById = new Map(buildOpenAiOAuthModels().map(m => [m.id, m]));
   const toModels = (entries: OpenAiModelEntry[]) =>
     entries.map(entry => buildDynamicOAuthModel(entry, seedById));
