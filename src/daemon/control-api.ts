@@ -7,6 +7,8 @@ import type { DaemonRuntimeState } from './runtime.js';
 import type { DaemonInferenceCollector } from './collector.js';
 
 const MAX_CONTROL_BODY_BYTES = 64 * 1024;
+const MAX_METRICS_RANGE_MS = 32 * 24 * 60 * 60_000;
+const MAX_METRICS_BUCKETS = 1_000;
 
 export interface DaemonAccountView {
   id: string;
@@ -102,14 +104,36 @@ export async function startDaemonControlApi(
         });
       }
       if (request.method === 'GET' && url.pathname === '/v1/metrics') {
+        const now = Date.now();
+        const requestedStart = Date.parse(url.searchParams.get('start') ?? '');
+        const requestedEnd = Date.parse(url.searchParams.get('end') ?? '');
+        const hasRange = Number.isFinite(requestedStart) && Number.isFinite(requestedEnd);
         const windowHours = Math.max(1, Math.min(24 * 30, Number(url.searchParams.get('hours') ?? 24)));
-        const bucketMinutes = Math.max(1, Math.min(60, Number(url.searchParams.get('bucketMinutes') ?? 5)));
+        const startMs = hasRange ? requestedStart : now - windowHours * 60 * 60_000;
+        const endMs = hasRange ? requestedEnd : now;
+        if (endMs <= startMs || endMs - startMs > MAX_METRICS_RANGE_MS) {
+          return sendJson(400, { error: 'Metrics range must be positive and no longer than 32 days' });
+        }
+        const requestedBucketMinutes = Number(url.searchParams.get('bucketMinutes') ?? 5);
+        if (!Number.isFinite(requestedBucketMinutes)) {
+          return sendJson(400, { error: 'bucketMinutes must be a finite number' });
+        }
+        const bucketMinutes = Math.max(1, Math.min(24 * 60, requestedBucketMinutes));
+        const bucketMs = bucketMinutes * 60_000;
+        if (Math.ceil((endMs - startMs) / bucketMs) > MAX_METRICS_BUCKETS) {
+          return sendJson(400, { error: `Metrics range exceeds ${MAX_METRICS_BUCKETS} buckets` });
+        }
+        const accountId = url.searchParams.get('accountId')?.trim() || undefined;
         return sendJson(200, {
-          windowHours,
+          start: new Date(startMs).toISOString(),
+          end: new Date(endMs).toISOString(),
           bucketMinutes,
-          buckets: options.collector.metrics.buckets(
-            windowHours * 60 * 60_000,
-            bucketMinutes * 60_000,
+          accountId,
+          buckets: options.collector.metrics.bucketsRange(
+            startMs,
+            endMs,
+            bucketMs,
+            accountId,
           ),
         });
       }

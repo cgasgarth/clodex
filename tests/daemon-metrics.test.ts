@@ -1,7 +1,8 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'bun:test';
+import { Database } from 'bun:sqlite';
 import { DaemonMetricsStore } from '../src/daemon/metrics.js';
 
 const roots: string[] = [];
@@ -10,21 +11,24 @@ afterEach(() => {
 });
 
 describe('DaemonMetricsStore', () => {
-  it('persists and buckets privacy-minimal token usage', () => {
+  it('persists, account-filters, buckets, and prices token usage', () => {
     const root = mkdtempSync(join(tmpdir(), 'clodex-metrics-'));
     roots.push(root);
-    const store = new DaemonMetricsStore(join(root, 'metrics.jsonl'));
-    const timestamp = new Date(Date.now() - 60_000).toISOString();
+    const now = Date.now();
+    const store = new DaemonMetricsStore(join(root, 'metrics.sqlite'), { now: () => now });
+    const timestamp = new Date(now - 60_000).toISOString();
     store.append({
       timestamp,
       requestId: 'r1',
       sessionHash: 'hashed',
+      accountId: 'account-a',
+      processingMode: 'fast',
       modelId: 'sol',
       provider: 'openai-oauth',
-      inputTokens: 100,
-      cachedInputTokens: 80,
-      cacheWriteTokens: 5,
-      outputTokens: 10,
+      inputTokens: 100_000,
+      cachedInputTokens: 80_000,
+      cacheWriteTokens: 5_000,
+      outputTokens: 10_000,
       durationMs: 1_000,
       error: false,
       cancelled: false,
@@ -32,8 +36,8 @@ describe('DaemonMetricsStore', () => {
     store.append({
       timestamp,
       requestId: 'r2',
-      sessionHash: 'hashed',
-      modelId: 'sol',
+      accountId: 'account-b',
+      modelId: 'luna',
       provider: 'openai-oauth',
       inputTokens: 50,
       cachedInputTokens: 40,
@@ -42,40 +46,119 @@ describe('DaemonMetricsStore', () => {
       error: false,
       cancelled: true,
     });
-    expect(store.buckets().find(bucket => bucket.requests === 2)).toEqual(
-      expect.objectContaining({
-        inputTokens: 150,
-        cachedInputTokens: 120,
-        cacheWriteTokens: 5,
-        outputTokens: 13,
-        errors: 0,
-        cancellations: 1,
-      }),
-    );
+    const bucket = store.bucketsRange(
+      now - 3_600_000,
+      now,
+      3_600_000,
+      'account-a',
+    ).find(item => item.requests === 1);
+    expect(bucket).toEqual(expect.objectContaining({
+      inputTokens: 100_000,
+      cachedInputTokens: 80_000,
+      cacheWriteTokens: 5_000,
+      outputTokens: 10_000,
+      errors: 0,
+      cancellations: 0,
+      pricedRequests: 1,
+      unpricedRequests: 0,
+      standardRequests: 0,
+      fastRequests: 1,
+    }));
+    expect(bucket?.totalCost).toBeCloseTo(1.7425);
+    expect(bucket?.fastCost).toBeCloseTo(1.7425);
+    expect(bucket?.standardCost).toBe(0);
+    expect(store.readSince(0, 'account-b')).toHaveLength(1);
+    store.close();
   });
 
-  it('rolls over at the size cap and serves buckets from memory', () => {
+  it('migrates legacy JSONL rows as explicitly unattributed history', () => {
     const root = mkdtempSync(join(tmpdir(), 'clodex-metrics-'));
     roots.push(root);
-    const path = join(root, 'metrics.jsonl');
-    const store = new DaemonMetricsStore(path, { maxFileBytes: 250 });
-    const timestamp = new Date(Date.now() - 60_000).toISOString();
-    for (let index = 0; index < 6; index += 1) {
-      store.append({
-        timestamp,
-        requestId: `request-${index}`,
-        modelId: 'sol',
-        provider: 'openai-oauth',
+    const legacyPath = join(root, 'daemon-metrics.jsonl');
+    const timestamp = new Date().toISOString();
+    writeFileSync(legacyPath, `${JSON.stringify({
+      timestamp,
+      requestId: 'legacy',
+      modelId: 'sol',
+      provider: 'openai-oauth',
+      inputTokens: 10,
+      cachedInputTokens: 8,
+      cacheWriteTokens: 0,
+      outputTokens: 1,
+      error: false,
+    })}\n`);
+    const store = new DaemonMetricsStore(join(root, 'metrics.sqlite'), { legacyPath });
+    const migrated = store.readSince(0);
+    expect(migrated).toEqual([expect.objectContaining({ requestId: 'legacy' })]);
+    expect(migrated[0]?.processingMode).toBe('standard');
+    expect('accountId' in migrated[0]!).toBe(false);
+    expect(store.readSince(0, 'account-a')).toEqual([]);
+    expect(existsSync(legacyPath)).toBe(false);
+    store.close();
+  });
+
+  it('retains long history but prunes rows older than 400 days', () => {
+    const root = mkdtempSync(join(tmpdir(), 'clodex-metrics-'));
+    roots.push(root);
+    const now = Date.now();
+    const store = new DaemonMetricsStore(join(root, 'metrics.sqlite'), { now: () => now });
+    store.append({
+      timestamp: new Date(now - 401 * 24 * 60 * 60_000).toISOString(),
+      modelId: 'sol',
+      provider: 'openai-oauth',
+      inputTokens: 10,
+      cachedInputTokens: 0,
+      cacheWriteTokens: 0,
+      outputTokens: 1,
+      error: false,
+    });
+    expect(store.readSince(0)).toEqual([]);
+    store.close();
+  });
+
+  it('migrates schema-v1 databases to normal processing without losing rows', () => {
+    const root = mkdtempSync(join(tmpdir(), 'clodex-metrics-'));
+    roots.push(root);
+    const path = join(root, 'metrics.sqlite');
+    const legacy = new Database(path, { create: true });
+    legacy.exec(`
+      CREATE TABLE schema_meta (version INTEGER NOT NULL);
+      INSERT INTO schema_meta(version) VALUES (1);
+      CREATE TABLE metric_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        timestamp_ms INTEGER NOT NULL,
+        timestamp TEXT NOT NULL,
+        request_id TEXT,
+        session_hash TEXT,
+        account_id TEXT,
+        model_id TEXT NOT NULL,
+        provider TEXT NOT NULL,
+        input_tokens INTEGER NOT NULL,
+        cached_input_tokens INTEGER NOT NULL,
+        cache_write_tokens INTEGER NOT NULL,
+        output_tokens INTEGER NOT NULL,
+        duration_ms INTEGER,
+        error INTEGER NOT NULL,
+        cancelled INTEGER NOT NULL
+      );
+    `);
+    const timestamp = new Date().toISOString();
+    legacy.query(`
+      INSERT INTO metric_events (
+        timestamp_ms, timestamp, model_id, provider, input_tokens,
+        cached_input_tokens, cache_write_tokens, output_tokens, error, cancelled
+      ) VALUES (?, ?, 'sol', 'openai-oauth', 10, 5, 0, 1, 0, 0)
+    `).run(Date.parse(timestamp), timestamp);
+    legacy.close();
+
+    const store = new DaemonMetricsStore(path);
+    expect(store.readSince(0)).toEqual([
+      expect.objectContaining({
+        processingMode: 'standard',
         inputTokens: 10,
-        cachedInputTokens: 8,
-        cacheWriteTokens: 0,
-        outputTokens: 1,
-        error: false,
-      });
-    }
-    expect(existsSync(`${path}.1`)).toBe(true);
-    expect(readFileSync(path, 'utf8').length).toBeGreaterThan(0);
-    expect(store.buckets().find(bucket => bucket.requests === 6))
-      .toEqual(expect.objectContaining({ inputTokens: 60, cachedInputTokens: 48 }));
+        cachedInputTokens: 5,
+      }),
+    ]);
+    store.close();
   });
 });

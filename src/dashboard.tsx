@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Box, Text, render, useApp, useInput } from 'ink';
 import { daemonControlRequest } from './daemon/control-client.js';
 import { DASHBOARD_USAGE_REQUEST_TIMEOUT_MS } from './timeouts.js';
@@ -6,6 +6,10 @@ import {
   loginOpenAiAccount,
   logoutOpenAiAccount,
 } from './daemon/account-command.js';
+import {
+  API_PRICING_AS_OF,
+  API_PRICING_SOURCE,
+} from './daemon/api-pricing.js';
 
 interface WebSocketStatus {
   total: number;
@@ -42,7 +46,7 @@ interface DaemonStatus {
   sessions: SessionStatus[];
 }
 
-interface MetricBucket {
+export interface MetricBucket {
   timestamp: string;
   inputTokens: number;
   cachedInputTokens: number;
@@ -52,6 +56,16 @@ interface MetricBucket {
   errors: number;
   cancellations: number;
   durationMs: number;
+  inputCost: number;
+  cacheCost: number;
+  outputCost: number;
+  totalCost: number;
+  pricedRequests: number;
+  unpricedRequests: number;
+  standardRequests: number;
+  fastRequests: number;
+  standardCost: number;
+  fastCost: number;
 }
 
 interface Account {
@@ -81,7 +95,22 @@ export interface DeviceCodePrompt {
   userCode: string;
 }
 
-const SPARK_CHARS = '▁▂▃▄▅▆▇█';
+export type UsagePeriod = 'day' | 'week' | 'month';
+type DashboardView = 'overview' | 'usage' | 'accounts' | 'diagnostics';
+
+export interface UsageRange {
+  period: UsagePeriod;
+  offset: number;
+  start: Date;
+  end: Date;
+  label: string;
+  bucketMinutes: number;
+}
+
+const VIEWS: DashboardView[] = ['overview', 'usage', 'accounts', 'diagnostics'];
+const PERIODS: UsagePeriod[] = ['day', 'week', 'month'];
+const CHART_WIDTH = 56;
+const CHART_HEIGHT = 6;
 
 export function accountDisplayName(account: Pick<Account, 'email'>): string {
   return account.email ?? 'Email unavailable';
@@ -91,32 +120,147 @@ export function deviceCodeInstruction({ userCode }: DeviceCodePrompt): string {
   return `Enter code ${userCode} in the browser.`;
 }
 
-export function sparkline(values: number[], width = 48): string {
-  if (values.length === 0) return '·'.repeat(width);
-  const sampled = values.length <= width
-    ? values
-    : Array.from({ length: width }, (_, index) => {
-        const start = Math.floor(index * values.length / width);
-        const end = Math.max(start + 1, Math.floor((index + 1) * values.length / width));
-        return values.slice(start, end).reduce((sum, value) => sum + value, 0);
-      });
-  const max = Math.max(1, ...sampled);
-  return sampled
-    .map(value => value === 0
-      ? '·'
-      : SPARK_CHARS[Math.min(
-          SPARK_CHARS.length - 1,
-          Math.floor(value / max * SPARK_CHARS.length),
-        )])
-    .join('')
-    .padEnd(width, '·');
+function startOfDay(date: Date): Date {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
 }
 
-function compactNumber(value: number): string {
+function startOfWeek(date: Date): Date {
+  const day = startOfDay(date);
+  const mondayOffset = (day.getDay() + 6) % 7;
+  day.setDate(day.getDate() - mondayOffset);
+  return day;
+}
+
+export function usageRange(
+  period: UsagePeriod,
+  offset = 0,
+  now = new Date(),
+): UsageRange {
+  let start: Date;
+  let end: Date;
+  let label: string;
+  if (period === 'day') {
+    start = startOfDay(now);
+    start.setDate(start.getDate() + offset);
+    end = new Date(start);
+    end.setDate(end.getDate() + 1);
+    label = start.toLocaleDateString(undefined, {
+      weekday: 'short',
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+    });
+  } else if (period === 'week') {
+    start = startOfWeek(now);
+    start.setDate(start.getDate() + offset * 7);
+    end = new Date(start);
+    end.setDate(end.getDate() + 7);
+    const inclusiveEnd = new Date(end);
+    inclusiveEnd.setDate(inclusiveEnd.getDate() - 1);
+    label = `${start.toLocaleDateString(undefined, {
+      month: 'short',
+      day: 'numeric',
+    })} – ${inclusiveEnd.toLocaleDateString(undefined, {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+    })}`;
+  } else {
+    start = new Date(now.getFullYear(), now.getMonth() + offset, 1);
+    end = new Date(start.getFullYear(), start.getMonth() + 1, 1);
+    label = start.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+  }
+  return { period, offset, start, end, label, bucketMinutes: 60 };
+}
+
+export function cyclePeriod(
+  period: UsagePeriod,
+  direction: 1 | -1,
+): UsagePeriod {
+  const index = PERIODS.indexOf(period);
+  return PERIODS[(index + direction + PERIODS.length) % PERIODS.length]!;
+}
+
+export function compactNumber(value: number): string {
   return new Intl.NumberFormat('en-US', {
     notation: 'compact',
     maximumFractionDigits: 1,
   }).format(value);
+}
+
+export function formatUsd(value: number): string {
+  if (value === 0) return '$0.00';
+  if (value < 0.01) return `$${value.toFixed(4)}`;
+  if (value < 1) return `$${value.toFixed(3)}`;
+  return `$${value.toFixed(2)}`;
+}
+
+function sampledValues(values: number[], width: number): number[] {
+  if (values.length <= width) return values;
+  return Array.from({ length: width }, (_, index) => {
+    const start = Math.floor(index * values.length / width);
+    const end = Math.max(start + 1, Math.floor((index + 1) * values.length / width));
+    return values.slice(start, end).reduce((sum, value) => sum + value, 0);
+  });
+}
+
+function axisDate(date: Date, period: UsagePeriod): string {
+  return period === 'day'
+    ? date.toLocaleTimeString(undefined, { hour: 'numeric' })
+    : date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+
+export function lineChart(
+  values: number[],
+  range: Pick<UsageRange, 'start' | 'end' | 'period'>,
+  options: {
+    width?: number;
+    height?: number;
+    formatY?: (value: number) => string;
+  } = {},
+): string[] {
+  const width = options.width ?? CHART_WIDTH;
+  const height = options.height ?? CHART_HEIGHT;
+  const formatY = options.formatY ?? compactNumber;
+  const sampled = sampledValues(values, width);
+  const padded = sampled.length === 0 ? [0] : sampled;
+  const max = Math.max(0, ...padded);
+  const plotWidth = Math.max(1, padded.length);
+  const grid = Array.from(
+    { length: height },
+    () => Array.from({ length: plotWidth }, () => ' '),
+  );
+  padded.forEach((value, index) => {
+    const normalized = max > 0 ? Math.max(0, Math.min(1, value / max)) : 0;
+    const row = height - 1 - Math.round(normalized * (height - 1));
+    grid[row]![index] = '●';
+  });
+  const yLabelWidth = Math.max(
+    formatY(max).length,
+    formatY(max / 2).length,
+    formatY(0).length,
+  );
+  const lines = grid.map((row, index) => {
+    const value = max * (height - 1 - index) / Math.max(1, height - 1);
+    const showLabel = index === 0 || index === Math.floor((height - 1) / 2) || index === height - 1;
+    const label = showLabel ? formatY(value).padStart(yLabelWidth) : ' '.repeat(yLabelWidth);
+    return `${label} ┤${row.join('')}`;
+  });
+  lines.push(`${' '.repeat(yLabelWidth)} └${'─'.repeat(plotWidth)}`);
+  const middle = new Date((range.start.getTime() + range.end.getTime()) / 2);
+  const startLabel = axisDate(range.start, range.period);
+  const middleLabel = axisDate(middle, range.period);
+  const endLabel = axisDate(new Date(range.end.getTime() - 1), range.period);
+  const innerWidth = Math.max(
+    plotWidth,
+    startLabel.length + middleLabel.length + endLabel.length + 2,
+  );
+  const leftGap = Math.max(1, Math.floor((innerWidth - startLabel.length - middleLabel.length - endLabel.length) / 2));
+  const rightGap = Math.max(1, innerWidth - startLabel.length - middleLabel.length - endLabel.length - leftGap);
+  lines.push(
+    `${' '.repeat(yLabelWidth + 2)}${startLabel}${' '.repeat(leftGap)}${middleLabel}${' '.repeat(rightGap)}${endLabel}`,
+  );
+  return lines;
 }
 
 function duration(seconds: number): string {
@@ -155,8 +299,59 @@ function UsageBar({
   );
 }
 
+function Chart({
+  title,
+  values,
+  range,
+  color,
+  formatY,
+}: {
+  title: string;
+  values: number[];
+  range: UsageRange;
+  color: string;
+  formatY?: (value: number) => string;
+}): React.ReactNode {
+  return (
+    <Box flexDirection="column">
+      <Text bold>{title}</Text>
+      {lineChart(values, range, { formatY }).map((line, index) => (
+        <Text key={`${title}-${index}`} color={color}>{line}</Text>
+      ))}
+    </Box>
+  );
+}
+
+function ViewTabs({ view }: { view: DashboardView }): React.ReactNode {
+  return (
+    <Text>
+      {VIEWS.map((candidate, index) => (
+        <React.Fragment key={candidate}>
+          {index > 0 ? '  ' : ''}
+          <Text
+            bold={candidate === view}
+            color={candidate === view ? 'cyan' : undefined}
+            inverse={candidate === view}
+          >
+            {index + 1} {candidate[0]!.toUpperCase() + candidate.slice(1)}
+          </Text>
+        </React.Fragment>
+      ))}
+    </Text>
+  );
+}
+
 function Dashboard(): React.ReactNode {
   const { exit } = useApp();
+  const [view, setView] = useState<DashboardView>('overview');
+  const [period, setPeriod] = useState<UsagePeriod>('day');
+  const [periodOffset, setPeriodOffset] = useState(0);
+  const [rangeNow, setRangeNow] = useState(() => new Date());
+  const range = useMemo(
+    () => usageRange(period, periodOffset, rangeNow),
+    [period, periodOffset, rangeNow],
+  );
+  const refreshSequence = useRef(0);
   const [status, setStatus] = useState<DaemonStatus | null>(null);
   const [metrics, setMetrics] = useState<MetricBucket[]>([]);
   const [accounts, setAccounts] = useState<Account[]>([]);
@@ -166,19 +361,47 @@ function Dashboard(): React.ReactNode {
   const [loading, setLoading] = useState(false);
   const [accountAction, setAccountAction] = useState(false);
   const [pendingLogoutId, setPendingLogoutId] = useState<string>();
+  const [pendingRestart, setPendingRestart] = useState(false);
   const [deviceCode, setDeviceCode] = useState<DeviceCodePrompt>();
 
   const refresh = useCallback(async (usage = false) => {
+    const sequence = ++refreshSequence.current;
     setLoading(true);
     try {
-      const [nextStatus, nextMetrics, nextAccounts, nextDiagnostics] = await Promise.all([
+      const [nextStatus, nextAccounts, nextDiagnostics] = await Promise.all([
         daemonControlRequest<DaemonStatus>('/v1/status'),
-        daemonControlRequest<{ buckets: MetricBucket[] }>('/v1/metrics?hours=24&bucketMinutes=5'),
         daemonControlRequest<{ accounts: Account[] }>(`/v1/accounts${usage ? '?refresh=1' : ''}`, {
           timeoutMs: usage ? DASHBOARD_USAGE_REQUEST_TIMEOUT_MS : 2_000,
         }),
-        daemonControlRequest<{ diagnostics: Diagnostic[] }>('/v1/diagnostics?limit=8'),
+        daemonControlRequest<{ diagnostics: Diagnostic[] }>('/v1/diagnostics?limit=20'),
       ]);
+      const activeAccount = nextAccounts.accounts.find(account => account.selected);
+      const metricsQuery = new URLSearchParams({
+        start: range.start.toISOString(),
+        end: range.end.toISOString(),
+        bucketMinutes: String(range.bucketMinutes),
+        ...(activeAccount ? { accountId: activeAccount.id } : {}),
+      });
+      const nextMetrics = activeAccount
+        ? await daemonControlRequest<{
+            start: string;
+            end: string;
+            accountId?: string;
+            buckets: MetricBucket[];
+          }>(
+            `/v1/metrics?${metricsQuery.toString()}`,
+          )
+        : {
+            start: range.start.toISOString(),
+            end: range.end.toISOString(),
+            buckets: [],
+          };
+      if (sequence !== refreshSequence.current) return;
+      if (
+        nextMetrics.start !== range.start.toISOString()
+        || nextMetrics.end !== range.end.toISOString()
+        || nextMetrics.accountId !== activeAccount?.id
+      ) return;
       setStatus(nextStatus);
       setMetrics(nextMetrics.buckets);
       setAccounts(nextAccounts.accounts);
@@ -187,12 +410,13 @@ function Dashboard(): React.ReactNode {
       if (current >= 0) setSelectedIndex(current);
       setMessage(`Updated ${new Date().toLocaleTimeString()}`);
     } catch (error) {
+      if (sequence !== refreshSequence.current) return;
       setStatus(null);
       setMessage(error instanceof Error ? error.message : String(error));
     } finally {
-      setLoading(false);
+      if (sequence === refreshSequence.current) setLoading(false);
     }
-  }, []);
+  }, [range.bucketMinutes, range.end, range.start]);
 
   const login = useCallback(() => {
     if (accountAction) return;
@@ -236,6 +460,9 @@ function Dashboard(): React.ReactNode {
   }, [accountAction, refresh]);
 
   useEffect(() => {
+    // Do not render the previous period's values under a newly selected label
+    // while the replacement query is in flight.
+    setMetrics([]);
     void refresh(true);
     const timer = setInterval(() => void refresh(), 5_000);
     const usageTimer = setInterval(() => void refresh(true), 90_000);
@@ -245,51 +472,127 @@ function Dashboard(): React.ReactNode {
     };
   }, [refresh]);
 
+  useEffect(() => {
+    const timer = setInterval(() => {
+      const next = new Date();
+      setRangeNow(current => {
+        const currentRange = usageRange(period, periodOffset, current);
+        const nextRange = usageRange(period, periodOffset, next);
+        return currentRange.start.getTime() === nextRange.start.getTime()
+          && currentRange.end.getTime() === nextRange.end.getTime()
+          ? current
+          : next;
+      });
+    }, 60_000);
+    return () => clearInterval(timer);
+  }, [period, periodOffset]);
+
   useInput((input, key) => {
+    const selectedAccount = accounts[selectedIndex];
+    const confirmsLogout = view === 'accounts'
+      && input === 'x'
+      && selectedAccount?.id === pendingLogoutId;
+    const confirmsRestart = view === 'diagnostics'
+      && input === 'R'
+      && pendingRestart;
+    if (pendingLogoutId && !confirmsLogout) setPendingLogoutId(undefined);
+    if (pendingRestart && !confirmsRestart) setPendingRestart(false);
     if (input === 'q' || key.escape) {
       exit();
       return;
     }
-    if (input === 'l') {
-      login();
+    if (/^[1-4]$/.test(input)) {
+      setView(VIEWS[Number(input) - 1]!);
+      setPendingLogoutId(undefined);
+      setPendingRestart(false);
       return;
     }
-    if (input === 'x' && accounts[selectedIndex]) {
-      const account = accounts[selectedIndex]!;
-      if (pendingLogoutId === account.id) {
-        logout(account);
-      } else {
-        setPendingLogoutId(account.id);
-        setMessage(`Press x again to log out ${accountDisplayName(account)}; any other key cancels.`);
+    if (input === 'r') {
+      void refresh(true);
+      return;
+    }
+    if (view === 'usage') {
+      if (key.tab) {
+        refreshSequence.current += 1;
+        setMetrics([]);
+        setPeriod(current => cyclePeriod(current, key.shift ? -1 : 1));
+        setPeriodOffset(0);
+        return;
       }
-      return;
+      if (key.leftArrow) {
+        refreshSequence.current += 1;
+        setMetrics([]);
+        setPeriodOffset(offset => offset - 1);
+        return;
+      }
+      if (key.rightArrow) {
+        refreshSequence.current += 1;
+        setMetrics([]);
+        setPeriodOffset(offset => Math.min(0, offset + 1));
+        return;
+      }
+      if (input === '0') {
+        refreshSequence.current += 1;
+        setMetrics([]);
+        setRangeNow(new Date());
+        setPeriodOffset(0);
+        return;
+      }
     }
-    if (pendingLogoutId) setPendingLogoutId(undefined);
-    if (input === 'r') void refresh(true);
-    if (input === 'j' || key.downArrow) {
-      setSelectedIndex(index => Math.min(accounts.length - 1, index + 1));
+    if (view === 'accounts') {
+      if (input === 'l') {
+        login();
+        return;
+      }
+      if (input === 'x' && accounts[selectedIndex]) {
+        const account = accounts[selectedIndex]!;
+        if (pendingLogoutId === account.id) {
+          logout(account);
+        } else {
+          setPendingLogoutId(account.id);
+          setMessage(`Press x again to log out ${accountDisplayName(account)}; any other key cancels.`);
+        }
+        return;
+      }
+      if (input === 'j' || key.downArrow) {
+        setSelectedIndex(index => Math.min(accounts.length - 1, index + 1));
+        return;
+      }
+      if (input === 'k' || key.upArrow) {
+        setSelectedIndex(index => Math.max(0, index - 1));
+        return;
+      }
+      if (key.return && accounts[selectedIndex] && !accounts[selectedIndex]!.selected) {
+        const account = accounts[selectedIndex]!;
+        if (accountAction) return;
+        setAccountAction(true);
+        refreshSequence.current += 1;
+        setMetrics([]);
+        daemonControlRequest(`/v1/accounts/${encodeURIComponent(account.id)}/select`, {
+          method: 'POST',
+        }).then(
+          () => {
+            setPeriodOffset(0);
+            return refresh(true);
+          },
+          error => {
+            setMessage(error instanceof Error ? error.message : String(error));
+          },
+        ).finally(() => setAccountAction(false));
+        return;
+      }
     }
-    if (input === 'k' || key.upArrow) {
-      setSelectedIndex(index => Math.max(0, index - 1));
-    }
-    if (key.return && accounts[selectedIndex] && !accounts[selectedIndex]!.selected) {
-      const account = accounts[selectedIndex]!;
-      if (accountAction) return;
-      setAccountAction(true);
-      daemonControlRequest(`/v1/accounts/${encodeURIComponent(account.id)}/select`, {
-        method: 'POST',
-      }).then(
-        () => refresh(true).finally(() => setAccountAction(false)),
-        error => {
-        setAccountAction(false);
-        setMessage(error instanceof Error ? error.message : String(error));
-        },
-      );
-    }
-    if (input === 's' && status) {
+    if (view === 'diagnostics' && input === 'R' && status) {
+      if (!pendingRestart) {
+        setPendingRestart(true);
+        setMessage('Press uppercase R again to restart the daemon; any other key cancels.');
+        return;
+      }
+      setPendingRestart(false);
       daemonControlRequest('/v1/service/restart', { method: 'POST' })
         .then(() => setMessage('Restart requested; reconnecting…'))
         .catch(error => setMessage(error instanceof Error ? error.message : String(error)));
+      return;
     }
   });
 
@@ -301,6 +604,16 @@ function Dashboard(): React.ReactNode {
     requests: sum.requests + bucket.requests,
     errors: sum.errors + bucket.errors,
     cancellations: sum.cancellations + bucket.cancellations,
+    inputCost: sum.inputCost + bucket.inputCost,
+    cacheCost: sum.cacheCost + bucket.cacheCost,
+    outputCost: sum.outputCost + bucket.outputCost,
+    totalCost: sum.totalCost + bucket.totalCost,
+    pricedRequests: sum.pricedRequests + bucket.pricedRequests,
+    unpricedRequests: sum.unpricedRequests + bucket.unpricedRequests,
+    standardRequests: sum.standardRequests + bucket.standardRequests,
+    fastRequests: sum.fastRequests + bucket.fastRequests,
+    standardCost: sum.standardCost + bucket.standardCost,
+    fastCost: sum.fastCost + bucket.fastCost,
   }), {
     input: 0,
     cached: 0,
@@ -309,8 +622,19 @@ function Dashboard(): React.ReactNode {
     requests: 0,
     errors: 0,
     cancellations: 0,
+    inputCost: 0,
+    cacheCost: 0,
+    outputCost: 0,
+    totalCost: 0,
+    pricedRequests: 0,
+    unpricedRequests: 0,
+    standardRequests: 0,
+    fastRequests: 0,
+    standardCost: 0,
+    fastCost: 0,
   }), [metrics]);
   const logicalInput = totals.input + totals.cached + totals.cacheWrite;
+  const activeAccount = accounts.find(account => account.selected);
 
   if (!status) {
     return (
@@ -324,8 +648,8 @@ function Dashboard(): React.ReactNode {
   }
 
   const ws = status.websocket;
-  return (
-    <Box flexDirection="column" paddingX={1}>
+  const commonHeader = (
+    <>
       <Box justifyContent="space-between">
         <Text bold color="cyan">clodex</Text>
         <Text color={status.ready ? 'green' : 'yellow'}>
@@ -333,76 +657,183 @@ function Dashboard(): React.ReactNode {
         </Text>
       </Box>
       <Text dimColor>endpoint {status.endpointPort} · selective proxy {status.proxyPort}</Text>
+      <ViewTabs view={view} />
+    </>
+  );
 
-      <Box borderStyle="round" paddingX={1} flexDirection="column">
-        <Text bold>WebSockets</Text>
-        <Text>
-          {ws.total} total · {ws.inFlight} in-flight · {ws.established} established · {ws.nursery} nursery · {ws.isolated} isolated
-        </Text>
-        <Text dimColor>{ws.partitions} partitions · {ws.checkpoints} compact checkpoints · {status.activeSessions} active sessions</Text>
-      </Box>
-
-      <Box borderStyle="round" paddingX={1} flexDirection="column">
-        <Text bold>24-hour tokens</Text>
-        <Text color="blue">input  {sparkline(metrics.map(bucket => bucket.inputTokens))} {compactNumber(totals.input)}</Text>
-        <Text color="green">cached {sparkline(metrics.map(bucket => bucket.cachedInputTokens))} {compactNumber(totals.cached)}</Text>
-        <Text color="yellow">writes {sparkline(metrics.map(bucket => bucket.cacheWriteTokens))} {compactNumber(totals.cacheWrite)}</Text>
-        <Text color="magenta">output {sparkline(metrics.map(bucket => bucket.outputTokens))} {compactNumber(totals.output)}</Text>
-        <Text dimColor>
-          {totals.requests} requests · {totals.errors} errors · {totals.cancellations} client cancellations
-          {' · '}cached share {logicalInput ? Math.round(totals.cached / logicalInput * 100) : 0}%
-        </Text>
-      </Box>
-
-      <Box borderStyle="round" paddingX={1} flexDirection="column">
-        <Text bold>Accounts <Text dimColor>(manual selection; no failover)</Text></Text>
-        {accounts.length === 0
-          ? <Text dimColor>No managed accounts. Press l to sign in.</Text>
-          : accounts.map((account, index) => (
-              <Box key={account.id} flexDirection="column">
-                <Text color={index === selectedIndex ? 'cyan' : undefined}>
-                  {index === selectedIndex ? '›' : ' '} {account.selected ? '●' : '○'} {accountDisplayName(account)}
-                  {account.plan ? ` · ${account.plan}` : ''}
-                </Text>
-                {account.usage && (
-                  <Box paddingLeft={4} flexDirection="column">
-                    {account.usage.primaryUsedPercent !== undefined && (
-                      <UsageBar label="5-hour" used={account.usage.primaryUsedPercent} resetAt={account.usage.primaryResetAt} />
-                    )}
-                    {account.usage.weeklyUsedPercent !== undefined && (
-                      <UsageBar label="weekly" used={account.usage.weeklyUsedPercent} resetAt={account.usage.weeklyResetAt} />
-                    )}
-                    {account.usage.stale && <Text color="yellow">usage stale{account.usage.error ? ` · ${account.usage.error}` : ''}</Text>}
-                  </Box>
-                )}
-              </Box>
-            ))}
-      </Box>
-
-      {deviceCode && (
-        <Box borderStyle="round" borderColor="yellow" paddingX={1} flexDirection="column">
-          <Text bold color="yellow">OpenAI sign-in</Text>
-          <Text>{deviceCodeInstruction(deviceCode)}</Text>
-          <Text dimColor>{deviceCode.url}</Text>
-          <Text dimColor>The code stays visible until sign-in finishes.</Text>
+  let content: React.ReactNode;
+  let controls: string;
+  if (view === 'overview') {
+    controls = '1–4 views · r refresh · q quit';
+    content = (
+      <>
+        <Box borderStyle="round" paddingX={1} flexDirection="column">
+          <Text bold>WebSockets and sessions</Text>
+          <Text>
+            {ws.total} total · {ws.inFlight} in-flight · {ws.established} established · {ws.nursery} nursery · {ws.isolated} isolated
+          </Text>
+          <Text dimColor>{ws.partitions} partitions · {ws.checkpoints} compact checkpoints · {status.activeSessions} active sessions</Text>
         </Box>
-      )}
-
+        <Box borderStyle="round" paddingX={1} flexDirection="column">
+          <Text bold>Active account</Text>
+          {!activeAccount
+            ? <Text dimColor>No managed OpenAI account.</Text>
+            : (
+              <>
+                <Text color="cyan">● {accountDisplayName(activeAccount)}{activeAccount.plan ? ` · ${activeAccount.plan}` : ''}</Text>
+                {activeAccount.usage?.primaryUsedPercent !== undefined && (
+                  <UsageBar label="5-hour" used={activeAccount.usage.primaryUsedPercent} resetAt={activeAccount.usage.primaryResetAt} />
+                )}
+                {activeAccount.usage?.weeklyUsedPercent !== undefined && (
+                  <UsageBar label="weekly" used={activeAccount.usage.weeklyUsedPercent} resetAt={activeAccount.usage.weeklyResetAt} />
+                )}
+                {activeAccount.usage?.stale && (
+                  <Text color="yellow">usage stale{activeAccount.usage.error ? ` · ${activeAccount.usage.error}` : ''}</Text>
+                )}
+              </>
+            )}
+        </Box>
+        <Box borderStyle="round" paddingX={1} flexDirection="column">
+          <Text bold>Recent diagnostics</Text>
+          {diagnostics.length === 0
+            ? <Text dimColor>No recent failures or compaction warnings.</Text>
+            : diagnostics.slice(0, 3).map((diagnostic, index) => (
+                <Text key={`${diagnostic.timestamp}-${index}`} color="yellow">
+                  {new Date(diagnostic.timestamp).toLocaleTimeString()} · {diagnostic.kind}
+                  {diagnostic.statusCode ? ` · HTTP ${diagnostic.statusCode}` : ''}
+                  {diagnostic.code ? ` · ${diagnostic.code}` : ''}
+                </Text>
+              ))}
+        </Box>
+      </>
+    );
+  } else if (view === 'usage') {
+    controls = 'Tab/Shift+Tab day·week·month · ←/→ period · 0 current · 1–4 views · r refresh · q quit';
+    const tokenValues = metrics.map(bucket =>
+      bucket.inputTokens
+      + bucket.cachedInputTokens
+      + bucket.cacheWriteTokens
+      + bucket.outputTokens,
+    );
+    const costValues = metrics.map(bucket => bucket.totalCost);
+    content = (
+      <>
+        <Box justifyContent="space-between">
+          <Text>
+            <Text bold color="cyan">{period.toUpperCase()}</Text> · {range.label}
+          </Text>
+          <Text>{activeAccount ? accountDisplayName(activeAccount) : 'No active account'}</Text>
+        </Box>
+        <Box borderStyle="round" paddingX={1} flexDirection="column">
+          <Chart
+            title="Token history"
+            values={tokenValues}
+            range={range}
+            color="blue"
+          />
+          <Text>
+            input {compactNumber(totals.input)} · cached {compactNumber(totals.cached)}
+            {' · '}writes {compactNumber(totals.cacheWrite)} · output {compactNumber(totals.output)}
+            {' · '}total {compactNumber(logicalInput + totals.output)}
+          </Text>
+          <Text dimColor>
+            {totals.requests} requests · {totals.errors} errors · {totals.cancellations} client cancellations
+            {' · '}cached share {logicalInput ? Math.round(totals.cached / logicalInput * 100) : 0}%
+          </Text>
+        </Box>
+        <Box borderStyle="round" paddingX={1} flexDirection="column">
+          <Chart
+            title="API-equivalent token cost"
+            values={costValues}
+            range={range}
+            color="green"
+            formatY={formatUsd}
+          />
+          <Text>
+            input {formatUsd(totals.inputCost)} · cache {formatUsd(totals.cacheCost)}
+            {' · '}output {formatUsd(totals.outputCost)} · <Text bold>total {formatUsd(totals.totalCost)}</Text>
+          </Text>
+          <Text>
+            normal {formatUsd(totals.standardCost)} ({totals.standardRequests} req)
+            {' · '}fast {formatUsd(totals.fastCost)} ({totals.fastRequests} req)
+          </Text>
+          <Text dimColor>
+            Sol, Terra, and Luna · normal + fast processing · token-only estimate · rates as of {API_PRICING_AS_OF}
+          </Text>
+          <Text dimColor>
+            {API_PRICING_SOURCE}
+            {totals.unpricedRequests > 0 ? ` · ${totals.unpricedRequests} other-model requests excluded` : ''}
+          </Text>
+        </Box>
+        {!activeAccount && <Text color="yellow">Select an account to view account-scoped history.</Text>}
+        {activeAccount && totals.requests === 0 && (
+          <Text dimColor>Account-scoped history begins when this dashboard version records new requests; legacy rows remain unattributed.</Text>
+        )}
+      </>
+    );
+  } else if (view === 'accounts') {
+    controls = '↑/↓ account · Enter select · l login · x x logout · 1–4 views · r refresh · q quit';
+    content = (
+      <>
+        <Box borderStyle="round" paddingX={1} flexDirection="column">
+          <Text bold>Accounts <Text dimColor>(manual selection; no failover)</Text></Text>
+          <Text dimColor>Changes affect new Claude launches; existing sessions remain pinned.</Text>
+          {accounts.length === 0
+            ? <Text dimColor>No managed accounts. Press l to sign in.</Text>
+            : accounts.map((account, index) => (
+                <Box key={account.id} flexDirection="column">
+                  <Text color={index === selectedIndex ? 'cyan' : undefined}>
+                    {index === selectedIndex ? '›' : ' '} {account.selected ? '●' : '○'} {accountDisplayName(account)}
+                    {account.plan ? ` · ${account.plan}` : ''}
+                  </Text>
+                  {account.usage && (
+                    <Box paddingLeft={4} flexDirection="column">
+                      {account.usage.primaryUsedPercent !== undefined && (
+                        <UsageBar label="5-hour" used={account.usage.primaryUsedPercent} resetAt={account.usage.primaryResetAt} />
+                      )}
+                      {account.usage.weeklyUsedPercent !== undefined && (
+                        <UsageBar label="weekly" used={account.usage.weeklyUsedPercent} resetAt={account.usage.weeklyResetAt} />
+                      )}
+                      {account.usage.stale && <Text color="yellow">usage stale{account.usage.error ? ` · ${account.usage.error}` : ''}</Text>}
+                    </Box>
+                  )}
+                </Box>
+              ))}
+        </Box>
+        {deviceCode && (
+          <Box borderStyle="round" borderColor="yellow" paddingX={1} flexDirection="column">
+            <Text bold color="yellow">OpenAI sign-in</Text>
+            <Text>{deviceCodeInstruction(deviceCode)}</Text>
+            <Text dimColor>{deviceCode.url}</Text>
+            <Text dimColor>The code stays visible until sign-in finishes.</Text>
+          </Box>
+        )}
+      </>
+    );
+  } else {
+    controls = 'R R restart daemon · 1–4 views · r refresh · q quit';
+    content = (
       <Box borderStyle="round" paddingX={1} flexDirection="column">
         <Text bold>Recent diagnostics</Text>
         {diagnostics.length === 0
           ? <Text dimColor>No recent failures or compaction warnings.</Text>
-          : diagnostics.slice(0, 5).map((diagnostic, index) => (
+          : diagnostics.map((diagnostic, index) => (
               <Text key={`${diagnostic.timestamp}-${index}`} color="yellow">
-                {new Date(diagnostic.timestamp).toLocaleTimeString()} · {diagnostic.kind}
+                {new Date(diagnostic.timestamp).toLocaleString()} · {diagnostic.kind}
                 {diagnostic.statusCode ? ` · HTTP ${diagnostic.statusCode}` : ''}
                 {diagnostic.code ? ` · ${diagnostic.code}` : ''}
               </Text>
             ))}
       </Box>
+    );
+  }
 
+  return (
+    <Box flexDirection="column" paddingX={1}>
+      {commonHeader}
+      {content}
       <Text dimColor>
-        ↑/↓ account · Enter select · l login · x logout · r refresh · s restart · q quit
+        {controls}
         {' · '}{message}
         {accountAction ? ' · account action in progress…' : loading ? ' · refreshing…' : ''}
       </Text>

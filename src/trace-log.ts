@@ -13,6 +13,7 @@ import { join } from 'node:path';
 import pc from 'picocolors';
 import { getLogsPath } from './paths.js';
 import { isCredentialBearingHeader } from './credential-headers.js';
+import type { ApiProcessingMode } from './daemon/api-pricing.js';
 
 const DIR_MODE = 0o700;
 const FILE_MODE = 0o600;
@@ -186,7 +187,10 @@ export function getLatestMessagePreview(messages: unknown, system?: unknown): st
 export interface InferenceRequestLogEntry {
   requestId?: string;
   claudeSessionId?: string;
+  accountId?: string;
+  processingMode?: ApiProcessingMode;
   modelId: string;
+  resolvedModelId?: string;
   provider: string;
   effort?: string;
   route: 'passthrough' | 'translated';
@@ -250,7 +254,10 @@ export interface InferenceResponseLifecycleLogEntry {
   event: InferenceResponseLifecycleEvent;
   requestId: string;
   claudeSessionId?: string;
+  accountId?: string;
+  processingMode?: ApiProcessingMode;
   modelId: string;
+  resolvedModelId?: string;
   provider: string;
   route: 'passthrough' | 'translated';
   statusCode?: number;
@@ -434,11 +441,17 @@ export function writeInferenceRequestLog(
 ): void {
   const includePreview = process.env[REQUEST_PREVIEW_ENV] === '1' && entry.requestPreview;
   const claudeSessionId = safeClaudeSessionId(entry.claudeSessionId);
+  const accountId = compactLogValue(entry.accountId ?? '', 100);
   writeSecureLogLine(path, JSON.stringify({
     timestamp: new Date().toISOString(),
     ...(entry.requestId ? { requestId: compactLogValue(entry.requestId, 100) } : {}),
     ...(claudeSessionId ? { claudeSessionId } : {}),
+    ...(accountId ? { accountId } : {}),
+    ...(entry.processingMode ? { processingMode: entry.processingMode } : {}),
     modelId: compactLogValue(entry.modelId),
+    ...(entry.resolvedModelId
+      ? { resolvedModelId: compactLogValue(entry.resolvedModelId) }
+      : {}),
     ...(entry.effort ? { effort: compactLogValue(entry.effort, 100) } : {}),
     provider: compactLogValue(entry.provider, 200),
     route: entry.route,
@@ -460,6 +473,7 @@ export function writeInferenceResponseLifecycleLog(
   entry: InferenceResponseLifecycleLogEntry,
 ): void {
   const claudeSessionId = safeClaudeSessionId(entry.claudeSessionId);
+  const accountId = compactLogValue(entry.accountId ?? '', 100);
   const statusCode = nonNegativeInteger(entry.statusCode);
   const durationMs = nonNegativeInteger(entry.durationMs);
   const timeToFirstByteMs = nonNegativeInteger(entry.timeToFirstByteMs);
@@ -480,7 +494,12 @@ export function writeInferenceResponseLifecycleLog(
     event: entry.event,
     requestId: compactLogValue(entry.requestId, 100),
     ...(claudeSessionId ? { claudeSessionId } : {}),
+    ...(accountId ? { accountId } : {}),
+    ...(entry.processingMode ? { processingMode: entry.processingMode } : {}),
     modelId: compactLogValue(entry.modelId),
+    ...(entry.resolvedModelId
+      ? { resolvedModelId: compactLogValue(entry.resolvedModelId) }
+      : {}),
     provider: compactLogValue(entry.provider, 200),
     route: entry.route,
     ...(statusCode !== undefined ? { statusCode } : {}),

@@ -1,11 +1,15 @@
 import type { InferenceTraceEvent } from '../trace-log.js';
+import { normalizeApiProcessingMode, type ApiProcessingMode } from './api-pricing.js';
 import { DaemonMetricsStore, hashSessionId } from './metrics.js';
 import { DaemonSessionRegistry } from './session-registry.js';
 
 interface PendingUsage {
   requestId: string;
   sessionHash?: string;
+  accountId?: string;
+  processingMode: ApiProcessingMode;
   modelId: string;
+  metricModelId: string;
   provider: string;
   inputTokens: number;
   cachedInputTokens: number;
@@ -49,7 +53,10 @@ export class DaemonInferenceCollector {
       this.pending.set(requestId, {
         requestId,
         sessionHash,
+        accountId: entry.accountId,
+        processingMode: normalizeApiProcessingMode(entry.processingMode),
         modelId: entry.modelId,
+        metricModelId: entry.resolvedModelId ?? entry.modelId,
         provider: entry.provider,
         inputTokens: 0,
         cachedInputTokens: 0,
@@ -73,13 +80,21 @@ export class DaemonInferenceCollector {
       const usage = this.pending.get(requestId) ?? {
         requestId,
         sessionHash,
+        accountId: entry.accountId,
+        processingMode: normalizeApiProcessingMode(entry.processingMode),
         modelId: entry.modelId,
+        metricModelId: entry.resolvedModelId ?? entry.modelId,
         provider: entry.provider,
         inputTokens: 0,
         cachedInputTokens: 0,
         cacheWriteTokens: 0,
         outputTokens: 0,
       };
+      usage.accountId ??= entry.accountId;
+      if (entry.processingMode) {
+        usage.processingMode = normalizeApiProcessingMode(entry.processingMode);
+      }
+      usage.metricModelId = entry.resolvedModelId ?? usage.metricModelId;
       usage.inputTokens = Math.max(usage.inputTokens, entry.inputTokens ?? 0);
       usage.cachedInputTokens = Math.max(
         usage.cachedInputTokens,
@@ -187,7 +202,9 @@ export class DaemonInferenceCollector {
       timestamp: now.toISOString(),
       requestId: usage.requestId,
       sessionHash: usage.sessionHash,
-      modelId: usage.modelId,
+      accountId: usage.accountId,
+      processingMode: usage.processingMode,
+      modelId: usage.metricModelId,
       provider: usage.provider,
       inputTokens: usage.inputTokens,
       cachedInputTokens: usage.cachedInputTokens,

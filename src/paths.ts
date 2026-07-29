@@ -61,6 +61,10 @@ export function getDaemonMetricsPath(env: HomeEnv = process.env): string {
   return join(getAppHome(env), 'daemon-metrics.jsonl');
 }
 
+export function getDaemonMetricsDbPath(env: HomeEnv = process.env): string {
+  return join(getAppHome(env), 'daemon-metrics.sqlite');
+}
+
 export function getDaemonAccountsPath(env: HomeEnv = process.env): string {
   return join(getAppHome(env), 'accounts.json');
 }

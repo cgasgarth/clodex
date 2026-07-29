@@ -79,6 +79,34 @@ describe('DaemonAccountService launch tickets', () => {
       .rejects.toThrow('OAuth credential is unavailable for managed OpenAI account');
   });
 
+  it('tags resolved routes with the pinned local account for metrics', async () => {
+    const store = new DaemonAccountStore(
+      { CLODEX_HOME: root },
+      join(root, 'accounts.json'),
+    );
+    const account = store.add({ label: 'One', authRef: 'keyring:one' });
+    const service = new DaemonAccountService(store, {
+      resolveCredential: async () => 'account-token',
+    });
+    const launch = service.createLaunchTicket(account.id);
+    const route = {
+      aliasId: 'claude-sol',
+      realModelId: 'gpt-5.6-sol',
+      displayName: 'Sol',
+      upstreamUrl: 'https://example.test',
+      apiKey: 'boot-token',
+      modelFormat: 'openai' as const,
+      providerId: 'openai-oauth',
+      authType: 'oauth' as const,
+    };
+
+    await expect(service.routeForTicket(route, launch!.ticket))
+      .resolves.toEqual(expect.objectContaining({
+        apiKey: 'account-token',
+        metricsAccountId: account.id,
+      }));
+  });
+
   it('returns no ticket when no managed OAuth account exists', () => {
     const store = new DaemonAccountStore(
       { CLODEX_HOME: root },

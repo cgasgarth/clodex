@@ -60,6 +60,7 @@ import { resolveOpenAiCompactionThreshold } from './oauth/responses-compaction.j
 import { resolveContextWindow } from './context-window.js';
 import { getOrCreateProxyToken } from './proxy-token.js';
 import { BunHttpResponse } from './bun-http-response.js';
+import type { ApiProcessingMode } from './daemon/api-pricing.js';
 
 type ProxyLog = (message: string | (() => string)) => void;
 
@@ -83,6 +84,9 @@ function createTranslationLifecycle(
   modelId: string,
   provider: string,
   ownsResponseLifecycle = false,
+  accountId?: string,
+  processingMode: ApiProcessingMode = 'standard',
+  resolvedModelId?: string,
 ) {
   if (!logPath || !requestId) return undefined;
 
@@ -104,7 +108,10 @@ function createTranslationLifecycle(
     event,
     requestId,
     claudeSessionId,
+    accountId,
+    processingMode,
     modelId,
+    resolvedModelId,
     provider,
     route: 'translated',
     ...extra,
@@ -273,6 +280,8 @@ export interface ProxyRoute {
   providerId?: string;
   authType?: 'api' | 'oauth' | 'none';
   oauthAccountId?: string;
+  /** Local managed-account id used only for privacy-minimal daemon metrics. */
+  metricsAccountId?: string;
   providerData?: Record<string, unknown>;
   /** Resolves the current OAuth token before dispatch and once more after an upstream HTTP 401. */
   refreshToken?: (rejectedAccessToken?: string) => Promise<string | null>;
@@ -631,11 +640,18 @@ export async function startProxyCatalog(
         const claudeSessionIdHeader = req.headers.get('x-claude-code-session-id') ?? undefined;
         const claudeAgentIdHeader = req.headers.get('x-claude-code-agent-id') ?? undefined;
         const claudeSessionId = extractClaudeSessionId(anthropicBody, claudeSessionIdHeader);
+        // Current requests use Standard processing. The metrics pipeline also
+        // accepts `fast`; the session-scoped /fast transport work will set this
+        // from the actual outbound service tier when it enables Priority.
+        const processingMode: ApiProcessingMode = 'standard';
         if (inferenceLogPath && !forwardedRequestId) {
           writeInferenceRequestLog(inferenceLogPath, {
             requestId: relayRequestId,
             claudeSessionId,
+            accountId: route.metricsAccountId,
+            processingMode,
             modelId: typeof originalModel === 'string' ? originalModel : 'unknown',
+            resolvedModelId: route.realModelId,
             effort: anthropicEffortFromRequest(anthropicBody),
             provider: route.providerId ?? route.aliasId.split(':')[1] ?? 'unknown',
             route: 'translated',
@@ -649,6 +665,9 @@ export async function startProxyCatalog(
           originalModel,
           route.providerId ?? route.aliasId.split(':')[1] ?? 'unknown',
           !forwardedRequestId,
+          route.metricsAccountId,
+          processingMode,
+          route.realModelId,
         );
         const runSdkRequest = async (): Promise<void> => {
           const estimatedInputTokens = estimateAnthropicInputTokens(anthropicBody);
