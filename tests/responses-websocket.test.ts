@@ -5315,7 +5315,7 @@ describe('createResponsesWebSocketFetch', () => {
     expect(sent.input.at(-1)).toEqual(toolOutput);
     expect(sent.input).not.toEqual([...root, echoedCall, toolOutput]);
     emitTextResponse(replacement, 'resp_spark_recovered', 'done', {
-      input_tokens: 30,
+      input_tokens: 108_000,
       input_tokens_details: { cached_tokens: 20, cache_write_tokens: 3 },
       output_tokens: 5,
     });
@@ -5325,7 +5325,7 @@ describe('createResponsesWebSocketFetch', () => {
       .map(frame => JSON.parse(frame.replace(/^data: /, '')));
     expect(events.find(event => event.type === 'response.completed')?.response.usage)
       .toMatchObject({
-        input_tokens: 120,
+        input_tokens: 108_090,
         output_tokens: 15,
         input_tokens_details: { cached_tokens: 100, cache_write_tokens: 5 },
       });
@@ -5335,6 +5335,37 @@ describe('createResponsesWebSocketFetch', () => {
       reason: 'known_oversized',
       source: 'live_head',
     }));
+
+    const echoedRecoveredAssistant = {
+      role: 'assistant',
+      content: [{ type: 'output_text', text: 'done' }],
+    };
+    const nextUser = {
+      role: 'user',
+      content: [{ type: 'input_text', text: 'continue after recovery' }],
+    };
+    const third = await withResponsesWebSocketDiagnosticContext(
+      { estimatedInputTokens: 155_000, claudeAgentId: 'workflow-spark-a' },
+      () => wsFetch('https://example.test/responses', {
+        method: 'POST',
+        headers: {},
+        body: JSON.stringify(sessionPayload(
+          [...root, echoedCall, toolOutput, echoedRecoveredAssistant, nextUser],
+          { model: 'gpt-5.3-codex-spark' },
+        )),
+      }),
+    );
+    expect(compactFetch).toHaveBeenCalledOnce();
+    expect(replacement.send).toHaveBeenCalledTimes(2);
+    const continued = JSON.parse(replacement.send.mock.calls[1]![0] as string);
+    expect(continued.previous_response_id).toBe('resp_spark_recovered');
+    expect(continued.input).toEqual([nextUser]);
+    emitTextResponse(replacement, 'resp_spark_continued', 'continued', {
+      input_tokens: 108_100,
+      output_tokens: 5,
+    });
+    await readAll(third);
+    expect(compactFetch).toHaveBeenCalledOnce();
   });
 
   it('does not resend an oversized window after the compact endpoint rejects it', async () => {

@@ -21,6 +21,7 @@ import {
   type ResponsesCompactionUsage,
 } from './responses-compaction.js';
 import {
+  approximateResponsesItemsTokens,
   estimatedRebasedInputTokens,
   planResponsesOverflowRecovery,
   type OverflowRecoveryCandidate,
@@ -2673,6 +2674,21 @@ export function createResponsesWebSocketFetch(
     };
 
     const recoverySources = overflowSources();
+    const liveContinuationEstimatedTokens = (
+      selected?.responseId
+      && selectedMatch
+      && selected.lastInputTokens !== undefined
+    )
+      ? selected.lastInputTokens + approximateResponsesItemsTokens([
+        ...(selected.expectedAssistant ?? []),
+        ...selectedMatch.delta,
+      ])
+      : undefined;
+    const liveContinuationFitsContext = (
+      contextWindow !== undefined
+      && liveContinuationEstimatedTokens !== undefined
+      && liveContinuationEstimatedTokens < contextWindow
+    );
 
     const compactOverflowCandidate = async (
       candidate: OverflowRecoveryCandidate,
@@ -2823,6 +2839,7 @@ export function createResponsesWebSocketFetch(
       && contextWindow !== undefined
       && estimatedInputTokens !== undefined
       && estimatedInputTokens >= contextWindow
+      && !liveContinuationFitsContext
     ) {
       if (!await runOverflowRecovery('known_oversized')) {
         terminalOverflowReason = 'No dependency-safe native compaction prefix could recover the oversized request';
@@ -2870,6 +2887,7 @@ export function createResponsesWebSocketFetch(
             threshold: compactThreshold,
             measuredInputTokens,
             estimatedInputTokens,
+            liveContinuationEstimatedTokens,
             sourceItems: inputArray(payload).length,
             retainedItems: compactedInput.length - result.output.length,
             compactedItems: result.output.length,
