@@ -362,6 +362,7 @@ describe('createLanguageModel', () => {
       authType: 'oauth',
       oauthAccountId: 'acct-transport-threshold',
       openAiCompactThreshold: 244_800,
+      openAiContextWindow: 272_000,
     });
 
     expect(createResponsesWebSocketFetch).toHaveBeenCalledWith(
@@ -370,6 +371,7 @@ describe('createLanguageModel', () => {
       expect.objectContaining({
         accountId: 'acct-transport-threshold',
         compactThreshold: 244_800,
+        contextWindow: 272_000,
         checkpointStoreDir: expect.any(String),
       }),
     );

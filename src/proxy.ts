@@ -686,6 +686,9 @@ export async function startProxyCatalog(
             openAiCompactThreshold: openAiOAuth
               ? resolveOpenAiCompactionThreshold(route.contextWindow)
               : undefined,
+            openAiContextWindow: openAiOAuth
+              ? resolveContextWindow(route.realModelId, route.contextWindow)
+              : undefined,
             onDebug: (msg: string) => plog(() => msg),
             onWebSocketDiagnostic: webSocketDiagnosticsLogPath
               ? event => writeWebSocketDiagnosticLog(webSocketDiagnosticsLogPath, event)

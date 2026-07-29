@@ -5235,4 +5235,374 @@ describe('createResponsesWebSocketFetch', () => {
     expect(responsesWebSocketPromptFingerprint({ model: 'm', tools: [{ name: 'x', parameters: { b: 2, a: 1 } }], input: ['a'] }))
       .toBe(responsesWebSocketPromptFingerprint({ tools: [{ parameters: { a: 1, b: 2 }, name: 'x' }], model: 'm', input: ['different'] }));
   });
+
+  it('rebases a known-oversized Spark tool turn without dispatching the full history', async () => {
+    const diagnostics: ResponsesWebSocketDiagnosticEvent[] = [];
+    const canonical = [{ type: 'compaction', encrypted_content: 'spark-prefix' }];
+    const compactFetch = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body));
+      expect(body.input).toEqual(root);
+      return new Response(JSON.stringify({
+        output: canonical,
+        usage: {
+          input_tokens: 90,
+          input_tokens_details: { cached_tokens: 80, cache_write_tokens: 2 },
+          output_tokens: 10,
+        },
+      }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    });
+    const wsFetch = createResponsesWebSocketFetch(WS_URL, undefined, {
+      accountId: 'acct-spark-overflow',
+      compactThreshold: 115_200,
+      contextWindow: 128_000,
+      compactFetch: compactFetch as typeof fetch,
+      onDiagnostic: event => diagnostics.push(event),
+    });
+    const root = [{
+      role: 'user',
+      content: [{ type: 'input_text', text: 'p'.repeat(350_000) }],
+    }];
+    const first = await withResponsesWebSocketDiagnosticContext(
+      { estimatedInputTokens: 80_000, claudeAgentId: 'workflow-spark-a' },
+      () => wsFetch('https://example.test/responses', {
+        method: 'POST',
+        headers: {},
+        body: JSON.stringify(sessionPayload(root, { model: 'gpt-5.3-codex-spark' })),
+      }),
+    );
+    const original = lastSocket();
+    original.emit('open');
+    emitToolCallResponse(original, 'resp_spark_call', 'call_build', {
+      input_tokens: 90_000,
+      output_tokens: 5,
+    });
+    await readAll(first);
+
+    const echoedCall = {
+      type: 'function_call',
+      call_id: 'call_build',
+      name: 'Bash',
+      arguments: '{"command":"pwd"}',
+    };
+    const toolOutput = {
+      type: 'function_call_output',
+      call_id: 'call_build',
+      output: 'x'.repeat(200_000),
+    };
+    const second = await withResponsesWebSocketDiagnosticContext(
+      { estimatedInputTokens: 140_713, claudeAgentId: 'workflow-spark-a' },
+      () => wsFetch('https://example.test/responses', {
+        method: 'POST',
+        headers: {},
+        body: JSON.stringify(sessionPayload(
+          [...root, echoedCall, toolOutput],
+          { model: 'gpt-5.3-codex-spark' },
+        )),
+      }),
+    );
+
+    expect(compactFetch).toHaveBeenCalledOnce();
+    expect(original.send).toHaveBeenCalledTimes(1);
+    const replacement = lastSocket();
+    expect(replacement).not.toBe(original);
+    replacement.emit('open');
+    const sent = JSON.parse(replacement.send.mock.calls[0]![0] as string);
+    expect(sent.previous_response_id).toBeUndefined();
+    expect(sent.input[0]).toEqual(canonical[0]);
+    expect(sent.input.at(-1)).toEqual(toolOutput);
+    expect(sent.input).not.toEqual([...root, echoedCall, toolOutput]);
+    emitTextResponse(replacement, 'resp_spark_recovered', 'done', {
+      input_tokens: 30,
+      input_tokens_details: { cached_tokens: 20, cache_write_tokens: 3 },
+      output_tokens: 5,
+    });
+    const events = (await readAll(second))
+      .split('\n\n')
+      .filter(Boolean)
+      .map(frame => JSON.parse(frame.replace(/^data: /, '')));
+    expect(events.find(event => event.type === 'response.completed')?.response.usage)
+      .toMatchObject({
+        input_tokens: 120,
+        output_tokens: 15,
+        input_tokens_details: { cached_tokens: 100, cache_write_tokens: 5 },
+      });
+    expect(diagnostics).toContainEqual(expect.objectContaining({
+      event: 'ws_overflow_recovery',
+      outcome: 'completed',
+      reason: 'known_oversized',
+      source: 'live_head',
+    }));
+  });
+
+  it('does not resend an oversized window after the compact endpoint rejects it', async () => {
+    const canonical = [{ type: 'compaction', encrypted_content: 'fallback-prefix' }];
+    const compactBodies: unknown[][] = [];
+    const compactFetch = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body));
+      compactBodies.push(body.input);
+      if (compactBodies.length === 1) {
+        return new Response(JSON.stringify({
+          error: {
+            type: 'invalid_request_error',
+            code: 'context_length_exceeded',
+            message: 'maximum context length exceeded',
+          },
+        }), {
+          status: 400,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      return new Response(JSON.stringify({ output: canonical }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    });
+    const wsFetch = createResponsesWebSocketFetch(WS_URL, undefined, {
+      accountId: 'acct-compact-400-recovery',
+      compactThreshold: 115_200,
+      contextWindow: 128_000,
+      compactFetch: compactFetch as typeof fetch,
+    });
+    const root = [{ role: 'user', content: [{ type: 'input_text', text: 'first' }] }];
+    const first = await wsFetch('https://example.test/responses', {
+      method: 'POST',
+      headers: {},
+      body: JSON.stringify(sessionPayload(root)),
+    });
+    const original = lastSocket();
+    original.emit('open');
+    emitToolCallResponse(original, 'resp_compact_400_base', 'call_400', {
+      input_tokens: 110_000,
+      output_tokens: 5,
+    });
+    await readAll(first);
+
+    const echoedCall = {
+      type: 'function_call',
+      call_id: 'call_400',
+      name: 'Bash',
+      arguments: '{"command":"pwd"}',
+    };
+    const toolOutput = {
+      type: 'function_call_output',
+      call_id: 'call_400',
+      output: 'large result',
+    };
+    const nextPromise = withResponsesWebSocketDiagnosticContext(
+      { estimatedInputTokens: 120_000 },
+      () => wsFetch('https://example.test/responses', {
+        method: 'POST',
+        headers: {},
+        body: JSON.stringify(sessionPayload([...root, echoedCall, toolOutput])),
+      }),
+    );
+    await vi.waitFor(() => expect(original.send).toHaveBeenCalledTimes(2));
+    original.emit('message', Buffer.from(JSON.stringify({
+      type: 'error',
+      error: {
+        type: 'invalid_request_error',
+        code: 'context_length_exceeded',
+        message: 'trigger exceeds maximum context length',
+      },
+    })));
+    const next = await nextPromise;
+
+    expect(compactBodies).toHaveLength(2);
+    expect(compactBodies[0]).toEqual([...root, echoedCall, toolOutput]);
+    expect(compactBodies[1]).toEqual(root);
+    const replacement = lastSocket();
+    replacement.emit('open');
+    const sent = JSON.parse(replacement.send.mock.calls[0]![0] as string);
+    expect(sent.input[0]).toEqual(canonical[0]);
+    expect(sent.input.at(-1)).toEqual(toolOutput);
+    expect(sent.input).not.toEqual(compactBodies[0]);
+    emitTextResponse(replacement, 'resp_compact_400_recovered', 'done');
+    await readAll(next);
+  });
+
+  it('recovers one upstream context rejection before output and never replays after output', async () => {
+    const canonical = [{ type: 'compaction', encrypted_content: 'response-recovery' }];
+    const compactFetch = vi.fn(async () => new Response(JSON.stringify({
+      output: canonical,
+    }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    }));
+    const wsFetch = createResponsesWebSocketFetch(WS_URL, undefined, {
+      accountId: 'acct-response-overflow',
+      compactThreshold: 115_200,
+      contextWindow: 128_000,
+      compactFetch: compactFetch as typeof fetch,
+    });
+    const root = [{ role: 'user', content: [{ type: 'input_text', text: 'first' }] }];
+    const first = await wsFetch('https://example.test/responses', {
+      method: 'POST',
+      headers: {},
+      body: JSON.stringify(sessionPayload(root)),
+    });
+    const original = lastSocket();
+    original.emit('open');
+    emitToolCallResponse(original, 'resp_response_overflow_base', 'call_response', {
+      input_tokens: 90_000,
+      output_tokens: 5,
+    });
+    await readAll(first);
+
+    const echoedCall = {
+      type: 'function_call',
+      call_id: 'call_response',
+      name: 'Bash',
+      arguments: '{"command":"pwd"}',
+    };
+    const toolOutput = {
+      type: 'function_call_output',
+      call_id: 'call_response',
+      output: 'result',
+    };
+    const next = await withResponsesWebSocketDiagnosticContext(
+      { estimatedInputTokens: 100_000 },
+      () => wsFetch('https://example.test/responses', {
+        method: 'POST',
+        headers: {},
+        body: JSON.stringify(sessionPayload([...root, echoedCall, toolOutput])),
+      }),
+    );
+    original.emit('message', Buffer.from(JSON.stringify({
+      type: 'error',
+      error: {
+        type: 'invalid_request_error',
+        code: 'context_length_exceeded',
+        message: 'maximum context length exceeded',
+      },
+    })));
+    await vi.waitFor(() => expect(fakeSockets.length).toBe(2));
+    const replacement = lastSocket();
+    replacement.emit('open');
+    emitTextResponse(replacement, 'resp_response_overflow_recovered', 'done');
+    await readAll(next);
+    expect(compactFetch).toHaveBeenCalledOnce();
+
+    const noReplayFetch = createResponsesWebSocketFetch(WS_URL, undefined, {
+      accountId: 'acct-response-overflow-no-replay',
+      compactThreshold: 115_200,
+      contextWindow: 128_000,
+      compactFetch: compactFetch as typeof fetch,
+    });
+    const terminal = await withResponsesWebSocketDiagnosticContext(
+      { estimatedInputTokens: 10_000 },
+      () => noReplayFetch('https://example.test/responses', {
+        method: 'POST',
+        headers: {},
+        body: JSON.stringify(sessionPayload(root)),
+      }),
+    );
+    const partialSocket = lastSocket();
+    partialSocket.emit('open');
+    partialSocket.emit('message', Buffer.from(JSON.stringify({
+      type: 'response.output_text.delta',
+      item_id: 'msg_partial',
+      delta: 'partial',
+    })));
+    partialSocket.emit('message', Buffer.from(JSON.stringify({
+      type: 'error',
+      error: {
+        type: 'invalid_request_error',
+        code: 'context_length_exceeded',
+        message: 'maximum context length exceeded',
+      },
+    })));
+    await readAll(terminal);
+    expect(compactFetch).toHaveBeenCalledOnce();
+  });
+
+  it('recovers an oversized Workflow tool tail from its durable checkpoint after restart', async () => {
+    mkdirSync(process.env.CLODEX_HOME!, { recursive: true });
+    const checkpointStoreDir = mkdtempSync(join(
+      process.env.CLODEX_HOME!,
+      'overflow-restart-checkpoints-',
+    ));
+    const firstCanonical = [{ type: 'compaction', encrypted_content: 'before-restart' }];
+    const secondCanonical = [{ type: 'compaction', encrypted_content: 'after-restart' }];
+    const compactBodies: unknown[][] = [];
+    const compactFetch = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body));
+      compactBodies.push(body.input);
+      return new Response(JSON.stringify({
+        output: compactBodies.length === 1 ? firstCanonical : secondCanonical,
+      }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    });
+    const options = {
+      accountId: 'acct-overflow-restart',
+      compactThreshold: 115_200,
+      contextWindow: 128_000,
+      checkpointStoreDir,
+      compactFetch: compactFetch as typeof fetch,
+    };
+    const root = [{
+      role: 'user',
+      content: [{ type: 'input_text', text: 'p'.repeat(400_000) }],
+    }];
+    const beforeRestartFetch = createResponsesWebSocketFetch(WS_URL, undefined, options);
+    const first = await withResponsesWebSocketDiagnosticContext(
+      { estimatedInputTokens: 120_000, claudeAgentId: 'workflow-restart' },
+      () => beforeRestartFetch('https://example.test/responses', {
+        method: 'POST',
+        headers: {},
+        body: JSON.stringify(sessionPayload(root, { model: 'gpt-5.3-codex-spark' })),
+      }),
+    );
+    const firstSocket = lastSocket();
+    firstSocket.emit('open');
+    emitToolCallResponse(firstSocket, 'resp_overflow_before_restart', 'call_restart', {
+      input_tokens: 90_000,
+      output_tokens: 5,
+    });
+    await readAll(first);
+    expect(readdirSync(checkpointStoreDir)).toHaveLength(1);
+
+    resetResponsesWebSocketConnectionsForTests();
+    fakeSockets.length = 0;
+    const afterRestartFetch = createResponsesWebSocketFetch(WS_URL, undefined, options);
+    const echoedCall = {
+      type: 'function_call',
+      call_id: 'call_restart',
+      name: 'Bash',
+      arguments: '{"command":"pwd"}',
+    };
+    const toolOutput = {
+      type: 'function_call_output',
+      call_id: 'call_restart',
+      output: 'x'.repeat(200_000),
+    };
+    const afterRestart = await withResponsesWebSocketDiagnosticContext(
+      { estimatedInputTokens: 150_000, claudeAgentId: 'workflow-restart' },
+      () => afterRestartFetch('https://example.test/responses', {
+        method: 'POST',
+        headers: {},
+        body: JSON.stringify(sessionPayload(
+          [...root, echoedCall, toolOutput],
+          { model: 'gpt-5.3-codex-spark' },
+        )),
+      }),
+    );
+
+    expect(compactBodies).toHaveLength(2);
+    expect(compactBodies[0]).toEqual(root);
+    expect(compactBodies[1]).toEqual(firstCanonical);
+    const recoveredSocket = lastSocket();
+    recoveredSocket.emit('open');
+    const sent = JSON.parse(recoveredSocket.send.mock.calls[0]![0] as string);
+    expect(sent.previous_response_id).toBeUndefined();
+    expect(sent.input[0]).toEqual(secondCanonical[0]);
+    expect(sent.input.at(-1)).toEqual(toolOutput);
+    emitTextResponse(recoveredSocket, 'resp_overflow_after_restart', 'done');
+    await readAll(afterRestart);
+    rmSync(checkpointStoreDir, { recursive: true, force: true });
+  });
 });

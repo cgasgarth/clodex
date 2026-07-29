@@ -761,6 +761,9 @@ async function getOrInitLanguageModel(
       openAiCompactThreshold: model.authType === 'oauth'
         ? resolveOpenAiCompactionThreshold(model.contextWindow)
         : undefined,
+      openAiContextWindow: model.authType === 'oauth'
+        ? resolveContextWindow(upstreamModelId(model), model.contextWindow)
+        : undefined,
       onWebSocketDiagnostic: webSocketDiagnosticsLogPath
         ? event => writeWebSocketDiagnosticLog(webSocketDiagnosticsLogPath, event)
         : undefined,

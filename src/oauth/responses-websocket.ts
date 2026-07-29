@@ -21,6 +21,12 @@ import {
   type ResponsesCompactionUsage,
 } from './responses-compaction.js';
 import {
+  estimatedRebasedInputTokens,
+  planResponsesOverflowRecovery,
+  type OverflowRecoveryCandidate,
+  type OverflowRecoverySource,
+} from './responses-overflow-recovery.js';
+import {
   deleteStoredResponsesCheckpoint,
   loadStoredResponsesCheckpoints,
   saveStoredResponsesCheckpoint,
@@ -55,6 +61,8 @@ export interface ResponsesWebSocketFetchOptions {
   maxNurseryConnections?: number;
   /** Opt-in token threshold for native compaction. */
   compactThreshold?: number;
+  /** Hard model context window. Known-oversized requests are never dispatched. */
+  contextWindow?: number;
   /** Test seam for the unary compact request. */
   compactFetch?: typeof fetch;
   /** Test seam; production uses Bun's native WebSocket client. */
@@ -137,6 +145,9 @@ interface RequestContext {
   pendingEvents: unknown[];
   emittedModelData: boolean;
   transportRetryPending: boolean;
+  overflowRecoveryPending: boolean;
+  overflowRetried: boolean;
+  recoverContextOverflow?: (entry: ConnectionEntry, ctx: RequestContext) => Promise<void>;
   outputByIndex: Map<number, OutputAccumulator>;
   outputIndexByItemId: Map<string, number>;
   reasoningPartsByItemId: Map<string, Map<number, ReasoningPartState>>;
@@ -1229,6 +1240,14 @@ function responseErrorMessage(event: unknown): string | undefined {
   return undefined;
 }
 
+function responseIsContextLengthError(event: unknown): boolean {
+  const code = responseErrorCode(event)?.toLowerCase() ?? '';
+  const type = responseErrorType(event)?.toLowerCase() ?? '';
+  const message = responseErrorMessage(event) ?? '';
+  return /context_length|context_window/.test(`${code} ${type}`)
+    || /context_length_exceeded|maximum context length|prompt is too long/i.test(message);
+}
+
 function boundedDiagnosticIdentifier(value: unknown): string | undefined {
   if (typeof value !== 'string') return undefined;
   const normalized = value.trim();
@@ -1771,6 +1790,14 @@ function handleTransportFailure(
   message: string,
   diagnosticDetails: Record<string, unknown>,
 ): void {
+  if (ctx.overflowRecoveryPending && !ctx.closed && entry.current === ctx) {
+    emitContextDiagnostic(entry, ctx, {
+      event: 'ws_overflow_recovery',
+      outcome: 'transport_closed_during_recovery',
+      ...diagnosticDetails,
+    });
+    return;
+  }
   if (retryTransportFailure(entry, ctx, diagnosticDetails)) return;
   if (ctx.closed || entry.current !== ctx) return;
   if (ctx.retried && ctx.frameCount === 0 && !ctx.emittedModelData) {
@@ -1952,6 +1979,7 @@ function resetContextForRetry(ctx: RequestContext): void {
   ctx.sendPayload = ctx.retryPayload ?? ctx.originalPayload;
   ctx.pendingEvents = [];
   ctx.emittedModelData = false;
+  ctx.frameCount = 0;
   ctx.responseId = undefined;
   ctx.responseUsage = undefined;
   ctx.modelResponseUsage = undefined;
@@ -1965,6 +1993,7 @@ function resetContextForRetry(ctx: RequestContext): void {
 function handleSocketMessage(entry: ConnectionEntry, data: RawData): void {
   const ctx = entry.current;
   if (!ctx || ctx.closed) return;
+  if (ctx.overflowRecoveryPending) return;
   const text = Array.isArray(data) ? Buffer.concat(data).toString('utf8') : data.toString('utf8');
   ctx.frameCount += 1;
   if (ctx.transportRetryPending) {
@@ -2011,6 +2040,11 @@ function handleSocketMessage(entry: ConnectionEntry, data: RawData): void {
   const errorCode = responseErrorCode(event);
   const previousMissing = errorCode === 'previous_response_not_found';
   const willRetry = previousMissing && ctx.continued && !ctx.retried && !ctx.emittedModelData;
+  const willRecoverOverflow = responseIsContextLengthError(event)
+    && !ctx.emittedModelData
+    && !ctx.overflowRetried
+    && !ctx.overflowRecoveryPending
+    && ctx.recoverContextOverflow !== undefined;
   if (errorCode === 'websocket_connection_limit_reached' && !ctx.emittedModelData) {
     const retryAfterSeconds = clampRetryAfterSeconds(responseRetryAfterSeconds(event));
     failContext(
@@ -2045,13 +2079,24 @@ function handleSocketMessage(entry: ConnectionEntry, data: RawData): void {
   // One rejection, one diagnostic record. Without this gate a rejected request
   // emits both this record and `failContext`'s, under different `source` values
   // with disjoint fields, reading as two failures of one request.
-  if (FAILURE_EVENT_TYPES.has(type ?? '') && (errorStatus === undefined || willRetry)) {
+  if (
+    FAILURE_EVENT_TYPES.has(type ?? '')
+    && (errorStatus === undefined || willRetry || willRecoverOverflow)
+  ) {
     emitResponseErrorDiagnostic(entry, ctx, {
       source: 'response_event',
       upstreamEventType: type,
-      willRetry,
+      willRetry: willRetry || willRecoverOverflow,
+      retryReason: willRecoverOverflow
+        ? 'overflow_rebase'
+        : willRetry ? 'previous_response_missing' : undefined,
       ...responseFailureDetails(event),
     });
+  }
+  if (willRecoverOverflow) {
+    ctx.overflowRecoveryPending = true;
+    void ctx.recoverContextOverflow!(entry, ctx);
+    return;
   }
   if (willRetry) {
     ctx.retried = true;
@@ -2372,6 +2417,8 @@ export function createResponsesWebSocketFetch(
             pendingEvents: [],
             emittedModelData: false,
             transportRetryPending: false,
+            overflowRecoveryPending: false,
+            overflowRetried: false,
             outputByIndex: new Map(),
             outputIndexByItemId: new Map(),
             reasoningPartsByItemId: new Map(),
@@ -2547,6 +2594,7 @@ export function createResponsesWebSocketFetch(
     let decision:
       | 'continuation'
       | 'compaction_new_head'
+      | 'overflow_rebase_new_head'
       | 'compaction_trigger_new_head'
       | 'claude_compaction_checkpoint'
       | 'compaction_checkpoint'
@@ -2579,11 +2627,214 @@ export function createResponsesWebSocketFetch(
     let compactionUsage: ResponsesCompactionUsage | undefined;
     let failedTriggerCompactedInput: unknown[] | undefined;
     let failedTriggerUsage: ResponsesCompactionUsage | undefined;
+    let terminalOverflowReason: string | undefined;
+    const contextWindow = options.contextWindow;
+    const attemptedOverflowPrefixes = new Set<string>();
+
+    const overflowSources = (): OverflowRecoverySource[] => {
+      const sources: OverflowRecoverySource[] = [];
+      if (
+        selected
+        && selectedMatch
+        && selected.requestInput
+        && selected.expectedAssistant
+      ) {
+        const assistantCount = selected.expectedAssistant.length;
+        const prefix = selected.compactedInput && selected.compactedInput.length >= assistantCount
+          ? selected.compactedInput.slice(0, selected.compactedInput.length - assistantCount)
+          : selected.requestInput;
+        sources.push({
+          kind: 'live_head',
+          prefix,
+          tail: [...selected.expectedAssistant, ...selectedMatch.delta],
+          prefixInputTokens: selected.lastInputTokens,
+        });
+      }
+      if (selectedCheckpoint && checkpointMatch) {
+        const assistantCount = selectedCheckpoint.expectedAssistantHashes.length;
+        if (selectedCheckpoint.compactedInput.length >= assistantCount) {
+          sources.push({
+            kind: 'checkpoint',
+            prefix: selectedCheckpoint.compactedInput.slice(
+              0,
+              selectedCheckpoint.compactedInput.length - assistantCount,
+            ),
+            tail: [
+              ...selectedCheckpoint.compactedInput.slice(
+                selectedCheckpoint.compactedInput.length - assistantCount,
+              ),
+              ...checkpointMatch.delta,
+            ],
+            prefixInputTokens: selectedCheckpoint.lastInputTokens,
+          });
+        }
+      }
+      return sources;
+    };
+
+    const recoverySources = overflowSources();
+
+    const compactOverflowCandidate = async (
+      candidate: OverflowRecoveryCandidate,
+      reason: 'known_oversized' | 'compact_context_rejection' | 'response_context_rejection',
+    ): Promise<boolean> => {
+      if (!contextWindow || attemptedOverflowPrefixes.has(candidate.prefixFingerprint)) return false;
+      attemptedOverflowPrefixes.add(candidate.prefixFingerprint);
+      emitDiagnostic(options, {
+        event: 'ws_overflow_recovery',
+        outcome: 'attempted',
+        reason,
+        source: candidate.source,
+        contextWindow,
+        compactThreshold,
+        prefixItems: candidate.prefix.length,
+        tailItems: candidate.tail.length,
+        estimatedPrefixTokens: candidate.estimatedPrefixTokens,
+        estimatedTailTokens: candidate.estimatedTailTokens,
+        prefixFingerprint: candidate.prefixFingerprint,
+        tailFingerprint: candidate.tailFingerprint,
+        attemptCount: attemptedOverflowPrefixes.size,
+      }, diagnosticCorrelation);
+      try {
+        const result = await compactResponsesWindow({
+          requestUrl,
+          headers,
+          payload: { ...payload, input: candidate.prefix },
+          fetch: options.compactFetch,
+          signal: init?.signal ?? undefined,
+          timeoutMs: options.compactTimeoutMs,
+        });
+        const rebasedInput = [...result.output, ...candidate.tail];
+        if (result.usage) {
+          compactionUsage = compactionUsage
+            ? addResponseUsage(compactionUsage, result.usage)
+            : result.usage;
+        }
+        const estimatedRebasedTokens = estimatedRebasedInputTokens(
+          result.output,
+          candidate.tail,
+          inputArray(payload),
+          estimatedInputTokens,
+          result.usage?.outputTokens,
+        );
+        if (estimatedRebasedTokens >= contextWindow) {
+          emitDiagnostic(options, {
+            event: 'ws_overflow_recovery',
+            outcome: 'candidate_rejected',
+            reason: 'rebased_input_exceeds_context_window',
+            source: candidate.source,
+            contextWindow,
+            estimatedRebasedTokens,
+            prefixFingerprint: candidate.prefixFingerprint,
+          }, diagnosticCorrelation);
+          return false;
+        }
+        sendPayload = { ...payload, input: rebasedInput };
+        delete sendPayload.previous_response_id;
+        retryPayload = sendPayload;
+        compactedInputBase = rebasedInput;
+        supersededEntry = selected && connectionEntries(partitionKey).includes(selected)
+          ? selected
+          : undefined;
+        selected = undefined;
+        continued = false;
+        compacted = true;
+        decision = 'overflow_rebase_new_head';
+        emitDiagnostic(options, {
+          event: 'ws_overflow_recovery',
+          outcome: 'completed',
+          reason,
+          source: candidate.source,
+          contextWindow,
+          compactThreshold,
+          prefixItems: candidate.prefix.length,
+          compactedItems: result.output.length,
+          tailItems: candidate.tail.length,
+          rebasedItems: rebasedInput.length,
+          estimatedRebasedTokens,
+          prefixFingerprint: candidate.prefixFingerprint,
+          tailFingerprint: candidate.tailFingerprint,
+          attemptCount: attemptedOverflowPrefixes.size,
+          ...(result.usage ?? {}),
+        }, diagnosticCorrelation);
+        return true;
+      } catch (error) {
+        const compactError = error instanceof ResponsesCompactionError ? error : undefined;
+        if (compactError?.usage) {
+          compactionUsage = compactionUsage
+            ? addResponseUsage(compactionUsage, compactError.usage)
+            : compactError.usage;
+        }
+        emitDiagnostic(options, {
+          event: 'ws_overflow_recovery',
+          outcome: 'candidate_failed',
+          reason,
+          source: candidate.source,
+          contextWindow,
+          prefixFingerprint: candidate.prefixFingerprint,
+          attemptCount: attemptedOverflowPrefixes.size,
+          errorType: boundedDiagnosticIdentifier(
+            error instanceof Error ? error.name : typeof error,
+          ),
+          statusCode: compactError?.statusCode,
+          failureClass: compactError?.failureClass,
+          errorCode: boundedDiagnosticIdentifier(compactError?.errorCode),
+          providerErrorType: boundedDiagnosticIdentifier(compactError?.errorType),
+          errorFingerprint: compactError?.errorFingerprint,
+        }, diagnosticCorrelation);
+        return false;
+      }
+    };
+
+    const runOverflowRecovery = async (
+      reason: 'known_oversized' | 'compact_context_rejection' | 'response_context_rejection',
+    ): Promise<boolean> => {
+      if (
+        compactThreshold === undefined
+        || contextWindow === undefined
+        || contextWindow <= 0
+      ) return false;
+      const plan = planResponsesOverflowRecovery({
+        fullInput: inputArray(payload),
+        sources: recoverySources,
+        compactThreshold,
+        contextWindow,
+        estimatedInputTokens,
+        maxCandidates: 2,
+      });
+      emitDiagnostic(options, {
+        event: 'ws_overflow_recovery',
+        outcome: plan.candidates.length ? 'planned' : 'unavailable',
+        reason,
+        contextWindow,
+        compactThreshold,
+        estimatedInputTokens,
+        candidateCount: plan.candidates.length,
+        rejected: plan.rejected,
+      }, diagnosticCorrelation);
+      for (const candidate of plan.candidates) {
+        if (await compactOverflowCandidate(candidate, reason)) return true;
+      }
+      return false;
+    };
+
+    if (
+      compactThreshold !== undefined
+      && contextWindow !== undefined
+      && estimatedInputTokens !== undefined
+      && estimatedInputTokens >= contextWindow
+    ) {
+      if (!await runOverflowRecovery('known_oversized')) {
+        terminalOverflowReason = 'No dependency-safe native compaction prefix could recover the oversized request';
+      }
+    }
 
     if (
       compactThreshold !== undefined
       && compactionReason
       && inputArray(payload).length > 0
+      && !compacted
+      && !terminalOverflowReason
     ) {
       if (selected && selectedDelta) {
         const triggerEntry = selected;
@@ -2705,25 +2956,62 @@ export function createResponsesWebSocketFetch(
             ...(usage ?? {}),
           }, diagnosticCorrelation);
         } catch (error) {
-          debug('standalone compaction unavailable; preserving normal response path');
+          const compactError = error instanceof ResponsesCompactionError ? error : undefined;
+          if (compactError?.usage) {
+            compactionUsage = compactionUsage
+              ? addResponseUsage(compactionUsage, compactError.usage)
+              : compactError.usage;
+          }
+          const contextRejected = compactError?.failureClass === 'context_length';
+          debug(contextRejected
+            ? 'standalone compaction rejected oversized input; planning dependency-safe prefix recovery'
+            : 'standalone compaction unavailable; preserving normal response path');
           emitDiagnostic(options, {
             event: 'ws_compaction',
-            outcome: 'fallback',
+            outcome: contextRejected ? 'overflow_recovery' : 'fallback',
             transport: 'responses_compact_endpoint',
             reason: compactionReason,
             threshold: compactThreshold,
+            contextWindow,
             measuredInputTokens,
             estimatedInputTokens,
             errorType: boundedDiagnosticIdentifier(
               error instanceof Error ? error.name : typeof error,
             ),
-            statusCode: error && typeof error === 'object' && 'statusCode' in error
-              && typeof error.statusCode === 'number'
-              ? error.statusCode
-              : undefined,
+            statusCode: compactError?.statusCode,
+            failureClass: compactError?.failureClass,
+            errorCode: boundedDiagnosticIdentifier(compactError?.errorCode),
+            providerErrorType: boundedDiagnosticIdentifier(compactError?.errorType),
+            errorFingerprint: compactError?.errorFingerprint,
           }, diagnosticCorrelation);
+          if (contextRejected && !await runOverflowRecovery('compact_context_rejection')) {
+            terminalOverflowReason =
+              'OpenAI rejected the oversized compact window and no dependency-safe prefix recovery succeeded';
+          }
         }
       }
+    }
+
+    if (terminalOverflowReason) {
+      emitDiagnostic(options, {
+        event: 'ws_overflow_recovery',
+        outcome: 'exhausted',
+        reason: terminalOverflowReason,
+        contextWindow,
+        compactThreshold,
+        estimatedInputTokens,
+        attemptCount: attemptedOverflowPrefixes.size,
+      }, diagnosticCorrelation);
+      return new Response(JSON.stringify({
+        error: {
+          type: 'invalid_request_error',
+          code: 'context_length_exceeded',
+          message: terminalOverflowReason,
+        },
+      }), {
+        status: 400,
+        headers: { 'content-type': 'application/json' },
+      });
     }
 
     if (compacted) {
@@ -2877,6 +3165,7 @@ export function createResponsesWebSocketFetch(
         ? selectedCheckpoint?.connectionId
         : undefined,
       compactThreshold,
+      contextWindow,
       activeConnectionCount: connectionCount(),
       nurseryConnectionCount: connectionCountByGeneration('nursery'),
       establishedConnectionCount: connectionCountByGeneration('established'),
@@ -2961,6 +3250,65 @@ export function createResponsesWebSocketFetch(
       );
     }
 
+    const recoverContextOverflow = async (
+      entry: ConnectionEntry,
+      ctx: RequestContext,
+    ): Promise<void> => {
+      if (ctx.closed || entry.current !== ctx || ctx.emittedModelData || ctx.overflowRetried) return;
+      let recovered = false;
+      try {
+        recovered = await runOverflowRecovery('response_context_rejection');
+      } catch (error) {
+        emitContextDiagnostic(entry, ctx, {
+          event: 'ws_overflow_recovery',
+          outcome: 'internal_failure',
+          reason: 'response_context_rejection',
+          errorType: boundedDiagnosticIdentifier(
+            error instanceof Error ? error.name : typeof error,
+          ),
+        });
+      }
+      if (ctx.closed || entry.current !== ctx) return;
+      if (!recovered || !retryPayload || !compactedInputBase) {
+        ctx.overflowRecoveryPending = false;
+        ctx.overflowRetried = true;
+        failContext(
+          entry,
+          ctx,
+          'OpenAI rejected the request for context length and no dependency-safe native recovery succeeded',
+          {
+            source: 'overflow_recovery',
+            errorCode: 'context_length_exceeded',
+            mappedStatusCode: 400,
+            attemptCount: attemptedOverflowPrefixes.size,
+            contextWindow,
+          },
+          400,
+        );
+        return;
+      }
+
+      ctx.retryPayload = retryPayload;
+      ctx.compactedInputBase = compactedInputBase;
+      ctx.usageOffset = compactionUsage;
+      ctx.supersededEntry = undefined;
+      ctx.overflowRecoveryPending = false;
+      ctx.overflowRetried = true;
+      ctx.retried = true;
+      emitContextDiagnostic(entry, ctx, {
+        event: 'ws_overflow_recovery',
+        outcome: 'replaying',
+        reason: 'response_context_rejection',
+        attemptCount: attemptedOverflowPrefixes.size,
+        contextWindow,
+      });
+      deleteEntry(entry);
+      if (ctx.closed) return;
+      resetContextForRetry(ctx);
+      const replacement = ctx.createReplacement();
+      dispatchContext(replacement, ctx);
+    };
+
     let activeContext: RequestContext | undefined;
     const stream = new ReadableStream<Uint8Array>({
       start(controller) {
@@ -2984,6 +3332,11 @@ export function createResponsesWebSocketFetch(
           pendingEvents: [],
           emittedModelData: false,
           transportRetryPending: false,
+          overflowRecoveryPending: false,
+          overflowRetried: false,
+          recoverContextOverflow: compactThreshold !== undefined && contextWindow !== undefined
+            ? recoverContextOverflow
+            : undefined,
           outputByIndex: new Map(),
           outputIndexByItemId: new Map(),
           reasoningPartsByItemId: new Map(),

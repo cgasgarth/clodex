@@ -116,6 +116,8 @@ export interface ProviderModelSpec {
   preferWebSockets?: boolean;
   /** Native compaction token threshold for OAuth Responses models. */
   openAiCompactThreshold?: number;
+  /** Hard model context window used to prevent known-oversized Responses sends. */
+  openAiContextWindow?: number;
   /** Optional debug logger (wired to the proxy trace log) for transport-level diagnostics. */
   onDebug?: (msg: string) => void;
   /** Optional privacy-safe structured WebSocket diagnostics. */
@@ -212,6 +214,7 @@ export async function createLanguageModel(
                   providerId: spec.providerId ?? 'openai',
                   accountId,
                   compactThreshold: spec.openAiCompactThreshold,
+                  contextWindow: spec.openAiContextWindow,
                   checkpointStoreDir: spec.openAiCompactThreshold !== undefined
                     ? getResponsesCheckpointsPath()
                     : undefined,
