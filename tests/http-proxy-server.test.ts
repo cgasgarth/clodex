@@ -1528,7 +1528,10 @@ describe('selective HTTP proxy', () => {
       await ended;
       res.writeHead(200, { 'Content-Type': 'text/event-stream' });
       res.write('event: message_start\ndata: {"type":"message_start"}\n\n');
-      setImmediate(() => res.destroy(new Error('adapter reset')));
+      // Let the proxy observe the 200 headers before simulating a mid-stream
+      // reset. setImmediate can win the socket race under isolated/CI runs and
+      // turn this into a different waiting-for-headers failure.
+      setTimeout(() => res.destroy(new Error('adapter reset')), 25);
     });
     const adapterPort = await listen(adapterServer);
     const route = {
