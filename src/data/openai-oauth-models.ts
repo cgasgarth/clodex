@@ -45,6 +45,8 @@ const OPENAI_OAUTH_MODEL_SEEDS: OAuthModelSeed[] = [
   { id: 'gpt-5.6-sol',          name: 'GPT-5.6 Sol',       contextWindow: 272_000, reasoning: true },
   { id: 'gpt-5.6-terra',        name: 'GPT-5.6 Terra',     contextWindow: 272_000, reasoning: true },
   { id: 'gpt-5.6-luna',         name: 'GPT-5.6 Luna',      contextWindow: 272_000, reasoning: true, useResponsesLite: true, preferWebSockets: true },
+  // Fast Codex lane
+  { id: 'gpt-5.3-codex-spark',  name: 'GPT-5.3 Codex Spark', contextWindow: 128_000, reasoning: true, preferWebSockets: true },
   // GPT-5.5 family (Pro)
   { id: 'gpt-5.5',              name: 'GPT-5.5',           contextWindow: 272_000, reasoning: true },
   // GPT-5.4 family
