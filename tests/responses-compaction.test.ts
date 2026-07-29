@@ -159,6 +159,45 @@ describe('Responses standalone compaction', () => {
     expect(String(thrown)).toMatch(/error [0-9a-f]{16}/);
   });
 
+  it('classifies a structured context rejection without logging provider prose', async () => {
+    const requestFetch = vi.fn(async () => new Response(JSON.stringify({
+      error: {
+        type: 'invalid_request_error',
+        code: 'context_length_exceeded',
+        message: 'sensitive prompt detail exceeds maximum context length',
+      },
+      usage: {
+        input_tokens: 140_713,
+        input_tokens_details: { cached_tokens: 100_000 },
+        output_tokens: 0,
+      },
+    }), {
+      status: 400,
+      headers: { 'content-type': 'application/json' },
+    }));
+
+    const error = await compactResponsesWindow({
+      requestUrl: 'https://example.test/responses',
+      headers: {},
+      payload: { model: 'gpt-5.3-codex-spark', input: [] },
+      fetch: requestFetch as typeof fetch,
+    }).catch(value => value as ResponsesCompactionError);
+
+    expect(error).toBeInstanceOf(ResponsesCompactionError);
+    expect(error).toMatchObject({
+      statusCode: 400,
+      failureClass: 'context_length',
+      errorCode: 'context_length_exceeded',
+      errorType: 'invalid_request_error',
+      usage: {
+        inputTokens: 140_713,
+        cachedTokens: 100_000,
+        outputTokens: 0,
+      },
+    });
+    expect(String(error)).not.toContain('sensitive prompt detail');
+  });
+
   it('aborts a compact request at its own bounded timeout', async () => {
     const requestFetch = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => (
       await new Promise<Response>((_resolve, reject) => {

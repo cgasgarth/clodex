@@ -42,15 +42,48 @@ export interface CompactResponsesWindowOptions {
   timeoutMs?: number;
 }
 
+export type ResponsesCompactionFailureClass =
+  | 'context_length'
+  | 'auth'
+  | 'rate_limit_or_capacity'
+  | 'timeout_or_transport'
+  | 'other_4xx'
+  | 'server'
+  | 'invalid_response';
+
 export class ResponsesCompactionError extends Error {
   readonly statusCode?: number;
   readonly usage?: ResponsesCompactionUsage;
+  readonly failureClass: ResponsesCompactionFailureClass;
+  readonly errorCode?: string;
+  readonly errorType?: string;
+  readonly errorFingerprint?: string;
 
-  constructor(message: string, statusCode?: number, usage?: ResponsesCompactionUsage) {
+  constructor(
+    message: string,
+    statusCode?: number,
+    usage?: ResponsesCompactionUsage,
+    details: {
+      failureClass?: ResponsesCompactionFailureClass;
+      errorCode?: string;
+      errorType?: string;
+      errorFingerprint?: string;
+    } = {},
+  ) {
     super(message);
     this.name = 'ResponsesCompactionError';
     this.statusCode = statusCode;
     this.usage = usage;
+    this.failureClass = details.failureClass ?? (
+      statusCode !== undefined && statusCode >= 500
+        ? 'server'
+        : statusCode !== undefined && statusCode >= 400
+          ? 'other_4xx'
+          : 'invalid_response'
+    );
+    this.errorCode = details.errorCode;
+    this.errorType = details.errorType;
+    this.errorFingerprint = details.errorFingerprint;
   }
 }
 
@@ -157,6 +190,49 @@ function responseErrorFingerprint(value: unknown): string | undefined {
     : undefined;
 }
 
+function boundedIdentifier(value: unknown): string | undefined {
+  return typeof value === 'string' && /^[a-zA-Z0-9_.:-]{1,80}$/.test(value)
+    ? value
+    : undefined;
+}
+
+function compactFailureDetails(
+  value: unknown,
+  statusCode: number,
+): {
+  failureClass: ResponsesCompactionFailureClass;
+  errorCode?: string;
+  errorType?: string;
+  errorFingerprint?: string;
+} {
+  const root = value && typeof value === 'object' ? value as JsonObject : {};
+  const error = root.error && typeof root.error === 'object'
+    ? root.error as JsonObject
+    : root;
+  const errorCode = boundedIdentifier(error.code);
+  const errorType = boundedIdentifier(error.type);
+  const message = typeof error.message === 'string' ? error.message : '';
+  const discriminator = `${errorCode ?? ''} ${errorType ?? ''}`.toLowerCase();
+  const failureClass: ResponsesCompactionFailureClass =
+    /context_length|context_window/.test(discriminator)
+      || /context_length_exceeded|maximum context length|prompt is too long/i.test(message)
+      ? 'context_length'
+      : statusCode === 401 || statusCode === 403
+        ? 'auth'
+        : statusCode === 408 || statusCode === 409 || statusCode === 429
+          || /rate_limit|capacity|overload/.test(discriminator)
+          ? 'rate_limit_or_capacity'
+          : statusCode >= 500
+            ? 'server'
+            : 'other_4xx';
+  return {
+    failureClass,
+    errorCode,
+    errorType,
+    errorFingerprint: responseErrorFingerprint(value),
+  };
+}
+
 /**
  * Call the stateless `/responses/compact` endpoint. The returned output is
  * canonical and must be forwarded as-is to the next Responses create call.
@@ -191,14 +267,18 @@ export async function compactResponsesWindow(
       throw new ResponsesCompactionError(
         `OpenAI compact endpoint returned invalid JSON (HTTP ${response.status})`,
         response.status,
+        undefined,
+        { failureClass: 'invalid_response' },
       );
     }
     if (!response.ok) {
-      const fingerprint = responseErrorFingerprint(body);
+      const details = compactFailureDetails(body, response.status);
       throw new ResponsesCompactionError(
         `OpenAI compact endpoint failed (HTTP ${response.status}`
-          + `${fingerprint ? `, error ${fingerprint}` : ''})`,
+          + `${details.errorFingerprint ? `, error ${details.errorFingerprint}` : ''})`,
         response.status,
+        usageFromResponse((body as JsonObject).usage),
+        details,
       );
     }
     if (!body || typeof body !== 'object' || !Array.isArray((body as JsonObject).output)) {
@@ -208,6 +288,17 @@ export async function compactResponsesWindow(
       output: (body as JsonObject).output as unknown[],
       usage: usageFromResponse((body as JsonObject).usage),
     };
+  } catch (error) {
+    if (error instanceof ResponsesCompactionError) throw error;
+    const timedOut = controller.signal.aborted;
+    throw new ResponsesCompactionError(
+      timedOut
+        ? `OpenAI compaction exceeded ${Math.round(timeoutMs / 1000)}s`
+        : 'OpenAI compact transport failed',
+      undefined,
+      undefined,
+      { failureClass: 'timeout_or_transport' },
+    );
   } finally {
     clearTimeout(timer);
     options.signal?.removeEventListener('abort', forwardAbort);

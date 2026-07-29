@@ -120,7 +120,41 @@ Clodex does not prune or reinterpret it.
 The in-band trigger and standalone call each have a 60-second budget and run
 sequentially inside one fetch. Together they can consume the full 120-second
 Claude Code no-data watchdog before the ordinary fallback starts. A failed
-compact attempt preserves the ordinary request path where possible.
+compact attempt preserves the ordinary request path only while that request is
+below the model's hard context window.
+
+### One-turn context jumps
+
+A large tool result can move one parent, subagent, or Workflow branch from
+below the normal 90% trigger to beyond the hard model window in one turn.
+Clodex never sends that known-oversized history to `/responses` or retries it
+unchanged after `/responses/compact` rejects it.
+
+Instead, Clodex:
+
+1. selects the newest exact live-head or durable-checkpoint boundary for that
+   account/model/effort/session/agent lineage;
+2. falls back to a complete inferred model-output boundary only when its
+   call/output dependencies are closed on each side;
+3. compacts the bounded prefix without truncating any item;
+4. appends the untouched reasoning, tool-call, tool-output, and user tail to
+   OpenAI's canonical compact output;
+5. verifies the rebased request fits the hard model window; and
+6. starts one fresh response chain.
+
+At most two distinct prefixes are compacted for one visible request. If the
+provider rejects a request before any model data is emitted, Clodex may replay
+one rebased create. Once text, reasoning, or a tool call has been emitted, it
+never replays. A tail that cannot fit by itself, a cross-boundary tool
+dependency, or exhaustion of the bounded candidates produces an explicit
+context error rather than silently dropping tool results or borrowing state
+from a sibling branch.
+
+`ws_overflow_recovery` diagnostics report the source boundary, bounded
+fingerprints, token estimates, attempts, and terminal reason without logging
+conversation content. Hidden compaction usage is added exactly once to the
+visible response usage, and successful recovery returns to normal
+`previous_response_id` continuation on its next turn.
 
 ## Claude transcript anchor
 
@@ -144,6 +178,19 @@ conversation text or opaque content. The guarded probe is available with:
 CLODEX_LIVE_COMPACTION_PROBE=1 \
 bun run scripts/probe-openai-compaction.ts
 ```
+
+The guarded oversized-tool-turn probe is separate because it consumes a much
+larger synthetic Spark window:
+
+```sh
+CLODEX_LIVE_OVERFLOW_PROBE=1 \
+bun run scripts/probe-openai-overflow-recovery.ts
+```
+
+It runs in one isolated process with a temporary checkpoint directory and
+unique session, agent, and cache identifiers. It verifies one native prefix
+rebase followed by a delta-only `previous_response_id` continuation; it does
+not bind a daemon port or mutate an installed Clodex runtime.
 
 The probe reports trigger request bytes as `triggerWireBytes` and received SSE
 bytes as `responseWireBytes`; these are deliberately separate measurements. It
