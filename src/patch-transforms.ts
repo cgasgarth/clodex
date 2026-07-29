@@ -33,7 +33,7 @@ import { isReservedModelAlias } from './model-aliases.js';
  * and never receive the new transforms, silently. `tests/patcher.test.ts` pins a
  * hash of this file to force that decision to be made rather than forgotten.
  */
-export const PATCH_TRANSFORMS_VERSION = 3;
+export const PATCH_TRANSFORMS_VERSION = 4;
 
 export interface PatchScriptModelEntry {
   alias?: string;

@@ -435,8 +435,8 @@ describe('PATCH_TRANSFORMS_VERSION', () => {
     ).replace(/\r\n/g, '\n');
     const digest = createHash('sha256').update(source).digest('hex');
     expect({ version: PATCH_TRANSFORMS_VERSION, digest }).toEqual({
-      version: 3,
-      digest: '0c7fa71cd10c4cfc2944cf07809bb8935609fb9e62565174f9edb0cd973ecad4',
+      version: 4,
+      digest: '26bef06561f37e3eb6dfe228af2c30b3ed5728e5c4d78f96b4bbc57f2954803f',
     });
   });
 });
