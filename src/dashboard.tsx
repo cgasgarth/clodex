@@ -111,6 +111,7 @@ const VIEWS: DashboardView[] = ['overview', 'usage', 'accounts', 'diagnostics'];
 const PERIODS: UsagePeriod[] = ['day', 'week', 'month'];
 const CHART_WIDTH = 56;
 const CHART_HEIGHT = 6;
+export const VIEW_SWITCH_HINT = 'Press 1–4 to switch views';
 
 export function accountDisplayName(account: Pick<Account, 'email'>): string {
   return account.email ?? 'Email unavailable';
@@ -664,7 +665,7 @@ function Dashboard(): React.ReactNode {
   let content: React.ReactNode;
   let controls: string;
   if (view === 'overview') {
-    controls = '1–4 views · r refresh · q quit';
+    controls = `${VIEW_SWITCH_HINT} · r refresh · q quit`;
     content = (
       <>
         <Box borderStyle="round" paddingX={1} flexDirection="column">
@@ -708,7 +709,7 @@ function Dashboard(): React.ReactNode {
       </>
     );
   } else if (view === 'usage') {
-    controls = 'Tab/Shift+Tab day·week·month · ←/→ period · 0 current · 1–4 views · r refresh · q quit';
+    controls = `Tab/Shift+Tab day·week·month · ←/→ period · 0 current · ${VIEW_SWITCH_HINT} · r refresh · q quit`;
     const tokenValues = metrics.map(bucket =>
       bucket.inputTokens
       + bucket.cachedInputTokens
@@ -772,7 +773,7 @@ function Dashboard(): React.ReactNode {
       </>
     );
   } else if (view === 'accounts') {
-    controls = '↑/↓ account · Enter select · l login · x x logout · 1–4 views · r refresh · q quit';
+    controls = `↑/↓ account · Enter select · l login · x x logout · ${VIEW_SWITCH_HINT} · r refresh · q quit`;
     content = (
       <>
         <Box borderStyle="round" paddingX={1} flexDirection="column">
@@ -811,7 +812,7 @@ function Dashboard(): React.ReactNode {
       </>
     );
   } else {
-    controls = 'R R restart daemon · 1–4 views · r refresh · q quit';
+    controls = `R R restart daemon · ${VIEW_SWITCH_HINT} · r refresh · q quit`;
     content = (
       <Box borderStyle="round" paddingX={1} flexDirection="column">
         <Text bold>Recent diagnostics</Text>
