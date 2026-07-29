@@ -1,3 +1,5 @@
+import { OPENAI_METADATA_TIMEOUT_MS } from './timeouts.js';
+
 const OPENAI_PROFILE_URL = 'https://api.openai.com/v1/me';
 
 type FetchLike = typeof fetch;
@@ -10,7 +12,10 @@ export async function fetchOpenAiProfileEmail(
   } = {},
 ): Promise<string | undefined> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? 10_000);
+  const timer = setTimeout(
+    () => controller.abort(),
+    options.timeoutMs ?? OPENAI_METADATA_TIMEOUT_MS,
+  );
   timer.unref();
   try {
     const response = await (options.fetch ?? fetch)(OPENAI_PROFILE_URL, {

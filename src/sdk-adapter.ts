@@ -620,7 +620,7 @@ export interface AnthropicStreamObserver {
   idleTimeoutMs?: number;
 }
 
-const SDK_STREAM_IDLE_TIMEOUT_MS = 120_000;
+const SDK_STREAM_IDLE_TIMEOUT_MS = 5 * 60_000;
 const SDK_TOTAL_TIMEOUT_MS = 10 * 60_000;
 
 function streamAbortError(signal?: AbortSignal): Error {
