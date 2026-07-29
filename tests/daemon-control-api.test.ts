@@ -63,6 +63,29 @@ describe('daemon control API', () => {
       requestStop,
     });
     try {
+      const now = Date.now();
+      collector.metrics.append({
+        timestamp: new Date(now - 1_000).toISOString(),
+        accountId: 'one',
+        modelId: 'sol',
+        provider: 'openai-oauth',
+        inputTokens: 100,
+        cachedInputTokens: 50,
+        cacheWriteTokens: 0,
+        outputTokens: 10,
+        error: false,
+      });
+      collector.metrics.append({
+        timestamp: new Date(now - 1_000).toISOString(),
+        accountId: 'two',
+        modelId: 'luna',
+        provider: 'openai-oauth',
+        inputTokens: 100,
+        cachedInputTokens: 50,
+        cacheWriteTokens: 0,
+        outputTokens: 10,
+        error: false,
+      });
       const status = await daemonControlRequest<{
         running: boolean;
         proxyPort: number;
@@ -76,6 +99,22 @@ describe('daemon control API', () => {
         proxyPort: 12345,
         endpointPort: 12346,
       });
+      const metrics = await daemonControlRequest<{
+        accountId: string;
+        buckets: Array<{ requests: number; inputTokens: number }>;
+      }>(`/v1/metrics?start=${encodeURIComponent(new Date(now - 3_600_000).toISOString())}`
+        + `&end=${encodeURIComponent(new Date(now).toISOString())}`
+        + '&bucketMinutes=60&accountId=one', { socketPath });
+      expect(metrics.accountId).toBe('one');
+      expect(metrics.buckets).toEqual([
+        expect.objectContaining({ requests: 1, inputTokens: 100 }),
+      ]);
+      await expect(daemonControlRequest(
+        `/v1/metrics?start=${encodeURIComponent(new Date(now - 3_600_000).toISOString())}`
+        + `&end=${encodeURIComponent(new Date(now).toISOString())}`
+        + '&bucketMinutes=invalid',
+        { socketPath },
+      )).rejects.toThrow('bucketMinutes must be a finite number');
       const launch = await daemonControlRequest<{ ticket: string }>('/v1/launches/attach', {
         socketPath,
         method: 'POST',
@@ -101,6 +140,7 @@ describe('daemon control API', () => {
       expect(requestStop).toHaveBeenCalledOnce();
     } finally {
       await handle.close();
+      collector.metrics.close();
     }
   });
 });

@@ -205,6 +205,7 @@ export class DaemonAccountService implements DaemonAccountController {
       ...route,
       apiKey,
       oauthAccountId,
+      metricsAccountId: account.id,
       refreshToken: rejectedAccessToken => this.dependencies.resolveCredential(
         'openai-oauth',
         account.authRef,

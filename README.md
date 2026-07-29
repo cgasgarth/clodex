@@ -108,12 +108,28 @@ clodex                      # start if needed, then open the Ink dashboard
 clodex stop                 # stop the daemon
 ```
 
-Bare `clodex` shows live WebSocket/session counts, 24-hour token and cache
-graphs, quota windows, accounts, and bounded diagnostics. The daemon uses
-restart-stable loopback ports (`17647` endpoint and `17646` proxy; override the
-proxy base with `CLODEX_DAEMON_PORT`) and an owner-only Unix control socket.
-`clodex claude …` also starts the daemon when needed and launches Claude
-through that shared process.
+Bare `clodex` opens a four-view dashboard:
+
+- **Overview** — live WebSocket/session counts, active-account quota, and recent
+  diagnostics.
+- **Usage** — account-scoped token and API-equivalent cost charts for calendar
+  days, weeks, or months. Both charts use the same buckets and explicit axes;
+  cost is split into input, cache, output, total, and Normal/Fast processing.
+- **Accounts** — manual account selection and guarded login/logout controls.
+- **Diagnostics** — bounded failures plus a guarded daemon restart.
+
+Use `1`–`4` to switch views. In Usage, `Tab`/`Shift+Tab` changes the period,
+`←`/`→` moves between periods, and `0` returns to the current period. Metrics
+are stored in an indexed owner-only SQLite database with 400-day retention;
+legacy JSONL metrics migrate as unattributed history rather than being assigned
+to the active account. API-equivalent prices cover GPT-5.6 Sol, Terra, and Luna
+using the current OpenAI Standard/Priority rates, including cache writes and
+long-context pricing. They are estimates, not ChatGPT subscription charges.
+
+The daemon uses restart-stable loopback ports (`17647` endpoint and `17646`
+proxy; override the proxy base with `CLODEX_DAEMON_PORT`) and an owner-only Unix
+control socket. `clodex claude …` also starts the daemon when needed and
+launches Claude through that shared process.
 
 Up to five ChatGPT/Codex logins can be stored:
 

@@ -26,7 +26,10 @@ describe('DaemonInferenceCollector', () => {
         entry: {
           requestId,
           claudeSessionId: sessionId,
+          accountId: 'account-a',
+          processingMode: 'fast',
           modelId: 'gpt-5.6-sol',
+          resolvedModelId: 'gpt-5.6-sol',
           provider: 'openai-oauth',
           route: 'translated',
         },
@@ -90,6 +93,8 @@ describe('DaemonInferenceCollector', () => {
     expect(metrics.readSince(0)).toEqual([
       expect.objectContaining({
         requestId,
+        accountId: 'account-a',
+        processingMode: 'fast',
         inputTokens: 120,
         cachedInputTokens: 80,
         cacheWriteTokens: 5,
@@ -150,5 +155,88 @@ describe('DaemonInferenceCollector', () => {
       }),
     ]);
     expect(collector.recentDiagnostics()).toEqual([]);
+  });
+
+  it('accepts account attribution from the resolved inner adapter lifecycle', () => {
+    const root = mkdtempSync(join(tmpdir(), 'clodex-collector-'));
+    roots.push(root);
+    const metrics = new DaemonMetricsStore(join(root, 'metrics.sqlite'));
+    const collector = new DaemonInferenceCollector(metrics);
+    const requestId = 'outer-proxy-request';
+    collector.handle({
+      kind: 'request',
+      entry: {
+        requestId,
+        modelId: 'sol',
+        provider: 'openai-oauth',
+        route: 'translated',
+      },
+    });
+    collector.handle({
+      kind: 'lifecycle',
+      entry: {
+        event: 'translation_completed',
+        requestId,
+        accountId: 'pinned-account',
+        modelId: 'sol',
+        provider: 'openai-oauth',
+        route: 'translated',
+        inputTokens: 100,
+      },
+    });
+    collector.handle({
+      kind: 'lifecycle',
+      entry: {
+        event: 'response_completed',
+        requestId,
+        modelId: 'sol',
+        provider: 'openai-oauth',
+        route: 'translated',
+      },
+    });
+
+    expect(metrics.readSince(0, 'pinned-account')).toEqual([
+      expect.objectContaining({ requestId, accountId: 'pinned-account' }),
+    ]);
+    metrics.close();
+  });
+
+  it('prices custom aliases using the resolved upstream model', () => {
+    const root = mkdtempSync(join(tmpdir(), 'clodex-collector-'));
+    roots.push(root);
+    const metrics = new DaemonMetricsStore(join(root, 'metrics.sqlite'));
+    const collector = new DaemonInferenceCollector(metrics);
+    const requestId = 'alias-request';
+    collector.handle({
+      kind: 'request',
+      entry: {
+        requestId,
+        accountId: 'account-a',
+        modelId: 'orbit',
+        resolvedModelId: 'gpt-5.6-sol',
+        provider: 'openai-oauth',
+        route: 'translated',
+      },
+    });
+    collector.handle({
+      kind: 'lifecycle',
+      entry: {
+        event: 'response_completed',
+        requestId,
+        modelId: 'orbit',
+        resolvedModelId: 'gpt-5.6-sol',
+        provider: 'openai-oauth',
+        route: 'translated',
+        inputTokens: 100_000,
+        outputTokens: 1_000,
+      },
+    });
+
+    const bucket = metrics.bucketsRange(0, Date.now() + 1_000, Date.now() + 1_000, 'account-a')
+      .find(candidate => candidate.requests === 1);
+    expect(metrics.readSince(0, 'account-a')[0]?.modelId).toBe('gpt-5.6-sol');
+    expect(bucket?.pricedRequests).toBe(1);
+    expect(bucket?.unpricedRequests).toBe(0);
+    metrics.close();
   });
 });
