@@ -6,6 +6,7 @@ import {
   formatUsd,
   lineChart,
   usageRange,
+  VIEW_SWITCH_HINT,
 } from '../src/dashboard.js';
 
 describe('dashboard usage chart', () => {
@@ -57,5 +58,11 @@ describe('dashboard device-code login', () => {
       url: 'https://auth.openai.com/codex/device',
       userCode: 'ABCD-EFGHI',
     })).toBe('Enter code ABCD-EFGHI in the browser.');
+  });
+});
+
+describe('dashboard controls', () => {
+  it('explicitly tells users to press the numbered view keys', () => {
+    expect(VIEW_SWITCH_HINT).toBe('Press 1–4 to switch views');
   });
 });
