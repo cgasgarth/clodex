@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Box, Text, render, useApp, useInput } from 'ink';
 import { daemonControlRequest } from './daemon/control-client.js';
+import { DASHBOARD_USAGE_REQUEST_TIMEOUT_MS } from './timeouts.js';
 import {
   loginOpenAiAccount,
   logoutOpenAiAccount,
@@ -174,7 +175,7 @@ function Dashboard(): React.ReactNode {
         daemonControlRequest<DaemonStatus>('/v1/status'),
         daemonControlRequest<{ buckets: MetricBucket[] }>('/v1/metrics?hours=24&bucketMinutes=5'),
         daemonControlRequest<{ accounts: Account[] }>(`/v1/accounts${usage ? '?refresh=1' : ''}`, {
-          timeoutMs: usage ? 15_000 : 2_000,
+          timeoutMs: usage ? DASHBOARD_USAGE_REQUEST_TIMEOUT_MS : 2_000,
         }),
         daemonControlRequest<{ diagnostics: Diagnostic[] }>('/v1/diagnostics?limit=8'),
       ]);

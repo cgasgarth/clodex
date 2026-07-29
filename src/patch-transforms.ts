@@ -561,8 +561,8 @@ export function applyClodexPatches(source: string, config: PatchScriptModelConfi
   // can sanitize the complete JSON object. HTTP keepalive pings intentionally
   // do not count as agent progress, so expose a bounded opt-in override.
   //
-  // The upstream default remains 180 seconds. Values are clamped to 3–30
-  // minutes to prevent accidental zero/negative or effectively unbounded waits.
+  // Clodex defaults to 10 minutes. Values are clamped to 3–30 minutes to
+  // prevent accidental zero/negative or effectively unbounded waits.
   // ---------------------------------------------------------------------------
   {
     const MARKER = '/*clodex:workflow-stall-timeout*/';
@@ -571,7 +571,7 @@ export function applyClodexPatches(source: string, config: PatchScriptModelConfi
       /(Be concise \\u2014 the script will parse your output\.`(?:,[\w$]+){4},)([\w$]+)=180000(,[\w$]+=5,[\w$]+=5;var)/,
       (_m, prefix, timeoutName, suffix) =>
         prefix + timeoutName + '=' + MARKER
-        + 'Math.min(Math.max(Number(process.env.CLODEX_WORKFLOW_STALL_TIMEOUT_MS)||180000,180000),1800000)'
+        + 'Math.min(Math.max(Number(process.env.CLODEX_WORKFLOW_STALL_TIMEOUT_MS)||600000,180000),1800000)'
         + suffix,
       { marker: MARKER, required: false }
     );

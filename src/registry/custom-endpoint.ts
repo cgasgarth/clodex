@@ -4,6 +4,7 @@ import { provisionProviderCredential } from '../env.js';
 import { credentialInstanceAuthRef } from '../credential-helper.js';
 import { deriveBrand } from '../models.js';
 import { resolveContextWindow } from '../context-window.js';
+import { PROVIDER_METADATA_TIMEOUT_MS } from '../timeouts.js';
 import {
   cancelCredentialDelete,
   journalCredentialWrite,
@@ -64,7 +65,7 @@ export async function fetchAnthropicModels(
   const root = baseUrl.replace(/\/v1\/?$/, '').replace(/\/$/, '');
   const modelsUrl = `${root}/v1/models`;
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 10_000);
+  const timer = setTimeout(() => controller.abort(), PROVIDER_METADATA_TIMEOUT_MS);
 
   try {
     const response = await fetch(modelsUrl, {

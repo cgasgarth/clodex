@@ -7,6 +7,11 @@ import { daemonControlRequest } from '../src/daemon/control-client.js';
 import { startDaemonControlApi } from '../src/daemon/control-api.js';
 import { DaemonMetricsStore } from '../src/daemon/metrics.js';
 import { createDaemonRuntimeState } from '../src/daemon/runtime.js';
+import {
+  DAEMON_CONTROL_IDLE_TIMEOUT_SECONDS,
+  DASHBOARD_USAGE_REQUEST_TIMEOUT_MS,
+  OPENAI_METADATA_TIMEOUT_MS,
+} from '../src/timeouts.js';
 
 const roots: string[] = [];
 afterEach(() => {
@@ -14,6 +19,13 @@ afterEach(() => {
 });
 
 describe('daemon control API', () => {
+  it('keeps each timeout above the slower downstream operation', () => {
+    expect(OPENAI_METADATA_TIMEOUT_MS).toBe(60_000);
+    expect(DASHBOARD_USAGE_REQUEST_TIMEOUT_MS).toBeGreaterThan(OPENAI_METADATA_TIMEOUT_MS);
+    expect(DAEMON_CONTROL_IDLE_TIMEOUT_SECONDS * 1_000)
+      .toBeGreaterThan(DASHBOARD_USAGE_REQUEST_TIMEOUT_MS);
+  });
+
   it('serves status, metrics, accounts, selection, and launch tickets over an owner socket', async () => {
     const root = mkdtempSync(join(tmpdir(), 'clodex-control-'));
     roots.push(root);

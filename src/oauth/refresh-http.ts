@@ -1,6 +1,7 @@
 import type { OAuthTokenResponse } from './types.js';
+import { PROVIDER_METADATA_TIMEOUT_MS } from '../timeouts.js';
 
-const OAUTH_REFRESH_TIMEOUT_MS = 30_000;
+const OAUTH_REFRESH_TIMEOUT_MS = PROVIDER_METADATA_TIMEOUT_MS;
 
 export interface PostOAuthRefreshOptions {
   contentType: 'form' | 'json';

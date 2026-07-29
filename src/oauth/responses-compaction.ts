@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { NATIVE_COMPACTION_TIMEOUT_MS } from '../timeouts.js';
 
 type JsonObject = Record<string, unknown>;
 
@@ -16,10 +17,9 @@ const COMPACT_BODY_FIELDS = [
 ] as const;
 
 export const OPENAI_COMPACTION_DEFAULT_RATIO = 0.9;
-// Compaction runs before the downstream SSE response exists. An in-band trigger
-// can consume this budget before a standalone retry consumes it again, reaching
-// Claude Code's 120s no-data watchdog before the normal fallback can start.
-export const RESPONSES_COMPACT_TIMEOUT_MS = 60_000;
+// Native compaction on a large context can legitimately take several minutes.
+// Prefer preserving the thread over failing a healthy but slow compaction.
+export const RESPONSES_COMPACT_TIMEOUT_MS = NATIVE_COMPACTION_TIMEOUT_MS;
 
 export interface ResponsesCompactionUsage {
   inputTokens: number;

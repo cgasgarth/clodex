@@ -11,8 +11,9 @@ import {
   registerTraceSecret,
 } from '../trace-log.js';
 import { classifyFreeStatus, isFreeStatus } from '../free-models.js';
+import { PROVIDER_METADATA_TIMEOUT_MS } from '../timeouts.js';
 
-const TEST_TIMEOUT_MS = 10_000;
+const TEST_TIMEOUT_MS = PROVIDER_METADATA_TIMEOUT_MS;
 
 interface OpenAiModelListResponse {
   data?: ProviderModelListRow[];

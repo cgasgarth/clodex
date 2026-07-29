@@ -11,10 +11,11 @@ import {
 import { dirname, join } from 'node:path';
 import bundledCache from '../data/models-dev-cache.json';
 import { getAppHome } from '../paths.js';
+import { PROVIDER_METADATA_TIMEOUT_MS } from '../timeouts.js';
 import { normalizeModelIdCandidates } from './pricing.js';
 
 export const MODELS_DEV_API_URL = 'https://models.dev/api.json';
-const FETCH_TIMEOUT_MS = 15_000;
+const FETCH_TIMEOUT_MS = PROVIDER_METADATA_TIMEOUT_MS;
 const FILE_MODE = 0o600;
 
 export interface ModelsDevModalities {

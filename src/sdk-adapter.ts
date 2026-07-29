@@ -21,6 +21,10 @@ import { resolveUpstreamTools } from './tool-search.js';
 import type { AnthropicRequestMessage, AnthropicToolDefinition } from './proxy-types.js';
 import { anthropicErrorType, upstreamHttpStatus } from './upstream-error.js';
 import { CLAUDE_CODE_BILLING_HEADER_PREFIX } from './oauth/claude-identity.js';
+import {
+  MODEL_STREAM_IDLE_TIMEOUT_MS,
+  MODEL_TOTAL_TIMEOUT_MS,
+} from './timeouts.js';
 
 export { silenceSdkWarnings };
 
@@ -620,8 +624,8 @@ export interface AnthropicStreamObserver {
   idleTimeoutMs?: number;
 }
 
-const SDK_STREAM_IDLE_TIMEOUT_MS = 120_000;
-const SDK_TOTAL_TIMEOUT_MS = 10 * 60_000;
+const SDK_STREAM_IDLE_TIMEOUT_MS = MODEL_STREAM_IDLE_TIMEOUT_MS;
+const SDK_TOTAL_TIMEOUT_MS = MODEL_TOTAL_TIMEOUT_MS;
 
 function streamAbortError(signal?: AbortSignal): Error {
   if (signal?.reason instanceof Error) return signal.reason;

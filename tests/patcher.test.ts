@@ -436,7 +436,7 @@ describe('PATCH_TRANSFORMS_VERSION', () => {
     const digest = createHash('sha256').update(source).digest('hex');
     expect({ version: PATCH_TRANSFORMS_VERSION, digest }).toEqual({
       version: 3,
-      digest: 'b81e0113073a0a7cb021d0ab89d837ef02719db3dabe0aa425c14abb1204331e',
+      digest: '0c7fa71cd10c4cfc2944cf07809bb8935609fb9e62565174f9edb0cd973ecad4',
     });
   });
 });
@@ -1331,11 +1331,11 @@ describe('patch script identity naming', () => {
     );
   });
 
-  it('keeps the upstream Workflow watchdog default while allowing a bounded opt-in override', () => {
+  it('defaults the Workflow watchdog to ten minutes with a bounded override', () => {
     const out = runPatchScript(config);
     expect(out).toContain(
       'sj_=/*clodex:workflow-stall-timeout*/'
-      + 'Math.min(Math.max(Number(process.env.CLODEX_WORKFLOW_STALL_TIMEOUT_MS)||180000,180000),1800000)'
+      + 'Math.min(Math.max(Number(process.env.CLODEX_WORKFLOW_STALL_TIMEOUT_MS)||600000,180000),1800000)'
     );
   });
 
