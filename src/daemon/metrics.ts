@@ -26,7 +26,7 @@ const FIVE_MINUTES_MS = 5 * 60_000;
 const PRUNE_INTERVAL_MS = 5 * 60_000;
 const METRICS_FLUSH_INTERVAL_MS = ONE_MINUTE_MS;
 const METRICS_FLUSH_BATCH_SIZE = 1_000;
-const METRICS_SCHEMA_VERSION = 2;
+const METRICS_SCHEMA_VERSION = 3;
 
 export interface DaemonMetricEvent {
   timestamp: string;
@@ -74,6 +74,13 @@ export interface SecondwindLifetimeMetrics {
   tokensReduced: number;
   estimatedTokenRequests: number;
   estimatedSavingsUsd: number;
+  observedInputTokens: number;
+  savedInputTokens: number;
+  savedCachedInputTokens: number;
+  savedCacheWriteTokens: number;
+  estimatedInputSavingsUsd: number;
+  estimatedCacheSavingsUsd: number;
+  estimatedOutputSavingsUsd: number;
 }
 
 export interface SecondwindSavingsEvent {
@@ -83,6 +90,13 @@ export interface SecondwindSavingsEvent {
   tokensReduced: number;
   estimatedTokenRequests: number;
   estimatedSavingsUsd: number;
+  observedInputTokens: number;
+  savedInputTokens: number;
+  savedCachedInputTokens: number;
+  savedCacheWriteTokens: number;
+  estimatedInputSavingsUsd: number;
+  estimatedCacheSavingsUsd: number;
+  estimatedOutputSavingsUsd: number;
 }
 
 interface MetricRow {
@@ -341,6 +355,18 @@ function sumSecondwindSavings(
         + (Number.isFinite(event.estimatedSavingsUsd)
           ? Math.max(0, event.estimatedSavingsUsd)
           : 0),
+      observedInputTokens: sum.observedInputTokens + safeInteger(event.observedInputTokens),
+      savedInputTokens: sum.savedInputTokens + safeInteger(event.savedInputTokens),
+      savedCachedInputTokens:
+        sum.savedCachedInputTokens + safeInteger(event.savedCachedInputTokens),
+      savedCacheWriteTokens:
+        sum.savedCacheWriteTokens + safeInteger(event.savedCacheWriteTokens),
+      estimatedInputSavingsUsd: sum.estimatedInputSavingsUsd
+        + Math.max(0, event.estimatedInputSavingsUsd ?? 0),
+      estimatedCacheSavingsUsd: sum.estimatedCacheSavingsUsd
+        + Math.max(0, event.estimatedCacheSavingsUsd ?? 0),
+      estimatedOutputSavingsUsd: sum.estimatedOutputSavingsUsd
+        + Math.max(0, event.estimatedOutputSavingsUsd ?? 0),
     }),
     {
       requests: 0,
@@ -349,6 +375,13 @@ function sumSecondwindSavings(
       tokensReduced: 0,
       estimatedTokenRequests: 0,
       estimatedSavingsUsd: 0,
+      observedInputTokens: 0,
+      savedInputTokens: 0,
+      savedCachedInputTokens: 0,
+      savedCacheWriteTokens: 0,
+      estimatedInputSavingsUsd: 0,
+      estimatedCacheSavingsUsd: 0,
+      estimatedOutputSavingsUsd: 0,
     },
   );
 }
@@ -415,7 +448,14 @@ export class DaemonMetricsStore {
         input_tokens_considered INTEGER NOT NULL,
         tokens_reduced INTEGER NOT NULL,
         estimated_token_requests INTEGER NOT NULL,
-        estimated_savings_usd REAL NOT NULL
+        estimated_savings_usd REAL NOT NULL,
+        observed_input_tokens INTEGER NOT NULL DEFAULT 0,
+        saved_input_tokens INTEGER NOT NULL DEFAULT 0,
+        saved_cached_input_tokens INTEGER NOT NULL DEFAULT 0,
+        saved_cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+        estimated_input_savings_usd REAL NOT NULL DEFAULT 0,
+        estimated_cache_savings_usd REAL NOT NULL DEFAULT 0,
+        estimated_output_savings_usd REAL NOT NULL DEFAULT 0
       );
       INSERT OR IGNORE INTO secondwind_lifetime (
         singleton, requests, blocks_rewritten, input_tokens_considered, tokens_reduced,
@@ -432,6 +472,27 @@ export class DaemonMetricsStore {
         UPDATE schema_meta SET version = 2;
       `);
       schema = { version: 2 };
+    }
+    if (schema?.version === 2) {
+      const existing = new Set(this.db.query<{ name: string }, []>(
+        'PRAGMA table_info(secondwind_lifetime)',
+      ).all().map(column => column.name));
+      const columns = [
+        ['observed_input_tokens', 'INTEGER NOT NULL DEFAULT 0'],
+        ['saved_input_tokens', 'INTEGER NOT NULL DEFAULT 0'],
+        ['saved_cached_input_tokens', 'INTEGER NOT NULL DEFAULT 0'],
+        ['saved_cache_write_tokens', 'INTEGER NOT NULL DEFAULT 0'],
+        ['estimated_input_savings_usd', 'REAL NOT NULL DEFAULT 0'],
+        ['estimated_cache_savings_usd', 'REAL NOT NULL DEFAULT 0'],
+        ['estimated_output_savings_usd', 'REAL NOT NULL DEFAULT 0'],
+      ] as const;
+      for (const [name, definition] of columns) {
+        if (!existing.has(name)) {
+          this.db.exec(`ALTER TABLE secondwind_lifetime ADD COLUMN ${name} ${definition}`);
+        }
+      }
+      this.db.exec('UPDATE schema_meta SET version = 3');
+      schema = { version: 3 };
     }
     if (schema && schema.version !== METRICS_SCHEMA_VERSION) {
       throw new Error(`Unsupported daemon metrics schema: ${schema.version}`);
@@ -593,9 +654,19 @@ export class DaemonMetricsStore {
       tokens_reduced: number;
       estimated_token_requests: number;
       estimated_savings_usd: number;
+      observed_input_tokens: number;
+      saved_input_tokens: number;
+      saved_cached_input_tokens: number;
+      saved_cache_write_tokens: number;
+      estimated_input_savings_usd: number;
+      estimated_cache_savings_usd: number;
+      estimated_output_savings_usd: number;
     }, []>(`
       SELECT requests, blocks_rewritten, input_tokens_considered, tokens_reduced,
-        estimated_token_requests, estimated_savings_usd
+        estimated_token_requests, estimated_savings_usd, observed_input_tokens,
+        saved_input_tokens, saved_cached_input_tokens, saved_cache_write_tokens,
+        estimated_input_savings_usd, estimated_cache_savings_usd,
+        estimated_output_savings_usd
       FROM secondwind_lifetime
       WHERE singleton = 1
     `).get();
@@ -612,6 +683,22 @@ export class DaemonMetricsStore {
         && Number.isFinite(row.estimated_savings_usd)
         ? Math.max(0, row.estimated_savings_usd) + pending.estimatedSavingsUsd
         : pending.estimatedSavingsUsd,
+      observedInputTokens:
+        safeInteger(row?.observed_input_tokens) + pending.observedInputTokens,
+      savedInputTokens: safeInteger(row?.saved_input_tokens) + pending.savedInputTokens,
+      savedCachedInputTokens:
+        safeInteger(row?.saved_cached_input_tokens) + pending.savedCachedInputTokens,
+      savedCacheWriteTokens:
+        safeInteger(row?.saved_cache_write_tokens) + pending.savedCacheWriteTokens,
+      estimatedInputSavingsUsd:
+        Math.max(0, row?.estimated_input_savings_usd ?? 0)
+        + pending.estimatedInputSavingsUsd,
+      estimatedCacheSavingsUsd:
+        Math.max(0, row?.estimated_cache_savings_usd ?? 0)
+        + pending.estimatedCacheSavingsUsd,
+      estimatedOutputSavingsUsd:
+        Math.max(0, row?.estimated_output_savings_usd ?? 0)
+        + pending.estimatedOutputSavingsUsd,
     };
   }
 
@@ -681,7 +768,14 @@ export class DaemonMetricsStore {
         input_tokens_considered = input_tokens_considered + ?,
         tokens_reduced = tokens_reduced + ?,
         estimated_token_requests = estimated_token_requests + ?,
-        estimated_savings_usd = estimated_savings_usd + ?
+        estimated_savings_usd = estimated_savings_usd + ?,
+        observed_input_tokens = observed_input_tokens + ?,
+        saved_input_tokens = saved_input_tokens + ?,
+        saved_cached_input_tokens = saved_cached_input_tokens + ?,
+        saved_cache_write_tokens = saved_cache_write_tokens + ?,
+        estimated_input_savings_usd = estimated_input_savings_usd + ?,
+        estimated_cache_savings_usd = estimated_cache_savings_usd + ?,
+        estimated_output_savings_usd = estimated_output_savings_usd + ?
       WHERE singleton = 1
     `).run(
       event.requests,
@@ -690,6 +784,13 @@ export class DaemonMetricsStore {
       event.tokensReduced,
       event.estimatedTokenRequests,
       event.estimatedSavingsUsd,
+      safeInteger(event.observedInputTokens),
+      safeInteger(event.savedInputTokens),
+      safeInteger(event.savedCachedInputTokens),
+      safeInteger(event.savedCacheWriteTokens),
+      Math.max(0, event.estimatedInputSavingsUsd ?? 0),
+      Math.max(0, event.estimatedCacheSavingsUsd ?? 0),
+      Math.max(0, event.estimatedOutputSavingsUsd ?? 0),
     );
   }
 

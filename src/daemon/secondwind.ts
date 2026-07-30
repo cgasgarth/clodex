@@ -52,6 +52,13 @@ export interface SecondwindModeMetrics {
   tokensReduced: number;
   estimatedTokenRequests: number;
   estimatedSavingsUsd: number;
+  observedInputTokens: number;
+  savedInputTokens: number;
+  savedCachedInputTokens: number;
+  savedCacheWriteTokens: number;
+  estimatedInputSavingsUsd: number;
+  estimatedCacheSavingsUsd: number;
+  estimatedOutputSavingsUsd: number;
 }
 
 export interface SecondwindSnapshot {
@@ -101,6 +108,17 @@ interface PendingSecondwindSavings {
   usage: SecondwindObservedUsage;
 }
 
+interface ObservedRequestSavings {
+  observedInputTokens: number;
+  savedInputTokens: number;
+  savedCachedInputTokens: number;
+  savedCacheWriteTokens: number;
+  estimatedInputSavingsUsd: number;
+  estimatedCacheSavingsUsd: number;
+  estimatedOutputSavingsUsd: number;
+  estimatedSavingsUsd: number;
+}
+
 interface SecondwindServiceOptions {
   initialMode?: unknown;
   persistMode?: (mode: SecondwindMode) => void;
@@ -119,6 +137,13 @@ function emptyMetrics(): SecondwindModeMetrics {
     tokensReduced: 0,
     estimatedTokenRequests: 0,
     estimatedSavingsUsd: 0,
+    observedInputTokens: 0,
+    savedInputTokens: 0,
+    savedCachedInputTokens: 0,
+    savedCacheWriteTokens: 0,
+    estimatedInputSavingsUsd: 0,
+    estimatedCacheSavingsUsd: 0,
+    estimatedOutputSavingsUsd: 0,
   };
 }
 
@@ -130,6 +155,13 @@ function emptyLifetimeMetrics(): SecondwindLifetimeMetrics {
     tokensReduced: 0,
     estimatedTokenRequests: 0,
     estimatedSavingsUsd: 0,
+    observedInputTokens: 0,
+    savedInputTokens: 0,
+    savedCachedInputTokens: 0,
+    savedCacheWriteTokens: 0,
+    estimatedInputSavingsUsd: 0,
+    estimatedCacheSavingsUsd: 0,
+    estimatedOutputSavingsUsd: 0,
   };
 }
 
@@ -254,7 +286,7 @@ function distributeTokens(total: number, weights: number[]): number[] {
 function observedRequestSavings(
   pending: PendingSecondwindSavings,
   usage: SecondwindObservedUsage,
-): number | undefined {
+): ObservedRequestSavings | undefined {
   const weights = [
     Math.max(0, usage.inputTokens),
     Math.max(0, usage.cachedInputTokens),
@@ -294,7 +326,27 @@ function observedRequestSavings(
   const originalCost = estimateApiCost(original);
   const optimizedCost = estimateApiCost(optimized);
   if (!originalCost || !optimizedCost) return undefined;
-  return Math.max(0, originalCost.total - optimizedCost.total);
+  const estimatedSavingsUsd = Math.max(0, originalCost.total - optimizedCost.total);
+  const positiveComponentDeltas = [
+    Math.max(0, originalCost.input - optimizedCost.input),
+    Math.max(0, originalCost.cache - optimizedCost.cache),
+    Math.max(0, originalCost.output - optimizedCost.output),
+  ];
+  const positiveTotal = positiveComponentDeltas.reduce((sum, value) => sum + value, 0);
+  // A processing-tier or long-context boundary can make one cost component
+  // increase while the request still saves overall. Scale positive attribution
+  // back to the observed total so the displayed breakdown always reconciles.
+  const componentScale = positiveTotal > 0 ? estimatedSavingsUsd / positiveTotal : 0;
+  return {
+    observedInputTokens: logicalInput,
+    savedInputTokens: savedInput,
+    savedCachedInputTokens: savedCached,
+    savedCacheWriteTokens: savedWrite,
+    estimatedInputSavingsUsd: positiveComponentDeltas[0]! * componentScale,
+    estimatedCacheSavingsUsd: positiveComponentDeltas[1]! * componentScale,
+    estimatedOutputSavingsUsd: positiveComponentDeltas[2]! * componentScale,
+    estimatedSavingsUsd,
+  };
 }
 
 async function defaultCreateSession(): Promise<SecondwindSession> {
@@ -397,7 +449,14 @@ export class SecondwindService {
       return;
     }
     metrics.pricedRequests += 1;
-    metrics.estimatedSavingsUsd += savings;
+    metrics.observedInputTokens += savings.observedInputTokens;
+    metrics.savedInputTokens += savings.savedInputTokens;
+    metrics.savedCachedInputTokens += savings.savedCachedInputTokens;
+    metrics.savedCacheWriteTokens += savings.savedCacheWriteTokens;
+    metrics.estimatedInputSavingsUsd += savings.estimatedInputSavingsUsd;
+    metrics.estimatedCacheSavingsUsd += savings.estimatedCacheSavingsUsd;
+    metrics.estimatedOutputSavingsUsd += savings.estimatedOutputSavingsUsd;
+    metrics.estimatedSavingsUsd += savings.estimatedSavingsUsd;
     if (pending.mode !== 'on') return;
     this.#recordAppliedSavings(pending, savings);
   }
@@ -510,15 +569,36 @@ export class SecondwindService {
 
   #recordAppliedSavings(
     pending: PendingSecondwindSavings,
-    estimatedSavingsUsd?: number,
+    savings?: ObservedRequestSavings | number,
   ): void {
+    const detail: ObservedRequestSavings = typeof savings === 'number'
+      ? {
+          observedInputTokens: 0,
+          savedInputTokens: pending.tokensReduced,
+          savedCachedInputTokens: 0,
+          savedCacheWriteTokens: 0,
+          estimatedInputSavingsUsd: savings,
+          estimatedCacheSavingsUsd: 0,
+          estimatedOutputSavingsUsd: 0,
+          estimatedSavingsUsd: savings,
+        }
+      : savings ?? {
+          observedInputTokens: 0,
+          savedInputTokens: 0,
+          savedCachedInputTokens: 0,
+          savedCacheWriteTokens: 0,
+          estimatedInputSavingsUsd: 0,
+          estimatedCacheSavingsUsd: 0,
+          estimatedOutputSavingsUsd: 0,
+          estimatedSavingsUsd: 0,
+        };
     const event: SecondwindSavingsEvent = {
       requests: 1,
       blocksRewritten: pending.blocksRewritten,
       inputTokensConsidered: pending.originalTokens,
       tokensReduced: pending.tokensReduced,
       estimatedTokenRequests: pending.estimatedTokenRequests,
-      estimatedSavingsUsd: estimatedSavingsUsd ?? 0,
+      ...detail,
     };
     this.#lifetime.requests += event.requests;
     this.#lifetime.blocksRewritten += event.blocksRewritten;
@@ -526,6 +606,13 @@ export class SecondwindService {
     this.#lifetime.tokensReduced += event.tokensReduced;
     this.#lifetime.estimatedTokenRequests += event.estimatedTokenRequests;
     this.#lifetime.estimatedSavingsUsd += event.estimatedSavingsUsd;
+    this.#lifetime.observedInputTokens += event.observedInputTokens;
+    this.#lifetime.savedInputTokens += event.savedInputTokens;
+    this.#lifetime.savedCachedInputTokens += event.savedCachedInputTokens;
+    this.#lifetime.savedCacheWriteTokens += event.savedCacheWriteTokens;
+    this.#lifetime.estimatedInputSavingsUsd += event.estimatedInputSavingsUsd;
+    this.#lifetime.estimatedCacheSavingsUsd += event.estimatedCacheSavingsUsd;
+    this.#lifetime.estimatedOutputSavingsUsd += event.estimatedOutputSavingsUsd;
     this.#persistLifetime(event);
 
     if (!pending.sessionHash) return;
@@ -538,11 +625,18 @@ export class SecondwindService {
     session.inputTokensConsidered += event.inputTokensConsidered;
     session.tokensReduced += event.tokensReduced;
     session.estimatedTokenRequests += event.estimatedTokenRequests;
-    if (estimatedSavingsUsd === undefined) {
+    if (savings === undefined) {
       session.unpricedRequests += 1;
     } else {
       session.pricedRequests += 1;
-      session.estimatedSavingsUsd += estimatedSavingsUsd;
+      session.observedInputTokens += detail.observedInputTokens;
+      session.savedInputTokens += detail.savedInputTokens;
+      session.savedCachedInputTokens += detail.savedCachedInputTokens;
+      session.savedCacheWriteTokens += detail.savedCacheWriteTokens;
+      session.estimatedInputSavingsUsd += detail.estimatedInputSavingsUsd;
+      session.estimatedCacheSavingsUsd += detail.estimatedCacheSavingsUsd;
+      session.estimatedOutputSavingsUsd += detail.estimatedOutputSavingsUsd;
+      session.estimatedSavingsUsd += detail.estimatedSavingsUsd;
     }
     this.#sessionSavings.set(pending.sessionHash, session);
   }
