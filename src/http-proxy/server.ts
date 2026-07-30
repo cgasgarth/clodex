@@ -18,7 +18,10 @@ import { listenTcpServer } from '../listener-ready.js';
 import { routeUnavailableMessage } from '../route-unavailable.js';
 import { HTTP_PROXY_MODEL_PREFIX, type ResolvedHttpProxyAlias } from './routes.js';
 import { anthropicEffortFromRequest, extractClaudeSessionId, type AnthropicRequest } from '../sdk-adapter.js';
-import { anthropicMessagesEndpoint } from '../anthropic-endpoints.js';
+import {
+  anthropicMessagesEndpoint,
+  type AnthropicMessagesEndpoint,
+} from '../anthropic-endpoints.js';
 import {
   getLatestMessagePreview,
   INFERENCE_PROGRESS_INTERVAL_MS,
@@ -174,6 +177,15 @@ export interface HttpProxyOptions {
   responseProgressIntervalMs?: number;
   /** Resolve a managed-account credential from the launch ticket for this request. */
   resolveRouteForRequest?: ProxyRouteRequestResolver;
+  /** Optionally rewrite a translated request before it reaches the local adapter. */
+  optimizeTranslatedRequest?: (context: {
+    body: Buffer;
+    request: Record<string, unknown>;
+    route: ProxyRoute;
+    claudeSessionId?: string;
+    claudeAgentId?: string;
+    endpoint: AnthropicMessagesEndpoint;
+  }) => Promise<Buffer>;
 }
 
 export interface HttpProxyHandle {
@@ -1030,6 +1042,9 @@ export async function startHttpProxy(options: HttpProxyOptions): Promise<HttpPro
       const claudeSessionIdHeader = Array.isArray(req.headers['x-claude-code-session-id'])
         ? req.headers['x-claude-code-session-id'][0]
         : req.headers['x-claude-code-session-id'];
+      const claudeAgentIdHeader = Array.isArray(req.headers['x-claude-code-agent-id'])
+        ? req.headers['x-claude-code-agent-id'][0]
+        : req.headers['x-claude-code-agent-id'];
       const claudeSessionId = parsed
         ? extractClaudeSessionId(parsed, claudeSessionIdHeader)
         : undefined;
@@ -1087,6 +1102,16 @@ export async function startHttpProxy(options: HttpProxyOptions): Promise<HttpPro
       }
 
       if (route && adapter) {
+        if (parsed && options.optimizeTranslatedRequest) {
+          adapterBody = await options.optimizeTranslatedRequest({
+            body: adapterBody,
+            request: parsed as unknown as Record<string, unknown>,
+            route,
+            claudeSessionId,
+            claudeAgentId: claudeAgentIdHeader,
+            endpoint: messagesEndpoint,
+          });
+        }
         // The adapter resolves alias names itself and must echo the client's
         // requested model id in response messages. Encoded bodies are decoded
         // for this local hop, but their JSON model value is not rewritten.

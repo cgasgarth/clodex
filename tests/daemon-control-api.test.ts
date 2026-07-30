@@ -35,6 +35,31 @@ describe('daemon control API', () => {
     );
     const select = vi.fn();
     const requestStop = vi.fn();
+    let secondwindMode: 'off' | 'shadow' | 'on' = 'off';
+    const secondwindSnapshot = () => ({
+      mode: secondwindMode,
+      since: new Date(0).toISOString(),
+      loaded: false,
+      sessions: 0,
+      applied: {
+        requests: 0,
+        pricedRequests: 0,
+        unpricedRequests: 0,
+        blocksRewritten: 0,
+        tokensReduced: 0,
+        estimatedSavingsUsd: 0,
+      },
+      shadow: {
+        requests: 0,
+        pricedRequests: 0,
+        unpricedRequests: 0,
+        blocksRewritten: 0,
+        tokensReduced: 0,
+        estimatedSavingsUsd: 0,
+      },
+      latency: { samples: 0, medianMs: 0, p95Ms: 0 },
+      errors: 0,
+    });
     const runtime = createDaemonRuntimeState({
       pid: process.pid,
       bunPath: process.execPath,
@@ -58,6 +83,12 @@ describe('daemon control API', () => {
           accountId: 'one',
           accountLabel: 'One',
         }),
+      },
+      secondwind: {
+        snapshot: secondwindSnapshot,
+        setMode: mode => {
+          secondwindMode = mode;
+        },
       },
       requestRestart: vi.fn(),
       requestStop,
@@ -109,6 +140,18 @@ describe('daemon control API', () => {
       expect(metrics.buckets).toEqual([
         expect.objectContaining({ requests: 1, inputTokens: 100 }),
       ]);
+      expect(await daemonControlRequest('/v1/secondwind', { socketPath }))
+        .toMatchObject({ mode: 'off' });
+      expect(await daemonControlRequest('/v1/secondwind/mode', {
+        socketPath,
+        method: 'POST',
+        body: { mode: 'shadow' },
+      })).toMatchObject({ mode: 'shadow' });
+      await expect(daemonControlRequest('/v1/secondwind/mode', {
+        socketPath,
+        method: 'POST',
+        body: { mode: 'invalid' },
+      })).rejects.toThrow('Secondwind mode must be off, shadow, or on');
       await expect(daemonControlRequest(
         `/v1/metrics?start=${encodeURIComponent(new Date(now - 3_600_000).toISOString())}`
         + `&end=${encodeURIComponent(new Date(now).toISOString())}`

@@ -10,6 +10,11 @@ import {
   API_PRICING_AS_OF,
   API_PRICING_SOURCE,
 } from './daemon/api-pricing.js';
+import type {
+  SecondwindModeMetrics,
+  SecondwindSnapshot,
+} from './daemon/secondwind.js';
+import type { SecondwindMode } from './types.js';
 
 interface WebSocketStatus {
   total: number;
@@ -96,7 +101,7 @@ export interface DeviceCodePrompt {
 }
 
 export type UsagePeriod = 'day' | 'week' | 'month';
-type DashboardView = 'overview' | 'usage' | 'accounts' | 'diagnostics';
+type DashboardView = 'overview' | 'usage' | 'accounts' | 'diagnostics' | 'secondwind';
 
 export interface UsageRange {
   period: UsagePeriod;
@@ -107,11 +112,12 @@ export interface UsageRange {
   bucketMinutes: number;
 }
 
-const VIEWS: DashboardView[] = ['overview', 'usage', 'accounts', 'diagnostics'];
+const VIEWS: DashboardView[] = ['overview', 'usage', 'accounts', 'diagnostics', 'secondwind'];
+const SECONDWIND_MODES: SecondwindMode[] = ['off', 'shadow', 'on'];
 const PERIODS: UsagePeriod[] = ['day', 'week', 'month'];
 const CHART_WIDTH = 56;
 const CHART_HEIGHT = 6;
-export const VIEW_SWITCH_HINT = 'Press 1–4 to switch views';
+export const VIEW_SWITCH_HINT = 'Press 1–5 to switch views';
 
 export function accountDisplayName(account: Pick<Account, 'email'>): string {
   return account.email ?? 'Email unavailable';
@@ -194,6 +200,12 @@ export function formatUsd(value: number): string {
   if (value < 0.01) return `$${value.toFixed(4)}`;
   if (value < 1) return `$${value.toFixed(3)}`;
   return `$${value.toFixed(2)}`;
+}
+
+function formatLatency(value: number): string {
+  if (value < 1) return `${value.toFixed(2)}ms`;
+  if (value < 100) return `${value.toFixed(1)}ms`;
+  return `${Math.round(value)}ms`;
 }
 
 function sampledValues(values: number[], width: number): number[] {
@@ -357,6 +369,7 @@ function Dashboard(): React.ReactNode {
   const [metrics, setMetrics] = useState<MetricBucket[]>([]);
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [diagnostics, setDiagnostics] = useState<Diagnostic[]>([]);
+  const [secondwind, setSecondwind] = useState<SecondwindSnapshot | null>(null);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [message, setMessage] = useState('Connecting to Clodex daemon…');
   const [loading, setLoading] = useState(false);
@@ -364,17 +377,19 @@ function Dashboard(): React.ReactNode {
   const [pendingLogoutId, setPendingLogoutId] = useState<string>();
   const [pendingRestart, setPendingRestart] = useState(false);
   const [deviceCode, setDeviceCode] = useState<DeviceCodePrompt>();
+  const [secondwindAction, setSecondwindAction] = useState(false);
 
   const refresh = useCallback(async (usage = false) => {
     const sequence = ++refreshSequence.current;
     setLoading(true);
     try {
-      const [nextStatus, nextAccounts, nextDiagnostics] = await Promise.all([
+      const [nextStatus, nextAccounts, nextDiagnostics, nextSecondwind] = await Promise.all([
         daemonControlRequest<DaemonStatus>('/v1/status'),
         daemonControlRequest<{ accounts: Account[] }>(`/v1/accounts${usage ? '?refresh=1' : ''}`, {
           timeoutMs: usage ? DASHBOARD_USAGE_REQUEST_TIMEOUT_MS : 2_000,
         }),
         daemonControlRequest<{ diagnostics: Diagnostic[] }>('/v1/diagnostics?limit=20'),
+        daemonControlRequest<SecondwindSnapshot>('/v1/secondwind'),
       ]);
       const activeAccount = nextAccounts.accounts.find(account => account.selected);
       const metricsQuery = new URLSearchParams({
@@ -407,6 +422,7 @@ function Dashboard(): React.ReactNode {
       setMetrics(nextMetrics.buckets);
       setAccounts(nextAccounts.accounts);
       setDiagnostics(nextDiagnostics.diagnostics);
+      setSecondwind(nextSecondwind);
       const current = nextAccounts.accounts.findIndex(account => account.selected);
       if (current >= 0) setSelectedIndex(current);
       setMessage(`Updated ${new Date().toLocaleTimeString()}`);
@@ -442,6 +458,22 @@ function Dashboard(): React.ReactNode {
       },
     );
   }, [accountAction, refresh]);
+
+  const setSecondwindMode = useCallback((mode: SecondwindMode) => {
+    if (secondwindAction || secondwind?.mode === mode) return;
+    setSecondwindAction(true);
+    setMessage(`Setting Secondwind ${mode}…`);
+    daemonControlRequest<SecondwindSnapshot>('/v1/secondwind/mode', {
+      method: 'POST',
+      body: { mode },
+    }).then(
+      snapshot => {
+        setSecondwind(snapshot);
+        setMessage(`Secondwind is ${snapshot.mode}.`);
+      },
+      error => setMessage(error instanceof Error ? error.message : String(error)),
+    ).finally(() => setSecondwindAction(false));
+  }, [secondwind?.mode, secondwindAction]);
 
   const logout = useCallback((account: Account) => {
     if (accountAction) return;
@@ -502,7 +534,7 @@ function Dashboard(): React.ReactNode {
       exit();
       return;
     }
-    if (/^[1-4]$/.test(input)) {
+    if (/^[1-5]$/.test(input)) {
       setView(VIEWS[Number(input) - 1]!);
       setPendingLogoutId(undefined);
       setPendingRestart(false);
@@ -537,6 +569,29 @@ function Dashboard(): React.ReactNode {
         setMetrics([]);
         setRangeNow(new Date());
         setPeriodOffset(0);
+        return;
+      }
+    }
+    if (view === 'secondwind' && secondwind) {
+      if (input === 'o') {
+        setSecondwindMode('off');
+        return;
+      }
+      if (input === 's') {
+        setSecondwindMode('shadow');
+        return;
+      }
+      if (input === 'n') {
+        setSecondwindMode('on');
+        return;
+      }
+      if (key.leftArrow || key.rightArrow) {
+        const current = SECONDWIND_MODES.indexOf(secondwind.mode);
+        const delta = key.leftArrow ? -1 : 1;
+        const next = SECONDWIND_MODES[
+          (current + delta + SECONDWIND_MODES.length) % SECONDWIND_MODES.length
+        ]!;
+        setSecondwindMode(next);
         return;
       }
     }
@@ -811,7 +866,7 @@ function Dashboard(): React.ReactNode {
         )}
       </>
     );
-  } else {
+  } else if (view === 'diagnostics') {
     controls = `R R restart daemon · ${VIEW_SWITCH_HINT} · r refresh · q quit`;
     content = (
       <Box borderStyle="round" paddingX={1} flexDirection="column">
@@ -827,6 +882,66 @@ function Dashboard(): React.ReactNode {
             ))}
       </Box>
     );
+  } else {
+    controls = `←/→ mode · o off · s shadow · n on · ${VIEW_SWITCH_HINT} · r refresh · q quit`;
+    const modeColor = secondwind?.mode === 'on'
+      ? 'green'
+      : secondwind?.mode === 'shadow'
+        ? 'yellow'
+        : undefined;
+    const metricLine = (
+      label: string,
+      metrics: SecondwindModeMetrics | undefined,
+      savingsLabel: string,
+    ) => (
+      <Box flexDirection="column">
+        <Text bold>{label}</Text>
+        <Text>
+          {metrics?.requests ?? 0} requests · {metrics?.blocksRewritten ?? 0} blocks rewritten
+        </Text>
+        <Text>
+          ~{compactNumber(metrics?.tokensReduced ?? 0)} estimated tool-output tokens compacted
+          {' · '}{savingsLabel} {formatUsd(metrics?.estimatedSavingsUsd ?? 0)}
+        </Text>
+        {(metrics?.unpricedRequests ?? 0) > 0 && (
+          <Text dimColor>{metrics!.unpricedRequests} unsupported-model requests excluded from dollars</Text>
+        )}
+      </Box>
+    );
+    content = (
+      <>
+        <Box borderStyle="round" paddingX={1} flexDirection="column">
+          <Text bold>Secondwind tool-output optimization</Text>
+          <Text>
+            Daemon mode: <Text bold color={modeColor}>{secondwind?.mode ?? 'unavailable'}</Text>
+            {' · '}applies to new requests immediately
+          </Text>
+          <Text dimColor>
+            off bypasses · shadow measures and sends original · on sends losslessly rewritten tool outputs
+          </Text>
+          <Text dimColor>Mode is persisted across daemon restarts. Metrics are since this daemon started.</Text>
+        </Box>
+        <Box borderStyle="round" paddingX={1} flexDirection="column">
+          {metricLine('Applied', secondwind?.applied, 'estimated savings')}
+          <Text> </Text>
+          {metricLine('Shadow potential', secondwind?.shadow, 'estimated possible savings')}
+          <Text dimColor>API-equivalent uncached input-rate estimate for priced Sol, Terra, and Luna requests.</Text>
+        </Box>
+        <Box borderStyle="round" paddingX={1} flexDirection="column">
+          <Text bold>Added request latency</Text>
+          <Text>
+            median {formatLatency(secondwind?.latency.medianMs ?? 0)}
+            {' · '}p95 {formatLatency(secondwind?.latency.p95Ms ?? 0)}
+            {' · '}{secondwind?.latency.samples ?? 0} samples
+          </Text>
+          <Text dimColor>
+            {secondwind?.sessions ?? 0} conversation sessions · {secondwind?.errors ?? 0} fail-open errors
+            {secondwind?.loaded ? ' · native optimizer loaded' : ' · optimizer not loaded'}
+          </Text>
+          {secondwind?.lastError && <Text color="yellow">Last error: {secondwind.lastError}</Text>}
+        </Box>
+      </>
+    );
   }
 
   return (
@@ -836,7 +951,13 @@ function Dashboard(): React.ReactNode {
       <Text dimColor>
         {controls}
         {' · '}{message}
-        {accountAction ? ' · account action in progress…' : loading ? ' · refreshing…' : ''}
+        {accountAction
+          ? ' · account action in progress…'
+          : secondwindAction
+            ? ' · saving Secondwind mode…'
+            : loading
+              ? ' · refreshing…'
+              : ''}
       </Text>
     </Box>
   );

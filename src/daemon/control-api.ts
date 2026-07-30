@@ -5,6 +5,8 @@ import { responsesWebSocketPoolSnapshot } from '../oauth/responses-websocket.js'
 import { DAEMON_CONTROL_IDLE_TIMEOUT_SECONDS } from '../timeouts.js';
 import type { DaemonRuntimeState } from './runtime.js';
 import type { DaemonInferenceCollector } from './collector.js';
+import type { SecondwindSnapshot } from './secondwind.js';
+import type { SecondwindMode } from '../types.js';
 
 const MAX_CONTROL_BODY_BYTES = 64 * 1024;
 const MAX_METRICS_RANGE_MS = 32 * 24 * 60 * 60_000;
@@ -29,11 +31,17 @@ export interface DaemonAccountController {
   } | null;
 }
 
+export interface DaemonSecondwindController {
+  snapshot(): SecondwindSnapshot;
+  setMode(mode: SecondwindMode): void;
+}
+
 export interface DaemonControlApiOptions {
   socketPath: string;
   runtime: DaemonRuntimeState;
   collector: DaemonInferenceCollector;
   accounts: DaemonAccountController;
+  secondwind: DaemonSecondwindController;
   requestRestart: () => void;
   requestStop: () => void;
 }
@@ -142,6 +150,20 @@ export async function startDaemonControlApi(
         return sendJson(200, {
           diagnostics: options.collector.recentDiagnostics(limit),
         });
+      }
+      if (request.method === 'GET' && url.pathname === '/v1/secondwind') {
+        return sendJson(200, options.secondwind.snapshot());
+      }
+      if (request.method === 'POST' && url.pathname === '/v1/secondwind/mode') {
+        const body = await readJsonBody(request);
+        const mode = body && typeof body === 'object'
+          ? (body as { mode?: unknown }).mode
+          : undefined;
+        if (mode !== 'off' && mode !== 'shadow' && mode !== 'on') {
+          return sendJson(400, { error: 'Secondwind mode must be off, shadow, or on' });
+        }
+        options.secondwind.setMode(mode);
+        return sendJson(200, options.secondwind.snapshot());
       }
       if (request.method === 'GET' && url.pathname === '/v1/accounts') {
         if (url.searchParams.get('refresh') === '1') await options.accounts.refreshUsage?.();

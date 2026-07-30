@@ -326,6 +326,82 @@ describe('selective HTTP proxy', () => {
     }
   });
 
+  it('rewrites translated message requests before the local adapter', async () => {
+    const certificates = ensureHttpProxyCertificates();
+    let adapterBody = '';
+    const observed: Array<Record<string, unknown>> = [];
+    const adapterServer = http.createServer(async (req, res) => {
+      const chunks: Buffer[] = [];
+      req.on('data', chunk => chunks.push(Buffer.from(chunk)));
+      await once(req, 'end');
+      adapterBody = Buffer.concat(chunks).toString();
+      res.writeHead(200, { 'Content-Type': 'text/event-stream', Connection: 'close' });
+      res.end('event: message_stop\ndata: {"type":"message_stop"}\n\n');
+    });
+    const adapterPort = await listen(adapterServer);
+    const route = {
+      aliasId: 'clodex:test:optimized-model',
+      realModelId: 'gpt-5.6-sol',
+      displayName: 'Optimized Model',
+      upstreamUrl: '',
+      apiKey: 'unused',
+      modelFormat: 'openai' as const,
+      npm: '@ai-sdk/openai-compatible',
+      providerId: 'test',
+    };
+    const proxy = await startHttpProxy({
+      routes: [route],
+      adapterHandle: {
+        port: adapterPort,
+        token: 'adapter-token',
+        close: () => {
+          adapterServer.closeAllConnections();
+          adapterServer.close();
+        },
+      },
+      optimizeTranslatedRequest: async context => {
+        observed.push(context);
+        return Buffer.from(JSON.stringify({
+          ...context.request,
+          messages: [{ role: 'user', content: 'optimized' }],
+        }));
+      },
+    });
+
+    try {
+      const body = JSON.stringify({
+        model: route.aliasId,
+        messages: [{ role: 'user', content: 'original' }],
+        stream: true,
+      });
+      const response = await requestMitm(
+        proxy.port,
+        certificates.caCert,
+        '/v1/messages',
+        body,
+        {
+          'X-Claude-Code-Session-Id': '11111111-1111-4111-8111-111111111111',
+          'X-Claude-Code-Agent-Id': 'agent-7',
+        },
+      );
+
+      expect(response).toContain('200 OK');
+      expect(JSON.parse(adapterBody)).toMatchObject({
+        model: route.aliasId,
+        messages: [{ role: 'user', content: 'optimized' }],
+      });
+      expect(observed).toHaveLength(1);
+      expect(observed[0]).toMatchObject({
+        route,
+        claudeSessionId: '11111111-1111-4111-8111-111111111111',
+        claudeAgentId: 'agent-7',
+        endpoint: 'messages',
+      });
+    } finally {
+      await proxy.close();
+    }
+  });
+
   it('releases both sides of a passthrough CONNECT tunnel when upstream closes', async () => {
     const upstream = net.createServer(socket => socket.end());
     const upstreamPort = await listen(upstream);

@@ -63,6 +63,6 @@ describe('dashboard device-code login', () => {
 
 describe('dashboard controls', () => {
   it('explicitly tells users to press the numbered view keys', () => {
-    expect(VIEW_SWITCH_HINT).toBe('Press 1–4 to switch views');
+    expect(VIEW_SWITCH_HINT).toBe('Press 1–5 to switch views');
   });
 });
