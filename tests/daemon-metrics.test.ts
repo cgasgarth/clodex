@@ -159,7 +159,7 @@ describe('DaemonMetricsStore', () => {
     reopened.close();
   });
 
-  it('batches inference rows and Secondwind deltas until a read flushes both', () => {
+  it('keeps reads in memory and writes one aggregate row on shutdown', () => {
     const root = mkdtempSync(join(tmpdir(), 'clodex-metrics-'));
     roots.push(root);
     const path = join(root, 'metrics.sqlite');
@@ -194,11 +194,67 @@ describe('DaemonMetricsStore', () => {
     expect(store.readSince(0)).toHaveLength(2);
     expect(observer.query<{ count: number }, []>(
       'SELECT COUNT(*) AS count FROM metric_events',
-    ).get()?.count).toBe(2);
+    ).get()?.count).toBe(0);
+    expect(observer.query<{ count: number }, []>(
+      'SELECT COUNT(*) AS count FROM metric_batches',
+    ).get()?.count).toBe(0);
     expect(store.secondwindLifetime()).toMatchObject({
       requests: 2,
       tokensReduced: 500,
     });
+    store.close();
+    expect(observer.query<{ count: number }, []>(
+      'SELECT COUNT(*) AS count FROM metric_batches',
+    ).get()?.count).toBe(1);
+    const payload = observer.query<{ payload: string }, []>(
+      'SELECT payload FROM metric_batches',
+    ).get()?.payload;
+    expect(JSON.parse(payload ?? '[]')).toEqual([
+      expect.objectContaining({ requests: 2, inputTokens: 20, cachedInputTokens: 10 }),
+    ]);
+    observer.close();
+
+    const reopened = new DaemonMetricsStore(path);
+    const timestampMs = Date.parse(timestamp);
+    expect(reopened.bucketsRange(timestampMs - 60_000, timestampMs + 60_000, 60_000)
+      .reduce((sum, bucket) => sum + bucket.requests, 0)).toBe(2);
+    reopened.close();
+  });
+
+  it('flushes 1,000 pending records as one aggregate row', () => {
+    const root = mkdtempSync(join(tmpdir(), 'clodex-metrics-'));
+    roots.push(root);
+    const path = join(root, 'metrics.sqlite');
+    const store = new DaemonMetricsStore(path);
+    const timestamp = new Date().toISOString();
+    for (let index = 0; index < 1_000; index += 1) {
+      store.append({
+        timestamp,
+        requestId: `threshold-${index}`,
+        modelId: 'sol',
+        provider: 'openai-oauth',
+        inputTokens: 10,
+        cachedInputTokens: 5,
+        cacheWriteTokens: 0,
+        outputTokens: 1,
+        error: false,
+      });
+    }
+
+    const observer = new Database(path, { readonly: true });
+    expect(observer.query<{ count: number }, []>(
+      'SELECT COUNT(*) AS count FROM metric_batches',
+    ).get()?.count).toBe(1);
+    const payload = observer.query<{ payload: string }, []>(
+      'SELECT payload FROM metric_batches',
+    ).get()?.payload;
+    expect(JSON.parse(payload ?? '[]')).toEqual([
+      expect.objectContaining({
+        requests: 1_000,
+        inputTokens: 10_000,
+        cachedInputTokens: 5_000,
+      }),
+    ]);
     observer.close();
     store.close();
   });

@@ -145,8 +145,9 @@ lossless rewrite while forwarding original request bytes; on mode forwards the
 rewritten tool outputs; any optimizer failure falls back to the original
 request. Dollar savings are finalized from each request's observed OpenAI uncached,
 cache-read, and cache-write mix; token reduction comes directly from Secondwind.
-Completed inference rows and Secondwind totals are written in bounded SQLite
-batches, with read-through and shutdown flushes.
+Metrics aggregate in memory by minute/account/model/mode and flush once per
+minute as one compact SQLite batch row (or at 1,000 pending records). Dashboard
+reads merge pending memory without forcing writes; shutdown flushes immediately.
 
 The daemon uses one restart-stable loopback endpoint (`17647`, overridden by
 `CLODEX_DAEMON_PORT`) and an owner-only Unix control socket. `clodex claude …`

@@ -21,10 +21,11 @@ import {
 } from './api-pricing.js';
 
 const METRICS_RETENTION_MS = 400 * 24 * 60 * 60_000;
+const ONE_MINUTE_MS = 60_000;
 const FIVE_MINUTES_MS = 5 * 60_000;
 const PRUNE_INTERVAL_MS = 5 * 60_000;
-const METRICS_FLUSH_INTERVAL_MS = 250;
-const METRICS_FLUSH_BATCH_SIZE = 32;
+const METRICS_FLUSH_INTERVAL_MS = ONE_MINUTE_MS;
+const METRICS_FLUSH_BATCH_SIZE = 1_000;
 const METRICS_SCHEMA_VERSION = 2;
 
 export interface DaemonMetricEvent {
@@ -100,6 +101,18 @@ interface MetricRow {
   duration_ms: number | null;
   error: number;
   cancelled: number;
+}
+
+interface PersistedMetricAggregate extends DaemonMetricBucket {
+  timestampMs: number;
+  accountId?: string;
+  processingMode: ApiProcessingMode;
+  modelId: string;
+  provider: string;
+}
+
+interface MetricBatchRow {
+  payload: string;
 }
 
 interface DaemonMetricsStoreOptions {
@@ -221,6 +234,125 @@ function addCost(
   bucket.totalCost += cost.total;
 }
 
+function metricAggregateKey(event: DaemonMetricEvent, timestampMs: number): string {
+  return JSON.stringify([
+    timestampMs,
+    event.accountId ?? '',
+    normalizeApiProcessingMode(event.processingMode),
+    event.modelId,
+    event.provider,
+  ]);
+}
+
+function aggregateMetricEvents(events: DaemonMetricEvent[]): PersistedMetricAggregate[] {
+  const aggregates = new Map<string, PersistedMetricAggregate>();
+  for (const event of events) {
+    const eventMs = Date.parse(event.timestamp);
+    if (!Number.isFinite(eventMs)) continue;
+    const timestampMs = Math.floor(eventMs / ONE_MINUTE_MS) * ONE_MINUTE_MS;
+    const processingMode = normalizeApiProcessingMode(event.processingMode);
+    const key = metricAggregateKey(event, timestampMs);
+    const aggregate = aggregates.get(key) ?? {
+      ...emptyBucket(timestampMs),
+      timestampMs,
+      ...(event.accountId ? { accountId: event.accountId } : {}),
+      processingMode,
+      modelId: event.modelId,
+      provider: event.provider,
+    };
+    aggregate.inputTokens += safeInteger(event.inputTokens);
+    aggregate.cachedInputTokens += safeInteger(event.cachedInputTokens);
+    aggregate.cacheWriteTokens += safeInteger(event.cacheWriteTokens);
+    aggregate.outputTokens += safeInteger(event.outputTokens);
+    aggregate.requests += 1;
+    aggregate.errors += event.error ? 1 : 0;
+    aggregate.cancellations += event.cancelled ? 1 : 0;
+    aggregate.durationMs += safeInteger(event.durationMs);
+    const usage = {
+      modelId: event.modelId,
+      processingMode,
+      inputTokens: safeInteger(event.inputTokens),
+      cachedInputTokens: safeInteger(event.cachedInputTokens),
+      cacheWriteTokens: safeInteger(event.cacheWriteTokens),
+      outputTokens: safeInteger(event.outputTokens),
+    };
+    addCost(aggregate, estimateApiCost(usage), effectiveApiProcessingMode(usage));
+    aggregates.set(key, aggregate);
+  }
+  return [...aggregates.values()].sort((left, right) =>
+    left.timestampMs - right.timestampMs
+    || (left.accountId ?? '').localeCompare(right.accountId ?? '')
+    || left.modelId.localeCompare(right.modelId)
+    || left.processingMode.localeCompare(right.processingMode));
+}
+
+function parseMetricBatch(payload: string): PersistedMetricAggregate[] {
+  try {
+    const values = JSON.parse(payload);
+    if (!Array.isArray(values)) return [];
+    return values.filter((value): value is PersistedMetricAggregate =>
+      value !== null
+      && typeof value === 'object'
+      && Number.isFinite((value as PersistedMetricAggregate).timestampMs)
+      && typeof (value as PersistedMetricAggregate).modelId === 'string'
+      && typeof (value as PersistedMetricAggregate).provider === 'string');
+  } catch {
+    return [];
+  }
+}
+
+function addAggregate(
+  bucket: DaemonMetricBucket,
+  aggregate: PersistedMetricAggregate,
+): void {
+  bucket.inputTokens += safeInteger(aggregate.inputTokens);
+  bucket.cachedInputTokens += safeInteger(aggregate.cachedInputTokens);
+  bucket.cacheWriteTokens += safeInteger(aggregate.cacheWriteTokens);
+  bucket.outputTokens += safeInteger(aggregate.outputTokens);
+  bucket.requests += safeInteger(aggregate.requests);
+  bucket.errors += safeInteger(aggregate.errors);
+  bucket.cancellations += safeInteger(aggregate.cancellations);
+  bucket.durationMs += safeInteger(aggregate.durationMs);
+  bucket.inputCost += Math.max(0, aggregate.inputCost ?? 0);
+  bucket.cacheCost += Math.max(0, aggregate.cacheCost ?? 0);
+  bucket.outputCost += Math.max(0, aggregate.outputCost ?? 0);
+  bucket.totalCost += Math.max(0, aggregate.totalCost ?? 0);
+  bucket.pricedRequests += safeInteger(aggregate.pricedRequests);
+  bucket.unpricedRequests += safeInteger(aggregate.unpricedRequests);
+  bucket.standardRequests += safeInteger(aggregate.standardRequests);
+  bucket.fastRequests += safeInteger(aggregate.fastRequests);
+  bucket.standardCost += Math.max(0, aggregate.standardCost ?? 0);
+  bucket.fastCost += Math.max(0, aggregate.fastCost ?? 0);
+}
+
+function sumSecondwindSavings(
+  events: SecondwindSavingsEvent[],
+): SecondwindSavingsEvent {
+  return events.reduce<SecondwindSavingsEvent>(
+    (sum, event) => ({
+      requests: sum.requests + safeInteger(event.requests),
+      blocksRewritten: sum.blocksRewritten + safeInteger(event.blocksRewritten),
+      inputTokensConsidered:
+        sum.inputTokensConsidered + safeInteger(event.inputTokensConsidered),
+      tokensReduced: sum.tokensReduced + safeInteger(event.tokensReduced),
+      estimatedTokenRequests:
+        sum.estimatedTokenRequests + safeInteger(event.estimatedTokenRequests),
+      estimatedSavingsUsd: sum.estimatedSavingsUsd
+        + (Number.isFinite(event.estimatedSavingsUsd)
+          ? Math.max(0, event.estimatedSavingsUsd)
+          : 0),
+    }),
+    {
+      requests: 0,
+      blocksRewritten: 0,
+      inputTokensConsidered: 0,
+      tokensReduced: 0,
+      estimatedTokenRequests: 0,
+      estimatedSavingsUsd: 0,
+    },
+  );
+}
+
 export class DaemonMetricsStore {
   readonly path: string;
   readonly legacyPath?: string;
@@ -268,6 +400,14 @@ export class DaemonMetricsStore {
         ON metric_events(timestamp_ms);
       CREATE INDEX IF NOT EXISTS metric_events_account_timestamp
         ON metric_events(account_id, timestamp_ms);
+      CREATE TABLE IF NOT EXISTS metric_batches (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        start_ms INTEGER NOT NULL,
+        end_ms INTEGER NOT NULL,
+        payload TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS metric_batches_range
+        ON metric_batches(start_ms, end_ms);
       CREATE TABLE IF NOT EXISTS secondwind_lifetime (
         singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
         requests INTEGER NOT NULL,
@@ -321,7 +461,6 @@ export class DaemonMetricsStore {
   }
 
   readSince(sinceMs: number, accountId?: string): DaemonMetricEvent[] {
-    this.flush();
     const rows = accountId
       ? this.db.query<MetricRow, [number, string]>(`
           SELECT * FROM metric_events
@@ -333,7 +472,34 @@ export class DaemonMetricsStore {
           WHERE timestamp_ms >= ?
           ORDER BY timestamp_ms, id
         `).all(sinceMs);
-    return rows.map(rowToEvent);
+    const persisted = this.db.query<MetricBatchRow, [number]>(`
+      SELECT payload FROM metric_batches
+      WHERE end_ms >= ?
+      ORDER BY start_ms, id
+    `).all(sinceMs)
+      .flatMap(row => parseMetricBatch(row.payload))
+      .filter(aggregate =>
+        aggregate.timestampMs >= sinceMs
+        && (!accountId || aggregate.accountId === accountId))
+      .map<DaemonMetricEvent>(aggregate => ({
+        timestamp: aggregate.timestamp,
+        ...(aggregate.accountId ? { accountId: aggregate.accountId } : {}),
+        processingMode: aggregate.processingMode,
+        modelId: aggregate.modelId,
+        provider: aggregate.provider,
+        inputTokens: aggregate.inputTokens,
+        cachedInputTokens: aggregate.cachedInputTokens,
+        cacheWriteTokens: aggregate.cacheWriteTokens,
+        outputTokens: aggregate.outputTokens,
+        durationMs: aggregate.durationMs,
+        error: aggregate.errors > 0,
+        cancelled: aggregate.cancellations > 0,
+      }));
+    const pending = this.pendingEvents.filter(event =>
+      Date.parse(event.timestamp) >= sinceMs
+      && (!accountId || event.accountId === accountId));
+    return [...rows.map(rowToEvent), ...persisted, ...pending]
+      .sort((left, right) => Date.parse(left.timestamp) - Date.parse(right.timestamp));
   }
 
   buckets(
@@ -351,7 +517,6 @@ export class DaemonMetricsStore {
     bucketMs: number,
     accountId?: string,
   ): DaemonMetricBucket[] {
-    this.flush();
     if (
       !Number.isFinite(startMs)
       || !Number.isFinite(endMs)
@@ -400,11 +565,27 @@ export class DaemonMetricsStore {
         ...usage,
       }), processingMode);
     }
+    const persisted = this.db.query<MetricBatchRow, [number, number]>(`
+      SELECT payload FROM metric_batches
+      WHERE start_ms < ? AND end_ms >= ?
+      ORDER BY start_ms, id
+    `).all(endMs, startMs)
+      .flatMap(row => parseMetricBatch(row.payload));
+    const pending = aggregateMetricEvents(this.pendingEvents);
+    for (const aggregate of [...persisted, ...pending]) {
+      if (
+        aggregate.timestampMs < startMs
+        || aggregate.timestampMs >= endMs
+        || (accountId && aggregate.accountId !== accountId)
+      ) continue;
+      const index = Math.floor((aggregate.timestampMs - startMs) / bucketMs);
+      const bucket = buckets[index];
+      if (bucket) addAggregate(bucket, aggregate);
+    }
     return buckets;
   }
 
   secondwindLifetime(): SecondwindLifetimeMetrics {
-    this.flush();
     const row = this.db.query<{
       requests: number;
       blocks_rewritten: number;
@@ -418,16 +599,19 @@ export class DaemonMetricsStore {
       FROM secondwind_lifetime
       WHERE singleton = 1
     `).get();
+    const pending = sumSecondwindSavings(this.pendingSecondwind);
     return {
-      requests: safeInteger(row?.requests),
-      blocksRewritten: safeInteger(row?.blocks_rewritten),
-      inputTokensConsidered: safeInteger(row?.input_tokens_considered),
-      tokensReduced: safeInteger(row?.tokens_reduced),
-      estimatedTokenRequests: safeInteger(row?.estimated_token_requests),
+      requests: safeInteger(row?.requests) + pending.requests,
+      blocksRewritten: safeInteger(row?.blocks_rewritten) + pending.blocksRewritten,
+      inputTokensConsidered:
+        safeInteger(row?.input_tokens_considered) + pending.inputTokensConsidered,
+      tokensReduced: safeInteger(row?.tokens_reduced) + pending.tokensReduced,
+      estimatedTokenRequests:
+        safeInteger(row?.estimated_token_requests) + pending.estimatedTokenRequests,
       estimatedSavingsUsd: typeof row?.estimated_savings_usd === 'number'
         && Number.isFinite(row.estimated_savings_usd)
-        ? Math.max(0, row.estimated_savings_usd)
-        : 0,
+        ? Math.max(0, row.estimated_savings_usd) + pending.estimatedSavingsUsd
+        : pending.estimatedSavingsUsd,
     };
   }
 
@@ -467,33 +651,19 @@ export class DaemonMetricsStore {
     const events = this.pendingEvents.splice(0);
     const secondwind = this.pendingSecondwind.splice(0);
     try {
+      const aggregates = aggregateMetricEvents(events);
+      const secondwindTotal = sumSecondwindSavings(secondwind);
       const persist = this.db.transaction(() => {
-        for (const event of events) this.insert(event);
+        if (aggregates.length > 0) {
+          const startMs = aggregates[0]!.timestampMs;
+          const endMs = aggregates[aggregates.length - 1]!.timestampMs + ONE_MINUTE_MS;
+          this.db.query(`
+            INSERT INTO metric_batches (start_ms, end_ms, payload)
+            VALUES (?, ?, ?)
+          `).run(startMs, endMs, JSON.stringify(aggregates));
+        }
         if (secondwind.length > 0) {
-          const total = secondwind.reduce<SecondwindSavingsEvent>(
-            (sum, event) => ({
-              requests: sum.requests + safeInteger(event.requests),
-              blocksRewritten: sum.blocksRewritten + safeInteger(event.blocksRewritten),
-              inputTokensConsidered:
-                sum.inputTokensConsidered + safeInteger(event.inputTokensConsidered),
-              tokensReduced: sum.tokensReduced + safeInteger(event.tokensReduced),
-              estimatedTokenRequests:
-                sum.estimatedTokenRequests + safeInteger(event.estimatedTokenRequests),
-              estimatedSavingsUsd: sum.estimatedSavingsUsd
-                + (Number.isFinite(event.estimatedSavingsUsd)
-                  ? Math.max(0, event.estimatedSavingsUsd)
-                  : 0),
-            }),
-            {
-              requests: 0,
-              blocksRewritten: 0,
-              inputTokensConsidered: 0,
-              tokensReduced: 0,
-              estimatedTokenRequests: 0,
-              estimatedSavingsUsd: 0,
-            },
-          );
-          this.updateSecondwindSavings(total);
+          this.updateSecondwindSavings(secondwindTotal);
         }
       });
       persist.immediate();
@@ -587,6 +757,8 @@ export class DaemonMetricsStore {
   private prune(now: number, force = false): void {
     if (!force && now - this.lastPrunedAt < PRUNE_INTERVAL_MS) return;
     this.db.query('DELETE FROM metric_events WHERE timestamp_ms < ?')
+      .run(now - METRICS_RETENTION_MS);
+    this.db.query('DELETE FROM metric_batches WHERE end_ms < ?')
       .run(now - METRICS_RETENTION_MS);
     this.lastPrunedAt = now;
   }
