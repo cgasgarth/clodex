@@ -108,7 +108,7 @@ clodex                      # start if needed, then open the Ink dashboard
 clodex stop                 # stop the daemon
 ```
 
-Bare `clodex` opens a four-view dashboard:
+Bare `clodex` opens a five-view dashboard:
 
 - **Overview** — live WebSocket/session counts, active-account quota, and recent
   diagnostics.
@@ -117,14 +117,22 @@ Bare `clodex` opens a four-view dashboard:
   cost is split into input, cache, output, total, and Normal/Fast processing.
 - **Accounts** — manual account selection and guarded login/logout controls.
 - **Diagnostics** — bounded failures plus a guarded daemon restart.
+- **[Secondwind](https://github.com/orchetron/secondwind)** — daemon-wide `off`, `shadow`, or `on` tool-output
+  optimization, with estimated compacted-token, API-equivalent savings, and
+  median/p95 added-latency metrics. It defaults to `off`; the selected mode is
+  persisted and affects the next request without draining active sessions.
 
-Use `1`–`4` to switch views. In Usage, `Tab`/`Shift+Tab` changes the period,
+Use `1`–`5` to switch views. In Usage, `Tab`/`Shift+Tab` changes the period,
 `←`/`→` moves between periods, and `0` returns to the current period. Metrics
 are stored in an indexed owner-only SQLite database with 400-day retention;
 legacy JSONL metrics migrate as unattributed history rather than being assigned
 to the active account. API-equivalent prices cover GPT-5.6 Sol, Terra, and Luna
 using the current OpenAI Standard/Priority rates, including cache writes and
 long-context pricing. They are estimates, not ChatGPT subscription charges.
+Secondwind runs in-process and inline-only: shadow mode measures the same
+lossless rewrite while forwarding original request bytes; on mode forwards the
+rewritten tool outputs; any optimizer failure falls back to the original
+request. Savings use the routed model's uncached input rate and are estimates.
 
 The daemon uses restart-stable loopback ports (`17647` endpoint and `17646`
 proxy; override the proxy base with `CLODEX_DAEMON_PORT`) and an owner-only Unix

@@ -122,6 +122,7 @@ export function buildConfiguredHttpProxyOptions(
   webSocketDiagnosticsLogPath?: string,
   resolveRouteForRequest?: ProxyRouteRequestResolver,
   adapterHandle?: ProxyHandle,
+  optimizeTranslatedRequest?: HttpProxyOptions['optimizeTranslatedRequest'],
 ): HttpProxyOptions {
   return {
     host: '127.0.0.1',
@@ -142,6 +143,7 @@ export function buildConfiguredHttpProxyOptions(
     webSocketDiagnosticsLogPath,
     resolveRouteForRequest,
     adapterHandle,
+    optimizeTranslatedRequest,
   };
 }
 
@@ -170,6 +172,7 @@ export async function startConfiguredHttpProxy(
   webSocketDiagnosticsLogPath?: string,
   resolveRouteForRequest?: ProxyRouteRequestResolver,
   adapterHandle?: ProxyHandle,
+  optimizeTranslatedRequest?: HttpProxyOptions['optimizeTranslatedRequest'],
 ): Promise<{ handle: HttpProxyHandle; loaded: LoadedHttpProxyRoutes }> {
   const loaded = await loadHttpProxyRoutes();
   const handle = await startHttpProxy(buildConfiguredHttpProxyOptions(
@@ -181,6 +184,7 @@ export async function startConfiguredHttpProxy(
     webSocketDiagnosticsLogPath,
     resolveRouteForRequest,
     adapterHandle,
+    optimizeTranslatedRequest,
   ));
   handle.caCertPath = ensureHttpProxyCaBundle(
     handle.caCertPath,

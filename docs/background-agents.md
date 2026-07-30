@@ -77,10 +77,11 @@ Bare `clodex` starts the daemon when needed, then opens the Ink dashboard.
 `clodex start` starts it without opening the dashboard, and `clodex stop`
 stops it.
 
-- `↑`/`↓`: choose an account
-- `Enter`: make it the default for new launches
-- `r`: refresh usage windows
-- `s`: restart the daemon
+- `1`–`5`: switch Overview, Usage, Accounts, Diagnostics, and Secondwind views
+- Usage: `Tab` changes range; `←`/`→` changes period
+- Accounts: `↑`/`↓` chooses; `Enter` selects; `l` logs in; `x x` logs out
+- Secondwind: `←`/`→` changes mode; `o`, `s`, and `n` select off, shadow, and on
+- `r`: refresh
 - `q`: quit the dashboard; the daemon keeps running
 
 Service commands:

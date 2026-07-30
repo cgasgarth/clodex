@@ -78,6 +78,7 @@ export interface ModelAlias extends FavoriteModel {
 }
 
 export type BridgeMode = 'endpoint' | 'proxy';
+export type SecondwindMode = 'off' | 'shadow' | 'on';
 
 export interface UserPreferences {
   lastModel?: string;
@@ -92,6 +93,8 @@ export interface UserPreferences {
   /** Manual binary path overrides (e.g. the claude binary). */
   appPathOverrides?: Record<string, string>;
   recentLaunchFolders?: string[];
+  /** Daemon-wide Secondwind tool-output optimization mode. */
+  secondwindMode?: SecondwindMode;
   server?: {
     savedPassword?: string;
     /** Provider ids exposed by `clodex server`. */

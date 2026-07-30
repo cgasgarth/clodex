@@ -81,6 +81,15 @@ describe('dotfolder config', () => {
     ]);
   });
 
+  it('persists the daemon-wide Secondwind mode', () => {
+    expect(loadPreferences().secondwindMode).toBeUndefined();
+
+    savePreferences({ secondwindMode: 'shadow' });
+
+    expect(loadPreferences().secondwindMode).toBe('shadow');
+    expect(JSON.parse(readFileSync(getConfigPath(), 'utf8')).secondwindMode).toBe('shadow');
+  });
+
   it('loads legacy aliases without mutating or filtering their stored form', () => {
     savePreferences({ lastProvider: 'openai-oauth' });
     const legacyPayload = JSON.stringify({

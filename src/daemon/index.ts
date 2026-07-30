@@ -37,6 +37,7 @@ import {
   uninstallDaemonLaunchAgent,
 } from './launch-agent.js';
 import { createDaemonAccountController } from './account-service.js';
+import { createDaemonSecondwindService } from './secondwind.js';
 
 interface DaemonStatusResponse {
   running: boolean;
@@ -276,6 +277,7 @@ export async function runDaemonProcess(): Promise<number> {
   );
   const collector = new DaemonInferenceCollector();
   const accounts = createDaemonAccountController();
+  const secondwind = createDaemonSecondwindService();
   const unsubscribeTrace = subscribeInferenceTrace(event => collector.handle(event));
 
   let proxy: Awaited<ReturnType<typeof startConfiguredHttpProxy>> | undefined;
@@ -323,6 +325,18 @@ export async function runDaemonProcess(): Promise<number> {
       webSocketDiagnosticsLogPath,
       resolveRoute,
       endpoint,
+      async context => secondwind.rewrite({
+        body: context.body,
+        request: context.request,
+        sessionId: context.claudeSessionId
+          ? context.claudeAgentId
+            ? `${context.claudeSessionId}:${context.claudeAgentId}`
+            : context.claudeSessionId
+          : undefined,
+        modelId: context.route.realModelId,
+        processingMode: 'standard',
+        recordMetrics: context.endpoint === 'messages',
+      }),
     );
     runtime = createDaemonRuntimeState({
       pid: process.pid,
@@ -350,6 +364,7 @@ export async function runDaemonProcess(): Promise<number> {
       runtime: readyRuntime,
       collector,
       accounts,
+      secondwind,
       requestRestart,
       requestStop: requestShutdown,
     });
@@ -374,6 +389,7 @@ export async function runDaemonProcess(): Promise<number> {
     process.off('SIGINT', requestShutdown);
     process.off('SIGTERM', requestShutdown);
     unsubscribeTrace();
+    secondwind.close();
     if (runtime) removeDaemonRuntimeState(runtime.instanceId);
     unregisterServerRuntimeState(process.pid);
     await control?.close();

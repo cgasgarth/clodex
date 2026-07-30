@@ -82,11 +82,12 @@ export function loadPreferences(): UserPreferences {
     serverBridgeMode: config.serverBridgeMode,
     appPathOverrides: config.appPathOverrides,
     recentLaunchFolders: config.recentLaunchFolders,
+    secondwindMode: config.secondwindMode,
     server: config.server,
   };
 }
 
-export function savePreferences(prefs: Partial<Pick<UserPreferences, 'lastModel' | 'lastProvider' | 'recentModelsByProvider' | 'favoriteModels' | 'modelAliases' | 'claudeBridgeMode' | 'serverBridgeMode' | 'appPathOverrides' | 'recentLaunchFolders'>>): void {
+export function savePreferences(prefs: Partial<Pick<UserPreferences, 'lastModel' | 'lastProvider' | 'recentModelsByProvider' | 'favoriteModels' | 'modelAliases' | 'claudeBridgeMode' | 'serverBridgeMode' | 'appPathOverrides' | 'recentLaunchFolders' | 'secondwindMode'>>): void {
   updateConfig(config => {
     if (prefs.lastModel !== undefined) config.lastModel = prefs.lastModel;
     if (prefs.lastProvider !== undefined) config.lastProvider = prefs.lastProvider;
@@ -97,6 +98,7 @@ export function savePreferences(prefs: Partial<Pick<UserPreferences, 'lastModel'
     if (prefs.serverBridgeMode !== undefined) config.serverBridgeMode = prefs.serverBridgeMode;
     if (prefs.appPathOverrides !== undefined) config.appPathOverrides = prefs.appPathOverrides;
     if (prefs.recentLaunchFolders !== undefined) config.recentLaunchFolders = prefs.recentLaunchFolders;
+    if (prefs.secondwindMode !== undefined) config.secondwindMode = prefs.secondwindMode;
   });
 }
 
