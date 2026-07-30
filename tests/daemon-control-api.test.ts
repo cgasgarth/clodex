@@ -9,6 +9,7 @@ import { DaemonMetricsStore } from '../src/daemon/metrics.js';
 import { createDaemonRuntimeState } from '../src/daemon/runtime.js';
 import {
   DAEMON_CONTROL_IDLE_TIMEOUT_SECONDS,
+  DASHBOARD_CONTROL_REQUEST_TIMEOUT_MS,
   DASHBOARD_USAGE_REQUEST_TIMEOUT_MS,
   OPENAI_METADATA_TIMEOUT_MS,
 } from '../src/timeouts.js';
@@ -21,9 +22,28 @@ afterEach(() => {
 describe('daemon control API', () => {
   it('keeps each timeout above the slower downstream operation', () => {
     expect(OPENAI_METADATA_TIMEOUT_MS).toBe(60_000);
+    expect(DASHBOARD_CONTROL_REQUEST_TIMEOUT_MS).toBe(10_000);
     expect(DASHBOARD_USAGE_REQUEST_TIMEOUT_MS).toBeGreaterThan(OPENAI_METADATA_TIMEOUT_MS);
     expect(DAEMON_CONTROL_IDLE_TIMEOUT_SECONDS * 1_000)
       .toBeGreaterThan(DASHBOARD_USAGE_REQUEST_TIMEOUT_MS);
+  });
+
+  it('identifies the timed-out control endpoint', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(
+      (_input, init) => new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => {
+          reject(new DOMException('aborted', 'AbortError'));
+        });
+      }),
+    );
+    try {
+      await expect(daemonControlRequest('/v1/status', {
+        socketPath: '/tmp/clodex-test.sock',
+        timeoutMs: 1,
+      })).rejects.toThrow('Clodex daemon request timed out: GET /v1/status');
+    } finally {
+      fetchMock.mockRestore();
+    }
   });
 
   it('serves status, metrics, accounts, selection, and launch tickets over an owner socket', async () => {

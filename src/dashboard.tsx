@@ -1,7 +1,13 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Box, Text, render, useApp, useInput } from 'ink';
-import { daemonControlRequest } from './daemon/control-client.js';
-import { DASHBOARD_USAGE_REQUEST_TIMEOUT_MS } from './timeouts.js';
+import {
+  daemonControlRequest,
+  type DaemonControlRequestOptions,
+} from './daemon/control-client.js';
+import {
+  DASHBOARD_CONTROL_REQUEST_TIMEOUT_MS,
+  DASHBOARD_USAGE_REQUEST_TIMEOUT_MS,
+} from './timeouts.js';
 import {
   loginOpenAiAccount,
   logoutOpenAiAccount,
@@ -39,7 +45,7 @@ interface SessionStatus {
   failedRequests: number;
 }
 
-interface DaemonStatus {
+export interface DaemonStatus {
   running: boolean;
   ready: boolean;
   version: string;
@@ -73,7 +79,7 @@ export interface MetricBucket {
   fastCost: number;
 }
 
-interface Account {
+export interface Account {
   id: string;
   email?: string;
   selected: boolean;
@@ -88,7 +94,7 @@ interface Account {
   };
 }
 
-interface Diagnostic {
+export interface Diagnostic {
   timestamp: string;
   kind: string;
   code?: string;
@@ -112,12 +118,77 @@ export interface UsageRange {
   bucketMinutes: number;
 }
 
+export type DashboardRequest = <T>(
+  path: string,
+  options?: DaemonControlRequestOptions,
+) => Promise<T>;
+
+export interface DashboardPanelSnapshot {
+  reachable: boolean;
+  status?: DaemonStatus;
+  accounts?: Account[];
+  diagnostics?: Diagnostic[];
+  secondwind?: SecondwindSnapshot;
+  warnings: string[];
+}
+
 const VIEWS: DashboardView[] = ['overview', 'usage', 'accounts', 'diagnostics', 'secondwind'];
 const SECONDWIND_MODES: SecondwindMode[] = ['off', 'shadow', 'on'];
 const PERIODS: UsagePeriod[] = ['day', 'week', 'month'];
 const CHART_WIDTH = 56;
 const CHART_HEIGHT = 6;
 export const VIEW_SWITCH_HINT = 'Press 1–5 to switch views';
+
+function requestFailure(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * Load independent dashboard panels without allowing one slow panel to turn a
+ * healthy daemon into a false "unavailable" state.
+ */
+export async function loadDashboardPanels(
+  request: DashboardRequest = daemonControlRequest,
+): Promise<DashboardPanelSnapshot> {
+  const options = { timeoutMs: DASHBOARD_CONTROL_REQUEST_TIMEOUT_MS };
+  const [status, accounts, diagnostics, secondwind] = await Promise.allSettled([
+    request<DaemonStatus>('/v1/status', options),
+    request<{ accounts: Account[] }>('/v1/accounts', options),
+    request<{ diagnostics: Diagnostic[] }>('/v1/diagnostics?limit=20', options),
+    request<SecondwindSnapshot>('/v1/secondwind', options),
+  ]);
+  const warnings: string[] = [];
+  if (status.status === 'rejected') warnings.push(`status: ${requestFailure(status.reason)}`);
+  if (accounts.status === 'rejected') warnings.push(`accounts: ${requestFailure(accounts.reason)}`);
+  if (diagnostics.status === 'rejected') {
+    warnings.push(`diagnostics: ${requestFailure(diagnostics.reason)}`);
+  }
+  if (secondwind.status === 'rejected') {
+    warnings.push(`Secondwind: ${requestFailure(secondwind.reason)}`);
+  }
+
+  let reachable = [status, accounts, diagnostics, secondwind]
+    .some(result => result.status === 'fulfilled');
+  if (!reachable) {
+    try {
+      await request('/v1/health', options);
+      reachable = true;
+    } catch (error) {
+      warnings.push(`health: ${requestFailure(error)}`);
+    }
+  }
+
+  return {
+    reachable,
+    status: status.status === 'fulfilled' ? status.value : undefined,
+    accounts: accounts.status === 'fulfilled' ? accounts.value.accounts : undefined,
+    diagnostics: diagnostics.status === 'fulfilled'
+      ? diagnostics.value.diagnostics
+      : undefined,
+    secondwind: secondwind.status === 'fulfilled' ? secondwind.value : undefined,
+    warnings,
+  };
+}
 
 export function secondwindTokenSummary(
   metrics: Pick<SecondwindModeMetrics, 'tokensReduced' | 'estimatedTokenRequests'> | undefined,
@@ -396,7 +467,11 @@ function Dashboard(): React.ReactNode {
     [period, periodOffset, rangeNow],
   );
   const refreshSequence = useRef(0);
+  const usageRefreshSequence = useRef(0);
+  const refreshInFlight = useRef(false);
+  const usageRefreshInFlight = useRef(false);
   const [status, setStatus] = useState<DaemonStatus | null>(null);
+  const [daemonReachable, setDaemonReachable] = useState<boolean | null>(null);
   const [metrics, setMetrics] = useState<MetricBucket[]>([]);
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [diagnostics, setDiagnostics] = useState<Diagnostic[]>([]);
@@ -410,61 +485,91 @@ function Dashboard(): React.ReactNode {
   const [deviceCode, setDeviceCode] = useState<DeviceCodePrompt>();
   const [secondwindAction, setSecondwindAction] = useState(false);
 
-  const refresh = useCallback(async (usage = false) => {
+  const refresh = useCallback(async () => {
+    if (refreshInFlight.current) return;
+    refreshInFlight.current = true;
     const sequence = ++refreshSequence.current;
     setLoading(true);
     try {
-      const [nextStatus, nextAccounts, nextDiagnostics, nextSecondwind] = await Promise.all([
-        daemonControlRequest<DaemonStatus>('/v1/status'),
-        daemonControlRequest<{ accounts: Account[] }>(`/v1/accounts${usage ? '?refresh=1' : ''}`, {
-          timeoutMs: usage ? DASHBOARD_USAGE_REQUEST_TIMEOUT_MS : 2_000,
-        }),
-        daemonControlRequest<{ diagnostics: Diagnostic[] }>('/v1/diagnostics?limit=20'),
-        daemonControlRequest<SecondwindSnapshot>('/v1/secondwind'),
-      ]);
-      const activeAccount = nextAccounts.accounts.find(account => account.selected);
+      const snapshot = await loadDashboardPanels();
+      if (sequence !== refreshSequence.current) return;
+      setDaemonReachable(snapshot.reachable);
+      if (snapshot.status) setStatus(snapshot.status);
+      else if (!snapshot.reachable) setStatus(null);
+      if (snapshot.accounts) {
+        setAccounts(snapshot.accounts);
+        const current = snapshot.accounts.findIndex(account => account.selected);
+        if (current >= 0) setSelectedIndex(current);
+      }
+      if (snapshot.diagnostics) setDiagnostics(snapshot.diagnostics);
+      if (snapshot.secondwind) setSecondwind(snapshot.secondwind);
+
+      const warnings = [...snapshot.warnings];
+      const activeAccount = snapshot.accounts?.find(account => account.selected);
       const metricsQuery = new URLSearchParams({
         start: range.start.toISOString(),
         end: range.end.toISOString(),
         bucketMinutes: String(range.bucketMinutes),
         ...(activeAccount ? { accountId: activeAccount.id } : {}),
       });
-      const nextMetrics = activeAccount
-        ? await daemonControlRequest<{
+      if (activeAccount) {
+        try {
+          const nextMetrics = await daemonControlRequest<{
             start: string;
             end: string;
             accountId?: string;
             buckets: MetricBucket[];
           }>(
             `/v1/metrics?${metricsQuery.toString()}`,
-          )
-        : {
-            start: range.start.toISOString(),
-            end: range.end.toISOString(),
-            buckets: [],
-          };
+            { timeoutMs: DASHBOARD_CONTROL_REQUEST_TIMEOUT_MS },
+          );
+          if (sequence !== refreshSequence.current) return;
+          if (
+            nextMetrics.start === range.start.toISOString()
+            && nextMetrics.end === range.end.toISOString()
+            && nextMetrics.accountId === activeAccount.id
+          ) {
+            setMetrics(nextMetrics.buckets);
+          }
+        } catch (error) {
+          warnings.push(`metrics: ${requestFailure(error)}`);
+        }
+      } else if (snapshot.accounts) {
+        setMetrics([]);
+      }
       if (sequence !== refreshSequence.current) return;
-      if (
-        nextMetrics.start !== range.start.toISOString()
-        || nextMetrics.end !== range.end.toISOString()
-        || nextMetrics.accountId !== activeAccount?.id
-      ) return;
-      setStatus(nextStatus);
-      setMetrics(nextMetrics.buckets);
-      setAccounts(nextAccounts.accounts);
-      setDiagnostics(nextDiagnostics.diagnostics);
-      setSecondwind(nextSecondwind);
-      const current = nextAccounts.accounts.findIndex(account => account.selected);
-      if (current >= 0) setSelectedIndex(current);
-      setMessage(`Updated ${new Date().toLocaleTimeString()}`);
+      setMessage(warnings.length > 0
+        ? `Updated with warnings · ${warnings.join(' · ')}`
+        : `Updated ${new Date().toLocaleTimeString()}`);
     } catch (error) {
       if (sequence !== refreshSequence.current) return;
-      setStatus(null);
       setMessage(error instanceof Error ? error.message : String(error));
     } finally {
-      if (sequence === refreshSequence.current) setLoading(false);
+      refreshInFlight.current = false;
+      setLoading(false);
     }
   }, [range.bucketMinutes, range.end, range.start]);
+
+  const refreshUsage = useCallback(async () => {
+    if (usageRefreshInFlight.current) return;
+    usageRefreshInFlight.current = true;
+    const sequence = ++usageRefreshSequence.current;
+    try {
+      const nextAccounts = await daemonControlRequest<{ accounts: Account[] }>(
+        '/v1/accounts?refresh=1',
+        { timeoutMs: DASHBOARD_USAGE_REQUEST_TIMEOUT_MS },
+      );
+      if (sequence !== usageRefreshSequence.current) return;
+      setAccounts(nextAccounts.accounts);
+      const current = nextAccounts.accounts.findIndex(account => account.selected);
+      if (current >= 0) setSelectedIndex(current);
+    } catch (error) {
+      if (sequence !== usageRefreshSequence.current) return;
+      setMessage(`Account usage refresh failed · ${requestFailure(error)}`);
+    } finally {
+      usageRefreshInFlight.current = false;
+    }
+  }, []);
 
   const login = useCallback(() => {
     if (accountAction) return;
@@ -480,7 +585,8 @@ function Dashboard(): React.ReactNode {
       account => {
         setDeviceCode(undefined);
         setMessage(`Signed in as ${account.email}`);
-        void refresh(true).finally(() => setAccountAction(false));
+        void Promise.allSettled([refresh(), refreshUsage()])
+          .finally(() => setAccountAction(false));
       },
       error => {
         setDeviceCode(undefined);
@@ -488,7 +594,7 @@ function Dashboard(): React.ReactNode {
         setMessage(error instanceof Error ? error.message : String(error));
       },
     );
-  }, [accountAction, refresh]);
+  }, [accountAction, refresh, refreshUsage]);
 
   const setSecondwindMode = useCallback((mode: SecondwindMode) => {
     if (secondwindAction || secondwind?.mode === mode) return;
@@ -513,7 +619,8 @@ function Dashboard(): React.ReactNode {
       email => {
         setPendingLogoutId(undefined);
         setMessage(`Signed out ${email}`);
-        void refresh(true).finally(() => setAccountAction(false));
+        void Promise.allSettled([refresh(), refreshUsage()])
+          .finally(() => setAccountAction(false));
       },
       error => {
         setAccountAction(false);
@@ -521,20 +628,22 @@ function Dashboard(): React.ReactNode {
         setMessage(error instanceof Error ? error.message : String(error));
       },
     );
-  }, [accountAction, refresh]);
+  }, [accountAction, refresh, refreshUsage]);
 
   useEffect(() => {
     // Do not render the previous period's values under a newly selected label
     // while the replacement query is in flight.
     setMetrics([]);
-    void refresh(true);
+    void refresh();
     const timer = setInterval(() => void refresh(), 5_000);
-    const usageTimer = setInterval(() => void refresh(true), 90_000);
-    return () => {
-      clearInterval(timer);
-      clearInterval(usageTimer);
-    };
+    return () => clearInterval(timer);
   }, [refresh]);
+
+  useEffect(() => {
+    void refreshUsage();
+    const timer = setInterval(() => void refreshUsage(), 90_000);
+    return () => clearInterval(timer);
+  }, [refreshUsage]);
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -572,7 +681,8 @@ function Dashboard(): React.ReactNode {
       return;
     }
     if (input === 'r') {
-      void refresh(true);
+      void refresh();
+      void refreshUsage();
       return;
     }
     if (view === 'usage') {
@@ -660,7 +770,7 @@ function Dashboard(): React.ReactNode {
         }).then(
           () => {
             setPeriodOffset(0);
-            return refresh(true);
+            return Promise.allSettled([refresh(), refreshUsage()]);
           },
           error => {
             setMessage(error instanceof Error ? error.message : String(error));
@@ -723,12 +833,26 @@ function Dashboard(): React.ReactNode {
   const logicalInput = totals.input + totals.cached + totals.cacheWrite;
   const activeAccount = accounts.find(account => account.selected);
 
-  if (!status) {
+  if (daemonReachable === false) {
     return (
       <Box flexDirection="column" padding={1}>
         <Text bold color="cyan">clodex</Text>
         <Text color="yellow">Daemon unavailable: {message}</Text>
         <Text>Run <Text bold>clodex daemon install</Text> (persistent) or <Text bold>clodex daemon run</Text> (foreground).</Text>
+        <Text dimColor>r retry · q quit</Text>
+      </Box>
+    );
+  }
+
+  if (!status) {
+    return (
+      <Box flexDirection="column" padding={1}>
+        <Text bold color="cyan">clodex</Text>
+        <Text color={daemonReachable ? 'yellow' : undefined}>
+          {daemonReachable
+            ? `Daemon reachable; status panel delayed · ${message}`
+            : message}
+        </Text>
         <Text dimColor>r retry · q quit</Text>
       </Box>
     );
