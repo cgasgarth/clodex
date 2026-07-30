@@ -31,6 +31,7 @@ function postToProxy(
   relayRequestId?: string,
   path = '/v1/messages',
   claudeSessionId?: string,
+  claudeAgentId?: string,
 ): Promise<{ status: number; body: string; headers: http.IncomingHttpHeaders }> {
   return new Promise((resolve, reject) => {
     const payload = JSON.stringify(body);
@@ -47,6 +48,7 @@ function postToProxy(
           'Content-Length': Buffer.byteLength(payload),
           ...(relayRequestId ? { 'x-relay-request-id': relayRequestId } : {}),
           ...(claudeSessionId ? { 'x-claude-code-session-id': claudeSessionId } : {}),
+          ...(claudeAgentId ? { 'x-claude-code-agent-id': claudeAgentId } : {}),
         },
       },
       (res) => {
@@ -95,6 +97,81 @@ describe('Anthropic endpoint routing', () => {
     // bytes/4 on the raw payload alone would be ~100k tokens
     expect(withImage).toBeLessThan(5_000);
     expect(withImage).toBeGreaterThanOrEqual(1_600);
+  });
+
+  it('runs optional optimization inside the canonical endpoint before dispatch', async () => {
+    const route: ProxyRoute = {
+      aliasId: 'sol',
+      realModelId: 'gpt-5.6-sol',
+      displayName: 'Sol',
+      upstreamUrl: 'https://anthropic.example',
+      apiKey: 'provider-key',
+      modelFormat: 'anthropic',
+      providerId: 'test-provider',
+    };
+    let upstreamBody: Record<string, unknown> | undefined;
+    const fetchMock = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+      upstreamBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      return new Response(JSON.stringify({
+        id: 'msg_optimized',
+        type: 'message',
+        role: 'assistant',
+        model: route.realModelId,
+        content: [],
+        usage: { input_tokens: 1, output_tokens: 1 },
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const optimizeRequest = vi.fn(async (context) => Buffer.from(JSON.stringify({
+      ...context.request,
+      messages: [{ role: 'user', content: 'optimized in endpoint' }],
+    })));
+    const handle = await startProxyCatalog(
+      [route],
+      route.aliasId,
+      false,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      0,
+      optimizeRequest,
+    );
+
+    try {
+      const response = await postToProxy(
+        handle.port,
+        handle.token,
+        {
+          model: route.aliasId,
+          max_tokens: 100,
+          messages: [{ role: 'user', content: 'original' }],
+          stream: false,
+        },
+        undefined,
+        '/v1/messages',
+        '11111111-1111-4111-8111-111111111111',
+        'agent-7',
+      );
+
+      expect(response.status).toBe(200);
+      expect(optimizeRequest).toHaveBeenCalledOnce();
+      expect(optimizeRequest.mock.calls[0]?.[0]).toMatchObject({
+        endpoint: 'messages',
+        claudeSessionId: '11111111-1111-4111-8111-111111111111',
+        claudeAgentId: 'agent-7',
+        route,
+        processingMode: 'standard',
+      });
+      expect(upstreamBody).toMatchObject({
+        model: route.realModelId,
+        messages: [{ role: 'user', content: 'optimized in endpoint' }],
+      });
+    } finally {
+      handle.close();
+      vi.unstubAllGlobals();
+    }
   });
 });
 

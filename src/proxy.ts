@@ -329,6 +329,20 @@ export type ProxyRouteRequestResolver = (
   context: { launchTicket?: string },
 ) => Promise<ProxyRoute>;
 
+export interface ProxyRequestOptimizationContext {
+  body: Buffer;
+  request: Record<string, unknown>;
+  endpoint: NonNullable<ReturnType<typeof anthropicMessagesEndpoint>>;
+  claudeSessionId?: string;
+  claudeAgentId?: string;
+  route: ProxyRoute;
+  processingMode: ApiProcessingMode;
+}
+
+export type ProxyRequestOptimizer = (
+  context: ProxyRequestOptimizationContext,
+) => Promise<Buffer>;
+
 function configuredAliasLookupNames(alias: ProxyModelAlias): string[] {
   const sourceNames = [
     alias.name,
@@ -352,6 +366,7 @@ export async function startProxyCatalog(
   modelAliases?: ProxyModelAlias[],
   resolveRouteForRequest?: ProxyRouteRequestResolver,
   port = 0,
+  optimizeRequest?: ProxyRequestOptimizer,
 ): Promise<ProxyHandle> {
   const proxyToken = getOrCreateProxyToken();
   silenceSdkWarnings();
@@ -461,11 +476,13 @@ export async function startProxyCatalog(
       req.signal.addEventListener('abort', abortForClientDisconnect, { once: true });
       response.setClientCancelHandler(abortForClientDisconnect);
 
+      let decodedBody: Buffer;
       let anthropicBody: any;
       try {
         const rawBytes = Buffer.from(await req.arrayBuffer());
         if (rawBytes.length > 50 * 1024 * 1024) throw new Error('Request body too large');
         const raw = decodeRequestBody(rawBytes, req.headers.get('content-encoding') ?? undefined);
+        decodedBody = Buffer.from(raw);
         anthropicBody = JSON.parse(raw);
       } catch {
         anthropicError(res, 400, 'Invalid JSON body');
@@ -511,6 +528,29 @@ export async function startProxyCatalog(
             error instanceof Error ? error.message : 'Managed account is unavailable',
           );
           return;
+        }
+      }
+      const claudeSessionIdHeader = req.headers.get('x-claude-code-session-id') ?? undefined;
+      const claudeAgentIdHeader = req.headers.get('x-claude-code-agent-id') ?? undefined;
+      const claudeSessionId = extractClaudeSessionId(anthropicBody, claudeSessionIdHeader);
+      const processingMode: ApiProcessingMode = 'standard';
+      if (optimizeRequest) {
+        const optimizedBody = await optimizeRequest({
+          body: decodedBody,
+          request: anthropicBody,
+          endpoint: messagesEndpoint,
+          claudeSessionId,
+          claudeAgentId: claudeAgentIdHeader,
+          route,
+          processingMode,
+        });
+        if (optimizedBody !== decodedBody) {
+          try {
+            anthropicBody = JSON.parse(optimizedBody.toString('utf8'));
+          } catch {
+            // Optional middleware is fail-open. A malformed rewrite must not
+            // prevent the original inference request from reaching its route.
+          }
         }
       }
       if (messagesEndpoint === 'count_tokens' && route.modelFormat !== 'anthropic') {
@@ -637,13 +677,9 @@ export async function startProxyCatalog(
       // format, endpoint selection, and provider quirks.
       if (usesSdkAdapter) {
         const openAiOAuth = route.npm === '@ai-sdk/openai' && route.authType === 'oauth';
-        const claudeSessionIdHeader = req.headers.get('x-claude-code-session-id') ?? undefined;
-        const claudeAgentIdHeader = req.headers.get('x-claude-code-agent-id') ?? undefined;
-        const claudeSessionId = extractClaudeSessionId(anthropicBody, claudeSessionIdHeader);
         // Current requests use Standard processing. The metrics pipeline also
         // accepts `fast`; the session-scoped /fast transport work will set this
         // from the actual outbound service tier when it enables Priority.
-        const processingMode: ApiProcessingMode = 'standard';
         if (inferenceLogPath && !forwardedRequestId) {
           writeInferenceRequestLog(inferenceLogPath, {
             requestId: relayRequestId,

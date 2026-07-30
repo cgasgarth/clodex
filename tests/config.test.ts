@@ -165,14 +165,14 @@ describe('dotfolder config', () => {
 });
 
 describe('bridge-mode memory', () => {
-  it('defaults both commands to proxy mode when nothing is saved', () => {
-    expect(resolveBridgeMode('claude', undefined)).toBe('proxy');
+  it('defaults Claude to its single endpoint and standalone server to proxy mode', () => {
+    expect(resolveBridgeMode('claude', undefined)).toBe('endpoint');
     expect(resolveBridgeMode('server', undefined)).toBe('proxy');
   });
 
   it('never auto-persists an explicit mode flag', () => {
     expect(resolveBridgeMode('claude', 'endpoint')).toBe('endpoint');
-    expect(resolveBridgeMode('claude', undefined)).toBe('proxy');
+    expect(resolveBridgeMode('claude', undefined)).toBe('endpoint');
 
     expect(resolveBridgeMode('server', 'endpoint', { persist: false })).toBe('endpoint');
     expect(resolveBridgeMode('server', undefined)).toBe('proxy');

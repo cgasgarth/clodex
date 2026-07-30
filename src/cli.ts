@@ -68,17 +68,12 @@ import {
   daemonHelpText,
   ensureDaemonRunning,
   restartDaemonIfRunning,
-  resolveDaemonPort,
   runDaemonCommand,
   stopDaemon,
 } from './daemon/index.js';
 import { accountsHelpText, runAccountsCommand } from './daemon/account-command.js';
 import { daemonControlRequest } from './daemon/control-client.js';
-import {
-  computeWrapperEnv,
-  LAUNCH_TICKET_HEADER,
-  setAnthropicCustomHeader,
-} from './wrapper-env.js';
+import { LAUNCH_TICKET_HEADER, setAnthropicCustomHeader } from './wrapper-env.js';
 import { getConfigPath, getProvidersPath } from './paths.js';
 import { getOrCreateProxyToken } from './proxy-token.js';
 const STARTER_CLAUDE_FLAGS = new Set(['--dry-run', '--trace', '--endpoint', '--proxy', '--save-mode', '--help', '-h', '--version', '-v']);
@@ -221,10 +216,12 @@ function consumeBridgeModeFlag(arg: string, parsed: ParsedArgs): boolean {
   return false;
 }
 
-/** --save-mode is only meaningful together with an explicit --endpoint/--proxy. */
+/** --save-mode is only meaningful with an explicit mode supported by the command. */
 function validateSaveModeFlag(parsed: ParsedArgs): void {
   if (parsed.saveBridgeMode && !parsed.bridgeMode && !parsed.error) {
-    parsed.error = '--save-mode saves a bridge mode as this command\'s default — combine it with --endpoint or --proxy (e.g. `clodex claude --proxy --save-mode`)';
+    parsed.error = parsed.command === 'claude'
+      ? '--save-mode is retained for compatibility and must be combined with --endpoint'
+      : '--save-mode saves the server bridge mode — combine it with --endpoint or --proxy';
   }
 }
 
@@ -438,19 +435,14 @@ ${pc.bold('Commands:')}
   favorites   Alias for models
   providers   Add or sign in to your OpenAI providers
 
-${pc.bold('Bridge modes (claude and server):')}
-  --endpoint   Local Anthropic-format gateway; Claude Code launches with
-               ANTHROPIC_BASE_URL pointed at it
-  --proxy      Selective MITM of api.anthropic.com; Claude Code keeps its
-               normal Anthropic auth, clodex: models route to OpenAI
-               (default when nothing is saved)
-  --save-mode  Persist the mode given by --endpoint/--proxy as that
-               command's default. Without --save-mode a mode flag applies
-               to that run only.
+${pc.bold('Claude transport:')}
+  clodex claude always uses the persistent daemon's single local endpoint.
+
+${pc.bold('Server bridge modes:')}
+  clodex server supports endpoint and proxy modes for standalone gateway use.
 
 ${pc.bold('Examples:')}
   clodex claude
-  clodex claude --proxy
   clodex models
   clodex patch
   clodex server
@@ -468,10 +460,8 @@ ${pc.bold('Usage:')}
   clodex claude --version
 
 ${pc.bold('Options:')}
-  --endpoint   Endpoint bridge mode for this run: local gateway + ANTHROPIC_BASE_URL
-  --proxy      Proxy bridge mode for this run: keep Claude Code's Anthropic auth;
-               route clodex: models to OpenAI (default when nothing is saved)
-  --save-mode  With --endpoint/--proxy: save that mode as the claude default
+  --endpoint   Accepted for compatibility; the daemon always uses its endpoint
+  --save-mode  Accepted with --endpoint for compatibility
   --dry-run    Run the wizard but show a preview instead of launching Claude Code
   --trace      Write debug logs to ~/.clodex/logs/ and show errors on exit
   --provider   Boot provider id (skip wizard when paired with --model or in print mode)
@@ -485,16 +475,13 @@ ${pc.bold('Providers:')}
 
 ${pc.bold('Model switching:')}
   Run clodex models to save favorites (max ${MAX_MODEL_CATALOG}).
-  When favorites exist, endpoint mode starts a multi-route proxy and Claude
-  Code /model lists your starting model plus favorites for live switching.
+  When favorites exist, the daemon endpoint exposes a multi-route catalog and
+  Claude Code /model lists your starting model plus favorites for live switching.
   With no favorites, launch uses a single model.
 
-${pc.bold('Proxy mode:')}
-  clodex claude --proxy leaves ANTHROPIC_BASE_URL unset and launches
-  Claude Code with its normal Anthropic login. Favorite OpenAI models are
-  available by typing /model clodex:<provider-id>:<model-id>.
-  Save short names with clodex models --alias, and run --list to print them.
-  Run clodex patch to make those names first-class inside Claude Code.
+${pc.bold('Transport:')}
+  Every Claude launch uses the persistent daemon's single endpoint.
+  Standalone proxy mode remains available through clodex server --proxy.
 
 ${pc.bold('Note:')}
   Claude Code may save the launched model to ~/.claude/settings.json.
@@ -1028,107 +1015,6 @@ export async function runModelsCommand(opts: FavoritesCommandOptions = {}): Prom
   return 0;
 }
 
-async function runClaudeHttpProxyCommand(
-  parsed: ParsedArgs,
-  claudeArgs: string[],
-  agentStdout: boolean,
-): Promise<number> {
-  if (parsed.launchProvider || parsed.launchModel) {
-    p.log.error('--provider/--model select endpoint-mode routes and cannot be combined with --proxy.');
-    p.log.info('Use `-- --model clodex:<provider-id>:<model-id>` to start on a listed proxy-mode favorite.');
-    return 1;
-  }
-
-  if (!agentStdout) relayIntro('Claude Code — Proxy Mode');
-
-  if (parsed.dryRun) {
-    try {
-      const loaded = await loadHttpProxyRoutes();
-      console.log('');
-      console.log(pc.bold(pc.cyan('  DRY RUN — proxy bridge mode')));
-      console.log('  ANTHROPIC_BASE_URL is not set by clodex.');
-      console.log(`  HTTPS_PROXY/HTTP_PROXY=http://127.0.0.1:${resolveDaemonPort()}`);
-      console.log('  NODE_EXTRA_CA_CERTS=~/.clodex/http-proxy/clodex-ca.pem');
-      console.log('  One shared Clodex daemon serves main, workflow, and subagent processes.');
-      console.log('');
-      printHttpProxyModels(loaded.routes, loaded.aliases);
-      reportSkippedHttpProxyFavorites(loaded);
-      console.log('');
-      return 0;
-    } catch (err) {
-      p.log.error(`Could not load proxy models: ${err instanceof Error ? err.message : String(err)}`);
-      return 1;
-    }
-  }
-
-  const cliPath = realpathSync(fileURLToPath(import.meta.url));
-  let runtime: Awaited<ReturnType<typeof ensureDaemonRunning>>;
-  try {
-    runtime = await ensureDaemonRunning(cliPath);
-  } catch (err) {
-    p.log.error(`Failed to start the Clodex daemon: ${err instanceof Error ? err.message : String(err)}`);
-    return 1;
-  }
-
-  let launchTicket: string | undefined;
-  try {
-    const attached = await daemonControlRequest<{ ticket: string } | null>('/v1/launches/attach', {
-      method: 'POST',
-      body: process.env['CLODEX_ACCOUNT']
-        ? { accountId: process.env['CLODEX_ACCOUNT'] }
-        : {},
-      socketPath: runtime.controlSocketPath,
-      timeoutMs: 1_000,
-    });
-    launchTicket = attached?.ticket;
-  } catch (error) {
-    p.log.error(
-      `Could not pin the OpenAI account${
-        process.env['CLODEX_ACCOUNT']
-          ? ` ${JSON.stringify(process.env['CLODEX_ACCOUNT'])}`
-          : ''
-      }: ${error instanceof Error ? error.message : String(error)}`,
-    );
-    return 1;
-  }
-
-  const loaded = await loadHttpProxyRoutes();
-  if (!agentStdout) {
-    p.log.info(
-      `Using the shared Clodex daemon on port ${runtime.proxyPort}; Claude Code's Anthropic auth remains active.`,
-    );
-    printHttpProxyModels(loaded.routes, loaded.aliases);
-    reportSkippedHttpProxyFavorites(loaded);
-    if (loaded.routes.length > 0) {
-      p.log.info('Switch with `/model <listed-name>`.');
-    }
-  }
-
-  const childEnv = computeWrapperEnv(process.env, {
-    mode: 'proxy',
-    port: runtime.proxyPort,
-    pid: runtime.pid,
-    caPath: runtime.caPath,
-    startedAt: runtime.startedAt,
-  }, launchTicket);
-  childEnv['CLODEX_REQUIRE_SERVER'] = '1';
-  childEnv['CLAUDE_CODE_PROCESS_WRAPPER'] ??= join(
-    dirname(cliPath),
-    'claude-wrapper.js',
-  );
-  const debugLogPath = parsed.trace
-    ? prepareClaudeTraceLog(getSessionLogPath('claude-debug'))
-    : undefined;
-  const traceArgs = debugLogPath ? ['--debug-file', debugLogPath] : [];
-  if (debugLogPath && !agentStdout) {
-    p.log.info(`Claude debug log: ${debugLogPath}`);
-  }
-
-  const exitCode = await launchClaude(childEnv, undefined, [...traceArgs, ...claudeArgs]);
-  if (debugLogPath) printTraceLog(debugLogPath);
-  return exitCode;
-}
-
 function requestedClaudeModel(args: string[]): string | undefined {
   let index = -1;
   for (let cursor = 0; cursor < args.length; cursor += 1) {
@@ -1189,10 +1075,10 @@ async function runClaudeDaemonEndpointCommand(
   ) ?? loaded.routes[0];
   const apiKey = getOrCreateProxyToken();
   const childEnv = buildChildEnv(
-    `http://127.0.0.1:${runtime.endpointPort}`,
+    `http://127.0.0.1:${runtime.port}`,
     launchModel,
     apiKey,
-    runtime.endpointPort,
+    runtime.port,
     route?.contextWindow,
     true,
     catalogUsesNativeContextOwner(loaded.routes),
@@ -1202,14 +1088,13 @@ async function runClaudeDaemonEndpointCommand(
     setAnthropicCustomHeader(childEnv, LAUNCH_TICKET_HEADER, launchTicket);
   }
   childEnv['CLODEX_REQUIRE_SERVER'] = '1';
-  childEnv['CLODEX_DAEMON_BRIDGE_MODE'] = 'endpoint';
   childEnv['CLAUDE_CODE_PROCESS_WRAPPER'] ??= join(
     dirname(cliPath),
     'claude-wrapper.js',
   );
   if (!agentStdout) {
     p.log.info(
-      `Using ${launchModel} through the shared Clodex daemon endpoint on port ${runtime.endpointPort}.`,
+      `Using ${launchModel} through the shared Clodex daemon endpoint on port ${runtime.port}.`,
     );
   }
   const debugLogPath = parsed.trace
@@ -1236,16 +1121,16 @@ export async function runClaudeCommand(parsed: ParsedArgs): Promise<number> {
     return 1;
   }
 
-  const bridgeMode = resolveBridgeMode('claude', parsed.bridgeMode, {
-    persist: Boolean(parsed.saveBridgeMode) && !dryRun,
-  });
+  if (parsed.bridgeMode === 'proxy') {
+    p.log.error('clodex claude uses one persistent endpoint; --proxy is only available to clodex server.');
+    return 1;
+  }
+  if (parsed.bridgeMode === 'endpoint' && parsed.saveBridgeMode && !dryRun) {
+    savePreferences({ claudeBridgeMode: 'endpoint' });
+  }
 
   // Launch-time patch check: prompt on TTY, notice otherwise. Never blocks the launch.
   await runLaunchPatchCheck({ agentStdout, dryRun });
-
-  if (bridgeMode === 'proxy') {
-    return runClaudeHttpProxyCommand(parsed, claudeArgs, agentStdout);
-  }
 
   if (
     !parsed.dryRun
@@ -1645,7 +1530,7 @@ export async function main(args: string[] = process.argv.slice(2)): Promise<numb
         realpathSync(fileURLToPath(import.meta.url)),
       );
       console.log(
-        `Clodex daemon ready (pid ${runtime.pid}, endpoint ${runtime.endpointPort}, proxy ${runtime.proxyPort}).`,
+        `Clodex daemon ready (pid ${runtime.pid}, endpoint ${runtime.port}).`,
       );
       return 0;
     } catch (error) {

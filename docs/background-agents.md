@@ -10,26 +10,25 @@ creating a proxy per Claude session.
 ```mermaid
 flowchart LR
   TUI["clodex Ink dashboard"] -->|"Unix control socket"| D["Clodex daemon"]
-  MAIN["Claude main session"] -->|"Endpoint or HTTPS proxy + signed launch ticket"| D
+  MAIN["Claude main session"] -->|"Anthropic-format endpoint + signed launch ticket"| D
   MAIN -->|"CLAUDE_CODE_PROCESS_WRAPPER"| CHILD["Workflows / subagents / background Claude"]
   CHILD -->|"inherits the same ticket"| D
+  D -->|"optional off / shadow / on rewrite"| SW["Secondwind middleware"]
+  SW --> D
   D --> WS["Shared OpenAI WebSocket pools"]
   D --> METRICS["Content-free metrics + diagnostics"]
-  D --> ANT["Anthropic passthrough"]
 ```
 
-- The Clodex daemon owns the Anthropic-format endpoint, selective HTTP proxy,
-  OpenAI WebSocket pools, compaction checkpoints, session registry, metrics,
-  and diagnostics.
-- The endpoint and proxy listen on restart-stable loopback ports `17647` and
-  `17646`. Set `CLODEX_DAEMON_PORT` before installation to change the proxy
-  base port.
+- The Clodex daemon owns one Anthropic-format endpoint, OpenAI WebSocket pools,
+  compaction checkpoints, session registry, metrics, diagnostics, and optional
+  in-process Secondwind rewriting.
+- The endpoint listens on restart-stable loopback port `17647`. Set
+  `CLODEX_DAEMON_PORT` before installation to change it.
 - Control operations use `~/.clodex/clodex.sock`, mode `0600`.
-- `clodex-claude` obtains a signed launch ticket. Proxy mode carries it as
-  local proxy authentication; endpoint mode sends it in
+- `clodex-claude` obtains a signed launch ticket and sends it in
   `x-clodex-launch-ticket` beside a stable local API key. Claude-spawned
-  children inherit that ticket, so a workflow stays on the same account as its
-  parent without generating a new custom-key approval prompt.
+  children inherit that ticket, so a workflow stays on the same account as
+  its parent without generating a new custom-key approval prompt.
 - Account selection affects new launches only. There is no quota/auth/capacity
   failover.
 
@@ -50,7 +49,7 @@ clodex-claude --clodex-account person@example.com
 ```
 
 `clodex claude …` is the higher-level equivalent: it starts the daemon when
-needed, launches through the shared proxy, and automatically points
+needed, launches through the shared endpoint, and automatically points
 Claude-spawned children at `clodex-claude`.
 
 Set Claude Code's process wrapper to the absolute `clodex-claude` path so
@@ -116,16 +115,15 @@ does not use a different account.
 
 ## Metrics and privacy
 
-`~/.clodex/daemon-metrics.jsonl` contains timestamps, model/provider ids,
+`~/.clodex/daemon-metrics.sqlite` contains timestamps, model/provider ids,
 hashed session ids, token counts, latency, and completion/error/cancellation
-state. It never stores
-prompts, tool output, response text, OAuth tokens, or launch tickets. The file
-is mode `0600`, rotates at 32 MB, and retains at most 30 days. The TUI graphs
-the last 24 hours in five-minute buckets.
+state. It never stores prompts, tool output, response text, OAuth tokens, or
+launch tickets. The database is mode `0600` and retains 400 days. The TUI
+offers day, week, and month token and API-equivalent cost views.
 
 ## Troubleshooting
 
-- `clodex daemon status`: process, proxy, WebSocket, and active-session state.
+- `clodex daemon status`: process, endpoint, WebSocket, and active-session state.
 - `clodex daemon logs`: daemon stdout/stderr and inference log paths.
 - `clodex-claude --check`: exits `0` when a discovered server is reachable.
 - `CLODEX_REQUIRE_SERVER=1`: fail closed instead of launching unbridged Claude.

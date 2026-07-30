@@ -44,8 +44,7 @@ interface DaemonStatus {
   version: string;
   pid: number;
   uptimeSeconds: number;
-  proxyPort: number;
-  endpointPort: number;
+  port: number;
   websocket: WebSocketStatus;
   activeSessions: number;
   sessions: SessionStatus[];
@@ -712,7 +711,7 @@ function Dashboard(): React.ReactNode {
           {status.ready ? '● ready' : '● starting'} · pid {status.pid} · up {duration(status.uptimeSeconds)}
         </Text>
       </Box>
-      <Text dimColor>endpoint {status.endpointPort} · selective proxy {status.proxyPort}</Text>
+      <Text dimColor>endpoint {status.port}</Text>
       <ViewTabs view={view} />
     </>
   );

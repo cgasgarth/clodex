@@ -123,8 +123,9 @@ describe('parseArgs', () => {
       bridgeMode: 'proxy',
       saveBridgeMode: true,
     });
-    // --save-mode without a mode flag is an error with guidance
-    expect(parseArgs(['claude', '--save-mode']).error).toContain('--endpoint or --proxy');
+    // --save-mode without a mode flag is an error with command-specific guidance
+    expect(parseArgs(['claude', '--save-mode']).error).toContain('--endpoint');
+    expect(parseArgs(['claude', '--save-mode']).error).not.toContain('--proxy');
     expect(parseArgs(['server', '--save-mode']).error).toContain('--endpoint or --proxy');
   });
 
@@ -233,19 +234,21 @@ describe('help text', () => {
     }
   });
 
-  it('documents the kept commands and bridge modes', () => {
+  it('documents the single Claude endpoint and standalone server bridge modes', () => {
     const root = rootHelpText();
     expect(root).toContain('clodex claude');
     expect(root).toContain('clodex server');
     expect(root).toContain('clodex patch');
     expect(root).toContain('clodex models');
     expect(root).toContain('clodex providers');
-    expect(root).toContain('--endpoint');
-    expect(root).toContain('--proxy');
-    expect(root).toContain('--save-mode');
+    expect(root).toContain('single local endpoint');
+    expect(root).toContain('standalone gateway');
+    expect(serverHelpText()).toContain('--endpoint');
+    expect(serverHelpText()).toContain('--proxy');
     expect(claudeHelpText()).toContain('--save-mode');
+    expect(claudeHelpText()).not.toContain('clodex claude --proxy');
     expect(serverHelpText()).toContain('--save-mode');
-    expect(claudeHelpText()).toContain('clodex:<provider-id>:<model-id>');
+    expect(claudeHelpText()).toContain('single endpoint');
     expect(serverHelpText()).toContain('--no-discovery');
     expect(patchHelpText()).toContain('--restore');
   });

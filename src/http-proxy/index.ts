@@ -253,10 +253,9 @@ export async function runHttpProxyServerCommand(
   console.log(pc.dim('Use `/model <listed-name>` for a favorite or saved alias.'));
   console.log(pc.dim('Press Ctrl+C to stop.'));
 
-  // Advertise the running server for discovery (e.g. the clodex-claude wrapper).
-  // Only the standalone `clodex server` command writes this — the per-session
-  // proxy spawned by `clodex claude --proxy` never does, and --no-discovery /
-  // CLODEX_NO_DISCOVERY opts a standalone server out too.
+  // Advertise the standalone server for discovery (e.g. by generic wrappers).
+  // `clodex claude` uses the persistent daemon endpoint instead. --no-discovery
+  // / CLODEX_NO_DISCOVERY opts this standalone server out.
   if (!noDiscovery) {
     registerServerRuntimeState({
       mode: 'proxy',

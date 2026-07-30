@@ -61,12 +61,21 @@ Another way to tell: if a tool needs you to set `ANTHROPIC_BASE_URL` to a custom
 
 Clodex avoids this. In proxy mode it uses an HTTP proxy to intercept requests bound for `api.anthropic.com`: requests for an Anthropic model pass through unmodified, still carrying Claude Code's own auth token untouched — your plan credentials are never duplicated or replaced.
 
-## Bridge modes
+## Claude transport and standalone server modes
 
-Both `clodex claude` and `clodex server` support two bridge modes. A mode flag applies to **that run only**; to change a command's default, add `--save-mode` (e.g. `clodex claude --endpoint --save-mode`). With no flag and nothing saved, both commands default to **proxy** mode, which works with your existing Claude auth.
+`clodex claude` always launches through the persistent daemon's single,
+restart-stable Anthropic-format endpoint. All Claude sessions, workflows, and
+subagents share that endpoint, its OpenAI WebSocket pools, and its in-process
+request middleware. `--endpoint` remains accepted for startup-script
+compatibility; `--proxy` is rejected for this command.
 
-- **`--proxy`** (the default): a selective man-in-the-middle proxy for `api.anthropic.com`. Claude Code keeps its normal Anthropic login — Anthropic models work untouched — while models named `clodex:<provider-id>:<model-id>` (or their saved aliases) route to OpenAI. Switch with `/model clodex:openai-oauth:gpt-5.6-sol` or `/model sol` after patching.
-- **`--endpoint`**: clodex runs a local Anthropic-format gateway and launches Claude Code with `ANTHROPIC_BASE_URL` pointed at it. All traffic goes through the gateway. With favorites saved, the gateway is multi-route and Claude Code's `/model` menu lists your starting model plus favorites for live switching.
+The standalone `clodex server` command still supports two modes:
+
+- **`--proxy`** (the standalone default): a selective man-in-the-middle proxy
+  for `api.anthropic.com`. Claude Code keeps its normal Anthropic login while
+  `clodex:` models and saved aliases route to OpenAI.
+- **`--endpoint`**: an Anthropic-format gateway. With favorites saved,
+  `/v1/models` exposes the configured routes for live model switching.
 
 > [!TIP]
 > Proxy mode allows you to continue using your Claude Code plan: login to claude code like normal and the proxy will intercept requests and leave requests for Anthropic models untouched, while requests for your favorite OpenAI models will be re-routed to OpenAI.
@@ -97,8 +106,8 @@ flowchart LR
 ## Persistent daemon and Ink dashboard
 
 The persistent daemon gives all Claude sessions, workflows, and subagents one
-shared Anthropic-format endpoint, selective proxy, and set of OpenAI WebSocket
-continuation pools:
+shared Anthropic-format endpoint and set of OpenAI WebSocket continuation
+pools:
 
 ```bash
 clodex daemon install       # macOS LaunchAgent; starts at login
@@ -134,10 +143,10 @@ lossless rewrite while forwarding original request bytes; on mode forwards the
 rewritten tool outputs; any optimizer failure falls back to the original
 request. Savings use the routed model's uncached input rate and are estimates.
 
-The daemon uses restart-stable loopback ports (`17647` endpoint and `17646`
-proxy; override the proxy base with `CLODEX_DAEMON_PORT`) and an owner-only Unix
-control socket. `clodex claude …` also starts the daemon when needed and
-launches Claude through that shared process.
+The daemon uses one restart-stable loopback endpoint (`17647`, overridden by
+`CLODEX_DAEMON_PORT`) and an owner-only Unix control socket. `clodex claude …`
+also starts the daemon when needed and launches Claude through that shared
+process.
 
 Up to five ChatGPT/Codex logins can be stored:
 
@@ -164,9 +173,8 @@ Launch Claude Code bridged to OpenAI models. Unrecognized flags (and everything 
 
 | Flag | Effect |
 | --- | --- |
-| `--endpoint` | Endpoint bridge mode for this run: local gateway + `ANTHROPIC_BASE_URL` |
-| `--proxy` | Proxy bridge mode for this run: keep Claude Code's Anthropic auth; `clodex:` models route to OpenAI (default when nothing is saved) |
-| `--save-mode` | With `--endpoint`/`--proxy`: save that mode as the `claude` default |
+| `--endpoint` | Accepted for compatibility; Claude always uses the daemon endpoint |
+| `--save-mode` | Accepted with `--endpoint` for compatibility |
 | `--dry-run` | Run the wizard but print a launch preview instead of launching (never persists anything) |
 | `--trace` | Write debug logs to `~/.clodex/logs/` and show errors on exit |
 | `--provider <id>` | Boot provider id (`openai` or `openai-oauth`); with `--model`, skips the wizard |
@@ -175,8 +183,12 @@ Launch Claude Code bridged to OpenAI models. Unrecognized flags (and everything 
 
 Notes:
 
-- Claude Code may save the launched model to `~/.claude/settings.json`, so bare `claude` later can still show a clodex model name. Reset with `claude --model sonnet`.
-- Non-interactive stdin reuses your last provider/model instead of showing the wizard.
+- `--proxy` belongs to standalone `clodex server` and is rejected by
+  `clodex claude`.
+- Claude Code may save the launched model to `~/.claude/settings.json`, so bare
+  `claude` later can still show a clodex model name.
+- Non-interactive stdin reuses your last provider/model instead of showing the
+  wizard.
 
 ### `clodex server [options]`
 
