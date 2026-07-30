@@ -49,6 +49,7 @@ function postMessage(
         'content-type': 'application/json',
         'content-length': Buffer.byteLength(payload),
         'x-api-key': token,
+        'x-relay-request-id': 'secondwind-e2e-request',
         'x-claude-code-session-id': '11111111-1111-4111-8111-111111111111',
         'x-claude-code-agent-id': 'workflow-agent-1',
       },
@@ -90,10 +91,17 @@ describe('single-endpoint daemon Secondwind integration', () => {
     });
     const rewrite = vi.fn(() => ({
       request: toolRequest('compacted by Secondwind'),
-      stats: { blocks_rewritten: 1 },
+      stats: {
+        blocks_rewritten: 1,
+        input_tokens: 1_503,
+        output_tokens: 771,
+        tokens_saved: 732,
+      },
     }));
+    const metrics = new DaemonMetricsStore(join(root, 'metrics.sqlite'));
     const secondwind = new SecondwindService({
       initialMode: 'on',
+      metrics,
       createSession: async () => ({ rewrite, close: () => {} }),
     });
     const route: ProxyRoute = {
@@ -116,17 +124,18 @@ describe('single-endpoint daemon Secondwind integration', () => {
       undefined,
       0,
       context => secondwind.rewrite({
+        requestId: context.requestId,
         body: context.body,
         request: context.request,
         sessionId: context.claudeSessionId
           ? `${context.claudeSessionId}:${context.claudeAgentId ?? 'parent'}`
           : undefined,
+        reportingSessionId: context.claudeSessionId,
         modelId: context.route.realModelId,
         processingMode: context.processingMode,
         recordMetrics: context.endpoint === 'messages',
       }),
     );
-    const metrics = new DaemonMetricsStore(join(root, 'metrics.sqlite'));
     const collector = new DaemonInferenceCollector(metrics);
     const runtime = createDaemonRuntimeState({
       pid: process.pid,
@@ -163,20 +172,72 @@ describe('single-endpoint daemon Secondwind integration', () => {
         }],
       });
       expect(rewrite).toHaveBeenCalledOnce();
+      secondwind.handleTrace({
+        kind: 'lifecycle',
+        entry: {
+          event: 'response_usage',
+          requestId: 'secondwind-e2e-request',
+          modelId: route.realModelId,
+          provider: route.providerId!,
+          route: 'translated',
+          inputTokens: 100,
+          cacheReadInputTokens: 700,
+          outputTokens: 1,
+        },
+      });
+      secondwind.handleTrace({
+        kind: 'lifecycle',
+        entry: {
+          event: 'response_completed',
+          requestId: 'secondwind-e2e-request',
+          modelId: route.realModelId,
+          provider: route.providerId!,
+          route: 'translated',
+        },
+      });
 
       const active = await daemonControlRequest<{
         mode: string;
         loaded: boolean;
         sessions: number;
-        applied: { requests: number; blocksRewritten: number; tokensReduced: number };
+        applied: {
+          requests: number;
+          blocksRewritten: number;
+          tokensReduced: number;
+          estimatedTokenRequests: number;
+        };
+        lifetime: {
+          requests: number;
+          blocksRewritten: number;
+          inputTokensConsidered: number;
+          tokensReduced: number;
+        };
+        topSessions: unknown[];
       }>('/v1/secondwind', { socketPath });
       expect(active).toMatchObject({
         mode: 'on',
         loaded: true,
         sessions: 1,
-        applied: { requests: 1, blocksRewritten: 1 },
+        applied: {
+          requests: 1,
+          blocksRewritten: 1,
+          inputTokensConsidered: 1_503,
+          tokensReduced: 732,
+          estimatedTokenRequests: 0,
+        },
+        lifetime: {
+          requests: 1,
+          blocksRewritten: 1,
+          tokensReduced: 732,
+        },
       });
-      expect(active.applied.tokensReduced).toBeGreaterThan(0);
+      expect(active.topSessions).toHaveLength(1);
+      expect(metrics.secondwindLifetime()).toMatchObject({
+        requests: 1,
+        blocksRewritten: 1,
+        inputTokensConsidered: 1_503,
+        tokensReduced: 732,
+      });
 
       await daemonControlRequest('/v1/secondwind/mode', {
         socketPath,

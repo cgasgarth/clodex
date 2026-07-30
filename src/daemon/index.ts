@@ -260,8 +260,11 @@ export async function runDaemonProcess(): Promise<number> {
   );
   const collector = new DaemonInferenceCollector();
   const accounts = createDaemonAccountController();
-  const secondwind = createDaemonSecondwindService();
-  const unsubscribeTrace = subscribeInferenceTrace(event => collector.handle(event));
+  const secondwind = createDaemonSecondwindService(collector.metrics);
+  const unsubscribeTrace = subscribeInferenceTrace(event => {
+    collector.handle(event);
+    secondwind.handleTrace(event);
+  });
 
   let endpoint: ProxyHandle | undefined;
   let control: Awaited<ReturnType<typeof startDaemonControlApi>> | undefined;
@@ -299,6 +302,9 @@ export async function runDaemonProcess(): Promise<number> {
       resolveRoute,
       resolveDaemonPort(),
       async context => secondwind.rewrite({
+        requestId: context.route.modelFormat === 'anthropic'
+          ? undefined
+          : context.requestId,
         body: context.body,
         request: context.request,
         sessionId: context.claudeSessionId
@@ -306,6 +312,7 @@ export async function runDaemonProcess(): Promise<number> {
             ? `${context.claudeSessionId}:${context.claudeAgentId}`
             : context.claudeSessionId
           : undefined,
+        reportingSessionId: context.claudeSessionId,
         modelId: context.route.realModelId,
         processingMode: context.processingMode,
         recordMetrics: context.endpoint === 'messages',

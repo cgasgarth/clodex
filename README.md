@@ -127,9 +127,11 @@ Bare `clodex` opens a five-view dashboard:
 - **Accounts** — manual account selection and guarded login/logout controls.
 - **Diagnostics** — bounded failures plus a guarded daemon restart.
 - **[Secondwind](https://github.com/orchetron/secondwind)** — daemon-wide `off`, `shadow`, or `on` tool-output
-  optimization, with estimated compacted-token, API-equivalent savings, and
-  median/p95 added-latency metrics. It defaults to `off`; the selected mode is
-  persisted and affects the next request without draining active sessions.
+  optimization, with measured compacted-token totals, persisted lifetime
+  API-equivalent savings, input-token reduction percentages, the current
+  daemon's top three parent sessions, and median/p95 added-latency metrics. It
+  defaults to `off`; the selected mode is persisted and affects the next
+  request without draining active sessions.
 
 Use `1`–`5` to switch views. In Usage, `Tab`/`Shift+Tab` changes the period,
 `←`/`→` moves between periods, and `0` returns to the current period. Metrics
@@ -141,7 +143,11 @@ long-context pricing. They are estimates, not ChatGPT subscription charges.
 Secondwind runs in-process and inline-only: shadow mode measures the same
 lossless rewrite while forwarding original request bytes; on mode forwards the
 rewritten tool outputs; any optimizer failure falls back to the original
-request. Savings use the routed model's uncached input rate and are estimates.
+request. Dollar savings are finalized from each request's observed OpenAI uncached,
+cache-read, and cache-write mix; token reduction comes directly from Secondwind.
+Metrics aggregate in memory by minute/account/model/mode and flush once per
+minute as one compact SQLite batch row (or at 1,000 pending records). Dashboard
+reads merge pending memory without forcing writes; shutdown flushes immediately.
 
 The daemon uses one restart-stable loopback endpoint (`17647`, overridden by
 `CLODEX_DAEMON_PORT`) and an owner-only Unix control socket. `clodex claude …`

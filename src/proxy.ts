@@ -330,6 +330,7 @@ export type ProxyRouteRequestResolver = (
 ) => Promise<ProxyRoute>;
 
 export interface ProxyRequestOptimizationContext {
+  requestId: string;
   body: Buffer;
   request: Record<string, unknown>;
   endpoint: NonNullable<ReturnType<typeof anthropicMessagesEndpoint>>;
@@ -536,6 +537,7 @@ export async function startProxyCatalog(
       const processingMode: ApiProcessingMode = 'standard';
       if (optimizeRequest) {
         const optimizedBody = await optimizeRequest({
+          requestId: relayRequestId,
           body: decodedBody,
           request: anthropicBody,
           endpoint: messagesEndpoint,
