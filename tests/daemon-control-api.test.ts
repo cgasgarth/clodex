@@ -47,6 +47,7 @@ describe('daemon control API', () => {
         unpricedRequests: 0,
         blocksRewritten: 0,
         tokensReduced: 0,
+        estimatedTokenRequests: 0,
         estimatedSavingsUsd: 0,
       },
       shadow: {
@@ -55,6 +56,7 @@ describe('daemon control API', () => {
         unpricedRequests: 0,
         blocksRewritten: 0,
         tokensReduced: 0,
+        estimatedTokenRequests: 0,
         estimatedSavingsUsd: 0,
       },
       latency: { samples: 0, medianMs: 0, p95Ms: 0 },

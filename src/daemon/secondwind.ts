@@ -8,12 +8,17 @@ import type { SecondwindMode } from '../types.js';
 const MAX_SESSIONS = 256;
 const MAX_LATENCY_SAMPLES = 10_000;
 
+interface SecondwindRewriteStats {
+  blocks_rewritten?: number;
+  input_tokens?: number;
+  output_tokens?: number;
+  tokens_saved?: number;
+}
+
 interface SecondwindSession {
   rewrite(request: Record<string, unknown>): {
     request: Record<string, unknown>;
-    stats?: {
-      blocks_rewritten?: number;
-    };
+    stats?: SecondwindRewriteStats;
   };
   close(): void;
 }
@@ -35,6 +40,7 @@ export interface SecondwindModeMetrics {
   unpricedRequests: number;
   blocksRewritten: number;
   tokensReduced: number;
+  estimatedTokenRequests: number;
   estimatedSavingsUsd: number;
 }
 
@@ -68,6 +74,7 @@ function emptyMetrics(): SecondwindModeMetrics {
     unpricedRequests: 0,
     blocksRewritten: 0,
     tokensReduced: 0,
+    estimatedTokenRequests: 0,
     estimatedSavingsUsd: 0,
   };
 }
@@ -81,6 +88,61 @@ function percentile(samples: number[], fraction: number): number {
   const sorted = [...samples].sort((a, b) => a - b);
   const index = Math.max(0, Math.ceil(sorted.length * fraction) - 1);
   return sorted[index] ?? 0;
+}
+
+function nonNegativeInteger(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0
+    ? Math.round(value)
+    : undefined;
+}
+
+function tokenAccounting(
+  stats: SecondwindRewriteStats | undefined,
+  originalRequest: Record<string, unknown>,
+  optimizedRequest: Record<string, unknown>,
+  blocksRewritten: number,
+): {
+  originalTokens: number;
+  optimizedTokens: number;
+  tokensReduced: number;
+  estimated: boolean;
+} {
+  const measuredInput = nonNegativeInteger(stats?.input_tokens);
+  const measuredOutput = nonNegativeInteger(stats?.output_tokens);
+  const measuredSaved = nonNegativeInteger(stats?.tokens_saved);
+
+  if (measuredSaved !== undefined) {
+    if (measuredInput !== undefined && measuredOutput !== undefined) {
+      return {
+        originalTokens: measuredInput,
+        optimizedTokens: measuredOutput,
+        tokensReduced: measuredSaved,
+        estimated: false,
+      };
+    }
+    const estimatedInput = estimateAnthropicInputTokens(originalRequest);
+    const originalTokens = measuredInput
+      ?? (measuredOutput !== undefined ? measuredOutput + measuredSaved : estimatedInput);
+    const optimizedTokens = measuredOutput
+      ?? Math.max(0, originalTokens - measuredSaved);
+    return {
+      originalTokens,
+      optimizedTokens,
+      tokensReduced: measuredSaved,
+      estimated: false,
+    };
+  }
+
+  const estimatedInput = estimateAnthropicInputTokens(originalRequest);
+  const estimatedOutput = blocksRewritten > 0
+    ? estimateAnthropicInputTokens(optimizedRequest)
+    : estimatedInput;
+  return {
+    originalTokens: estimatedInput,
+    optimizedTokens: estimatedOutput,
+    tokensReduced: Math.max(0, estimatedInput - estimatedOutput),
+    estimated: true,
+  };
 }
 
 function estimatedInputSavings(
@@ -186,20 +248,22 @@ export class SecondwindService {
         ? Buffer.from(JSON.stringify(result.request))
         : input.body;
       if (input.recordMetrics !== false) {
-        const originalTokens = estimateAnthropicInputTokens(input.request);
-        const optimizedTokens = blocksRewritten > 0
-          ? estimateAnthropicInputTokens(result.request)
-          : originalTokens;
-        const tokensReduced = Math.max(0, originalTokens - optimizedTokens);
+        const accounting = tokenAccounting(
+          result.stats,
+          input.request,
+          result.request,
+          blocksRewritten,
+        );
         const metrics = mode === 'on' ? this.#applied : this.#shadow;
         metrics.requests += 1;
         metrics.blocksRewritten += blocksRewritten;
-        metrics.tokensReduced += tokensReduced;
+        metrics.tokensReduced += accounting.tokensReduced;
+        if (accounting.estimated) metrics.estimatedTokenRequests += 1;
         const estimatedSavingsUsd = estimatedInputSavings(
           input.modelId,
           input.processingMode ?? 'standard',
-          originalTokens,
-          optimizedTokens,
+          accounting.originalTokens,
+          accounting.optimizedTokens,
         );
         if (estimatedSavingsUsd === undefined) {
           metrics.unpricedRequests += 1;

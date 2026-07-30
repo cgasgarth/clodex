@@ -90,7 +90,12 @@ describe('single-endpoint daemon Secondwind integration', () => {
     });
     const rewrite = vi.fn(() => ({
       request: toolRequest('compacted by Secondwind'),
-      stats: { blocks_rewritten: 1 },
+      stats: {
+        blocks_rewritten: 1,
+        input_tokens: 1_503,
+        output_tokens: 771,
+        tokens_saved: 732,
+      },
     }));
     const secondwind = new SecondwindService({
       initialMode: 'on',
@@ -168,15 +173,24 @@ describe('single-endpoint daemon Secondwind integration', () => {
         mode: string;
         loaded: boolean;
         sessions: number;
-        applied: { requests: number; blocksRewritten: number; tokensReduced: number };
+        applied: {
+          requests: number;
+          blocksRewritten: number;
+          tokensReduced: number;
+          estimatedTokenRequests: number;
+        };
       }>('/v1/secondwind', { socketPath });
       expect(active).toMatchObject({
         mode: 'on',
         loaded: true,
         sessions: 1,
-        applied: { requests: 1, blocksRewritten: 1 },
+        applied: {
+          requests: 1,
+          blocksRewritten: 1,
+          tokensReduced: 732,
+          estimatedTokenRequests: 0,
+        },
       });
-      expect(active.applied.tokensReduced).toBeGreaterThan(0);
 
       await daemonControlRequest('/v1/secondwind/mode', {
         socketPath,

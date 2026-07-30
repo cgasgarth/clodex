@@ -40,7 +40,12 @@ describe('Secondwind daemon service', () => {
     const close = vi.fn();
     const rewrite = vi.fn((request: Record<string, unknown>) => ({
       request: toolRequest('short'),
-      stats: { blocks_rewritten: 1 },
+      stats: {
+        blocks_rewritten: 1,
+        input_tokens: 4_000,
+        output_tokens: 1_000,
+        tokens_saved: 3_000,
+      },
     }));
     const persistMode = vi.fn();
     let clock = 0;
@@ -67,8 +72,9 @@ describe('Secondwind daemon service', () => {
       pricedRequests: 1,
       unpricedRequests: 0,
       blocksRewritten: 1,
+      tokensReduced: 3_000,
+      estimatedTokenRequests: 0,
     });
-    expect(service.snapshot().shadow.tokensReduced).toBeGreaterThan(0);
     expect(service.snapshot().shadow.estimatedSavingsUsd).toBeGreaterThan(0);
 
     service.setMode('on');
@@ -135,6 +141,34 @@ describe('Secondwind daemon service', () => {
 
     expect(JSON.parse(rewritten.toString())).toEqual(toolRequest('short'));
     expect(service.snapshot().applied.requests).toBe(0);
+  });
+
+  it('marks the compatibility estimate when optimizer token stats are absent', async () => {
+    const service = new SecondwindService({
+      initialMode: 'shadow',
+      createSession: async () => ({
+        rewrite: () => ({
+          request: toolRequest('short'),
+          stats: { blocks_rewritten: 1 },
+        }),
+        close: () => {},
+      }),
+    });
+    const original = toolRequest('long output '.repeat(1_000));
+
+    await service.rewrite({
+      body: Buffer.from(JSON.stringify(original)),
+      request: original,
+      sessionId: 'compatibility-fallback',
+      modelId: 'gpt-5.6-sol',
+    });
+
+    expect(service.snapshot().shadow).toMatchObject({
+      requests: 1,
+      tokensReduced: expect.any(Number),
+      estimatedTokenRequests: 1,
+    });
+    expect(service.snapshot().shadow.tokensReduced).toBeGreaterThan(0);
   });
 
   it('preserves exact request bytes when the optimizer makes no change', async () => {
@@ -306,6 +340,7 @@ describe('Secondwind daemon service', () => {
     expect(service.snapshot().applied).toMatchObject({
       requests: 1,
       blocksRewritten: 1,
+      estimatedTokenRequests: 0,
     });
     expect(service.snapshot().applied.tokensReduced).toBeGreaterThan(0);
     service.close();

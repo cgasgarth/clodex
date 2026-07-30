@@ -127,7 +127,7 @@ Bare `clodex` opens a five-view dashboard:
 - **Accounts** — manual account selection and guarded login/logout controls.
 - **Diagnostics** — bounded failures plus a guarded daemon restart.
 - **[Secondwind](https://github.com/orchetron/secondwind)** — daemon-wide `off`, `shadow`, or `on` tool-output
-  optimization, with estimated compacted-token, API-equivalent savings, and
+  optimization, with measured compacted-token, estimated API-equivalent savings, and
   median/p95 added-latency metrics. It defaults to `off`; the selected mode is
   persisted and affects the next request without draining active sessions.
 

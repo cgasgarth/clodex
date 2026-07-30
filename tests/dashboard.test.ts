@@ -5,6 +5,7 @@ import {
   deviceCodeInstruction,
   formatUsd,
   lineChart,
+  secondwindTokenSummary,
   usageRange,
   VIEW_SWITCH_HINT,
 } from '../src/dashboard.js';
@@ -64,5 +65,29 @@ describe('dashboard device-code login', () => {
 describe('dashboard controls', () => {
   it('explicitly tells users to press the numbered view keys', () => {
     expect(VIEW_SWITCH_HINT).toBe('Press 1–5 to switch views');
+  });
+
+  it('labels native Secondwind token accounting as measured', () => {
+    expect(secondwindTokenSummary({
+      requests: 1,
+      pricedRequests: 1,
+      unpricedRequests: 0,
+      blocksRewritten: 1,
+      tokensReduced: 732,
+      estimatedTokenRequests: 0,
+      estimatedSavingsUsd: 0.001,
+    })).toBe('732 tool-output tokens compacted · measured by Secondwind');
+  });
+
+  it('labels compatibility token accounting as estimated', () => {
+    expect(secondwindTokenSummary({
+      requests: 2,
+      pricedRequests: 2,
+      unpricedRequests: 0,
+      blocksRewritten: 1,
+      tokensReduced: 1_200,
+      estimatedTokenRequests: 1,
+      estimatedSavingsUsd: 0.002,
+    })).toBe('~1.2K tool-output tokens compacted · 1 fallback estimate');
   });
 });

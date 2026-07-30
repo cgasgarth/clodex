@@ -118,6 +118,16 @@ const CHART_WIDTH = 56;
 const CHART_HEIGHT = 6;
 export const VIEW_SWITCH_HINT = 'Press 1–5 to switch views';
 
+export function secondwindTokenSummary(
+  metrics: SecondwindModeMetrics | undefined,
+): string {
+  const tokens = compactNumber(metrics?.tokensReduced ?? 0);
+  const estimatedRequests = metrics?.estimatedTokenRequests ?? 0;
+  return estimatedRequests > 0
+    ? `~${tokens} tool-output tokens compacted · ${estimatedRequests} fallback estimate${estimatedRequests === 1 ? '' : 's'}`
+    : `${tokens} tool-output tokens compacted · measured by Secondwind`;
+}
+
 export function accountDisplayName(account: Pick<Account, 'email'>): string {
   return account.email ?? 'Email unavailable';
 }
@@ -899,7 +909,7 @@ function Dashboard(): React.ReactNode {
           {metrics?.requests ?? 0} requests · {metrics?.blocksRewritten ?? 0} blocks rewritten
         </Text>
         <Text>
-          ~{compactNumber(metrics?.tokensReduced ?? 0)} estimated tool-output tokens compacted
+          {secondwindTokenSummary(metrics)}
           {' · '}{savingsLabel} {formatUsd(metrics?.estimatedSavingsUsd ?? 0)}
         </Text>
         {(metrics?.unpricedRequests ?? 0) > 0 && (
