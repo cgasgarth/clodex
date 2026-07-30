@@ -1,5 +1,5 @@
-export const API_PRICING_SOURCE = 'OpenAI Standard and Priority API pricing';
-export const API_PRICING_AS_OF = '2026-07-29';
+export const API_PRICING_SOURCE = 'OpenAI Standard and Fast API pricing';
+export const API_PRICING_AS_OF = '2026-07-30';
 export const LONG_CONTEXT_INPUT_TOKENS = 272_000;
 
 const TOKENS_PER_MILLION = 1_000_000;
@@ -34,15 +34,15 @@ export interface ApiPricedUsage {
 /** Standard processing prices in USD per one million tokens. */
 export const GPT_5_6_API_RATES: Readonly<Record<string, ApiTokenRates>> = {
   'gpt-5.6-sol': { input: 5, cachedInput: 0.5, output: 30 },
-  'gpt-5.6-terra': { input: 2.5, cachedInput: 0.25, output: 15 },
-  'gpt-5.6-luna': { input: 1, cachedInput: 0.1, output: 6 },
+  'gpt-5.6-terra': { input: 2, cachedInput: 0.2, output: 12 },
+  'gpt-5.6-luna': { input: 0.2, cachedInput: 0.02, output: 1.2 },
 };
 
-/** Priority processing prices in USD per one million tokens. */
+/** Fast processing prices in USD per one million tokens (2x Standard). */
 export const GPT_5_6_PRIORITY_API_RATES: Readonly<Record<string, ApiTokenRates>> = {
   'gpt-5.6-sol': { input: 10, cachedInput: 1, output: 60 },
-  'gpt-5.6-terra': { input: 5, cachedInput: 0.5, output: 30 },
-  'gpt-5.6-luna': { input: 2, cachedInput: 0.2, output: 12 },
+  'gpt-5.6-terra': { input: 4, cachedInput: 0.4, output: 24 },
+  'gpt-5.6-luna': { input: 0.4, cachedInput: 0.04, output: 2.4 },
 };
 
 export function normalizeApiProcessingMode(value: unknown): ApiProcessingMode {
@@ -81,7 +81,7 @@ export function estimateApiCost(usage: ApiPricedUsage): ApiCostBreakdown | undef
     + usage.cachedInputTokens
     + usage.cacheWriteTokens;
   const longContext = logicalInputTokens > LONG_CONTEXT_INPUT_TOKENS;
-  // OpenAI Priority processing excludes requests estimated above 272K prompt
+  // OpenAI Fast processing excludes requests estimated above 272K prompt
   // tokens. Those requests are served/billed as Standard long-context traffic.
   const fast = effectiveApiProcessingMode(usage) === 'fast';
   const rates = (fast ? GPT_5_6_PRIORITY_API_RATES : GPT_5_6_API_RATES)[modelId]!;

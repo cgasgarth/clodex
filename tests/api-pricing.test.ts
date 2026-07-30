@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'bun:test';
 import {
+  API_PRICING_AS_OF,
+  API_PRICING_SOURCE,
+  GPT_5_6_API_RATES,
+  GPT_5_6_PRIORITY_API_RATES,
   canonicalPricedModelId,
   effectiveApiProcessingMode,
   estimateApiCost,
@@ -7,6 +11,19 @@ import {
 } from '../src/daemon/api-pricing.js';
 
 describe('API-equivalent pricing', () => {
+  it('uses the July 30 OpenAI Standard and Fast pricing revision', () => {
+    expect(API_PRICING_AS_OF).toBe('2026-07-30');
+    expect(API_PRICING_SOURCE).toBe('OpenAI Standard and Fast API pricing');
+    expect(GPT_5_6_API_RATES['gpt-5.6-terra'])
+      .toEqual({ input: 2, cachedInput: 0.2, output: 12 });
+    expect(GPT_5_6_API_RATES['gpt-5.6-luna'])
+      .toEqual({ input: 0.2, cachedInput: 0.02, output: 1.2 });
+    expect(GPT_5_6_PRIORITY_API_RATES['gpt-5.6-terra'])
+      .toEqual({ input: 4, cachedInput: 0.4, output: 24 });
+    expect(GPT_5_6_PRIORITY_API_RATES['gpt-5.6-luna'])
+      .toEqual({ input: 0.4, cachedInput: 0.04, output: 2.4 });
+  });
+
   it('recognizes Claude aliases and only prices Sol, Terra, and Luna', () => {
     expect(canonicalPricedModelId('sol')).toBe('gpt-5.6-sol');
     expect(canonicalPricedModelId('anthropic-openai-oauth__gpt-5.6-terra'))
@@ -40,12 +57,10 @@ describe('API-equivalent pricing', () => {
       cacheWriteTokens: 0,
       outputTokens: 10_000,
     });
-    expect(terra).toEqual(expect.objectContaining({
-      input: 0.25,
-      cache: 0.025,
-      output: 0.15,
-    }));
-    expect(terra?.total).toBeCloseTo(0.425);
+    expect(terra?.input).toBeCloseTo(0.2);
+    expect(terra?.cache).toBeCloseTo(0.02);
+    expect(terra?.output).toBeCloseTo(0.12);
+    expect(terra?.total).toBeCloseTo(0.34);
     const luna = estimateApiCost({
       modelId: 'luna',
       inputTokens: 100_000,
@@ -53,13 +68,13 @@ describe('API-equivalent pricing', () => {
       cacheWriteTokens: 0,
       outputTokens: 10_000,
     });
-    expect(luna?.input).toBeCloseTo(0.1);
-    expect(luna?.cache).toBeCloseTo(0.01);
-    expect(luna?.output).toBeCloseTo(0.06);
-    expect(luna?.total).toBeCloseTo(0.17);
+    expect(luna?.input).toBeCloseTo(0.02);
+    expect(luna?.cache).toBeCloseTo(0.002);
+    expect(luna?.output).toBeCloseTo(0.012);
+    expect(luna?.total).toBeCloseTo(0.034);
   });
 
-  it('prices fast requests at Priority rates and normalizes service-tier names', () => {
+  it('prices Fast requests at twice Standard and accepts the legacy priority name', () => {
     expect(normalizeApiProcessingMode('priority')).toBe('fast');
     expect(normalizeApiProcessingMode('fast')).toBe('fast');
     expect(normalizeApiProcessingMode('default')).toBe('standard');
@@ -71,10 +86,10 @@ describe('API-equivalent pricing', () => {
       cacheWriteTokens: 0,
       outputTokens: 10_000,
     });
-    expect(cost?.input).toBeCloseTo(0.2);
-    expect(cost?.cache).toBeCloseTo(0.02);
-    expect(cost?.output).toBeCloseTo(0.12);
-    expect(cost?.total).toBeCloseTo(0.34);
+    expect(cost?.input).toBeCloseTo(0.04);
+    expect(cost?.cache).toBeCloseTo(0.004);
+    expect(cost?.output).toBeCloseTo(0.024);
+    expect(cost?.total).toBeCloseTo(0.068);
   });
 
   it('applies long-context multipliers to the full request', () => {
