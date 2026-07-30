@@ -6,10 +6,7 @@ import {
   getLogsPath,
 } from '../paths.js';
 import { VERSION } from '../constants.js';
-import {
-  loadHttpProxyRoutes,
-  startConfiguredHttpProxy,
-} from '../http-proxy/index.js';
+import { loadHttpProxyRoutes } from '../http-proxy/index.js';
 import { startProxyCatalog, type ProxyHandle } from '../proxy.js';
 import {
   isPidAlive,
@@ -45,8 +42,7 @@ interface DaemonStatusResponse {
   version: string;
   pid: number;
   uptimeSeconds: number;
-  proxyPort: number;
-  endpointPort: number;
+  port: number;
   activeSessions: number;
   websocket: {
     total: number;
@@ -64,8 +60,7 @@ interface DaemonHealthResponse {
   version: string;
 }
 
-export const DEFAULT_DAEMON_PORT = 17646;
-export const DEFAULT_DAEMON_ENDPOINT_PORT = 17647;
+export const DEFAULT_DAEMON_PORT = 17647;
 
 export function resolveDaemonPort(
   env: NodeJS.ProcessEnv = process.env,
@@ -79,22 +74,10 @@ export function resolveDaemonPort(
   return port;
 }
 
-export function resolveDaemonEndpointPort(
-  env: NodeJS.ProcessEnv = process.env,
-): number {
-  const raw = env['CLODEX_DAEMON_ENDPOINT_PORT']?.trim();
-  if (!raw) return DEFAULT_DAEMON_ENDPOINT_PORT;
-  const port = Number(raw);
-  if (!Number.isInteger(port) || port < 1 || port > 65_535) {
-    throw new Error('CLODEX_DAEMON_ENDPOINT_PORT must be an integer between 1 and 65535');
-  }
-  return port;
-}
-
 export function daemonHelpText(): string {
   return `${pc.bold('clodex daemon')} v${VERSION}
 Manage one persistent per-user Clodex process. The daemon owns the shared
-HTTP proxy, OpenAI WebSocket pools, compaction checkpoints, metrics, and
+Anthropic-compatible endpoint, OpenAI WebSocket pools, compaction checkpoints, metrics, and
 session diagnostics.
 
 ${pc.bold('Usage:')}
@@ -109,7 +92,7 @@ ${pc.bold('Usage:')}
 
 Run bare ${pc.bold('clodex')} to open the live Ink dashboard.
 The existing ${pc.bold('clodex-claude')} wrapper automatically discovers the
-daemon proxy on its restart-stable port (default ${DEFAULT_DAEMON_PORT}).
+daemon endpoint on its restart-stable port (default ${DEFAULT_DAEMON_PORT}).
 Account switching is explicit; quota or auth errors never fail over to another
 account.`;
 }
@@ -256,7 +239,7 @@ export async function restartDaemonIfRunning(
 function formatStatus(status: DaemonStatusResponse): string {
   const ws = status.websocket;
   return [
-    `${pc.green('●')} clodex ${status.version} ready (pid ${status.pid}, endpoint ${status.endpointPort}, proxy ${status.proxyPort})`,
+    `${pc.green('●')} clodex ${status.version} ready (pid ${status.pid}, endpoint ${status.port})`,
     `  uptime: ${Math.floor(status.uptimeSeconds / 60)}m · active sessions: ${status.activeSessions}`,
     `  WebSockets: ${ws.total} total · ${ws.inFlight} in-flight · ${ws.established} established · ${ws.nursery} nursery · ${ws.isolated} isolated`,
   ].join('\n');
@@ -280,7 +263,6 @@ export async function runDaemonProcess(): Promise<number> {
   const secondwind = createDaemonSecondwindService();
   const unsubscribeTrace = subscribeInferenceTrace(event => collector.handle(event));
 
-  let proxy: Awaited<ReturnType<typeof startConfiguredHttpProxy>> | undefined;
   let endpoint: ProxyHandle | undefined;
   let control: Awaited<ReturnType<typeof startDaemonControlApi>> | undefined;
   let runtime: ReturnType<typeof createDaemonRuntimeState> | undefined;
@@ -315,16 +297,7 @@ export async function runDaemonProcess(): Promise<number> {
       webSocketDiagnosticsLogPath,
       loaded.aliases,
       resolveRoute,
-      resolveDaemonEndpointPort(),
-    );
-    proxy = await startConfiguredHttpProxy(
       resolveDaemonPort(),
-      false,
-      inferenceLogPath,
-      undefined,
-      webSocketDiagnosticsLogPath,
-      resolveRoute,
-      endpoint,
       async context => secondwind.rewrite({
         body: context.body,
         request: context.request,
@@ -334,7 +307,7 @@ export async function runDaemonProcess(): Promise<number> {
             : context.claudeSessionId
           : undefined,
         modelId: context.route.realModelId,
-        processingMode: 'standard',
+        processingMode: context.processingMode,
         recordMetrics: context.endpoint === 'messages',
       }),
     );
@@ -343,18 +316,15 @@ export async function runDaemonProcess(): Promise<number> {
       bunPath: process.execPath,
       cliPath: process.argv[1] ?? '',
       ready: false,
-      proxyPort: proxy.handle.port,
-      endpointPort: endpoint.port,
-      caPath: proxy.handle.caCertPath,
+      port: endpoint.port,
       controlSocketPath: getDaemonControlSocketPath(),
       version: VERSION,
     });
     writeDaemonRuntimeState(runtime);
     registerServerRuntimeState({
-      mode: 'proxy',
-      port: proxy.handle.port,
+      mode: 'endpoint',
+      port: endpoint.port,
       pid: process.pid,
-      caPath: proxy.handle.caCertPath,
       startedAt: runtime.startedAt,
     });
 
@@ -374,12 +344,12 @@ export async function runDaemonProcess(): Promise<number> {
       event: 'proxy_started',
       pid: process.pid,
       parentPid: process.ppid,
-      host: proxy.handle.host,
-      port: proxy.handle.port,
+      host: '127.0.0.1',
+      port: endpoint.port,
       reason: 'persistent daemon',
     });
     console.log(
-      `Clodex daemon ready (pid ${process.pid}, endpoint ${endpoint.port}, proxy ${proxy.handle.port})`,
+      `Clodex daemon ready (pid ${process.pid}, endpoint ${endpoint.port})`,
     );
     await shutdown;
   } catch (error) {
@@ -393,13 +363,12 @@ export async function runDaemonProcess(): Promise<number> {
     if (runtime) removeDaemonRuntimeState(runtime.instanceId);
     unregisterServerRuntimeState(process.pid);
     await control?.close();
-    await proxy?.handle.close();
     endpoint?.close();
     writeProxyLifecycleLog(inferenceLogPath, {
       event: 'proxy_stopped',
       pid: process.pid,
       parentPid: process.ppid,
-      port: proxy?.handle.port,
+      port: endpoint?.port,
       reason: restartRequested ? 'daemon restart requested' : 'daemon shutdown',
     });
   }
@@ -413,7 +382,7 @@ export async function runDaemonCommand(args: string[], cliPath: string): Promise
     try {
       const runtime = await ensureDaemonRunning(cliPath);
       console.log(
-        `${pc.green('●')} Clodex daemon ready (pid ${runtime.pid}, endpoint ${runtime.endpointPort}, proxy ${runtime.proxyPort})`,
+        `${pc.green('●')} Clodex daemon ready (pid ${runtime.pid}, endpoint ${runtime.port})`,
       );
       return 0;
     } catch (error) {

@@ -122,7 +122,8 @@ export function setAppPathOverride(appId: string, path: string | null): Record<s
 /**
  * Resolve the bridge mode for a command. An explicit flag applies to that run only —
  * it is persisted as the command's default ONLY when the caller opts in (--save-mode).
- * With no flag, the saved per-command default applies; with no saved default, proxy.
+ * With no flag, the saved per-command default applies. Claude uses the daemon's
+ * single endpoint; the standalone server keeps its proxy default.
  */
 export function resolveBridgeMode(
   command: 'claude' | 'server',
@@ -134,7 +135,7 @@ export function resolveBridgeMode(
     if (opts.persist === true) savePreferences({ [key]: explicit });
     return explicit;
   }
-  return loadPreferences()[key] ?? 'proxy';
+  return loadPreferences()[key] ?? (command === 'claude' ? 'endpoint' : 'proxy');
 }
 
 const MAX_RECENT_MODELS = 3;

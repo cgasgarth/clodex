@@ -65,9 +65,7 @@ describe('daemon control API', () => {
       bunPath: process.execPath,
       cliPath: '/tmp/clodex/cli.js',
       ready: true,
-      proxyPort: 12345,
-      endpointPort: 12346,
-      caPath: '/tmp/ca.pem',
+      port: 12346,
       controlSocketPath: socketPath,
       version: 'test',
     });
@@ -119,16 +117,14 @@ describe('daemon control API', () => {
       });
       const status = await daemonControlRequest<{
         running: boolean;
-        proxyPort: number;
-        endpointPort: number;
+        port: number;
       }>(
         '/v1/status',
         { socketPath },
       );
       expect(status).toMatchObject({
         running: true,
-        proxyPort: 12345,
-        endpointPort: 12346,
+        port: 12346,
       });
       const metrics = await daemonControlRequest<{
         accountId: string;

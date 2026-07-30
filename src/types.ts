@@ -86,7 +86,7 @@ export interface UserPreferences {
   recentModelsByProvider?: Record<string, string[]>;
   favoriteModels?: FavoriteModel[];
   modelAliases?: ModelAlias[];
-  /** Remembered bridge mode for `clodex claude` (set by --endpoint / --proxy). */
+  /** Remembered `clodex claude` endpoint selection from older configurations. */
   claudeBridgeMode?: BridgeMode;
   /** Remembered bridge mode for `clodex server` (set by --endpoint / --proxy). */
   serverBridgeMode?: BridgeMode;

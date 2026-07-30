@@ -20,9 +20,9 @@
 // proceeds lockless (best-effort — same exposure as the old single-slot write).
 //
 // NOTE: the standalone `clodex server` command and persistent Clodex daemon
-// write this file. Normal `clodex claude --proxy` launches use the daemon rather than a
-// private proxy. `clodex server --no-discovery` (or CLODEX_NO_DISCOVERY=1)
-// opts a standalone server out of registration entirely.
+// write this file. `clodex claude` uses the daemon's endpoint rather than
+// creating a private server. `clodex server --no-discovery` (or
+// CLODEX_NO_DISCOVERY=1) opts a standalone server out of registration entirely.
 
 import {
   closeSync,

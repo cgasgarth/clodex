@@ -25,9 +25,7 @@ describe('daemon runtime state', () => {
       bunPath: process.execPath,
       cliPath: '/tmp/clodex/cli.js',
       ready: true,
-      proxyPort: 12345,
-      endpointPort: 12346,
-      caPath: '/tmp/ca.pem',
+      port: 12346,
       controlSocketPath: '/tmp/clodex.sock',
       version: 'test',
     });

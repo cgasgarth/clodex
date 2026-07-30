@@ -408,23 +408,20 @@ describe('clodex-claude process wrapper', () => {
     });
 
     advertiseServers([{
-      mode: 'proxy',
+      mode: 'endpoint',
       port: proxy.port,
       pid: process.pid,
-      caPath,
       startedAt: new Date().toISOString(),
     }]);
     writeFileSync(join(clodexHome, 'daemon-runtime.json'), JSON.stringify({
-      protocolVersion: 3,
+      protocolVersion: 4,
       instanceId: 'test-daemon',
       pid: process.pid,
       bunPath: process.execPath,
       cliPath: wrapperPath,
       startedAt: new Date().toISOString(),
       ready: true,
-      proxyPort: proxy.port,
-      endpointPort: proxy.port,
-      caPath,
+      port: proxy.port,
       controlSocketPath,
       version: 'test',
     }));
@@ -436,6 +433,7 @@ describe('clodex-claude process wrapper', () => {
         "import { writeFileSync } from 'node:fs';",
         'writeFileSync(process.argv[2], JSON.stringify({',
         '  proxy: process.env.HTTPS_PROXY ?? null,',
+        '  baseUrl: process.env.ANTHROPIC_BASE_URL ?? null,',
         '  ticket: process.env.CLODEX_LAUNCH_TICKET ?? null,',
         '  args: process.argv.slice(4),',
         '}));',
@@ -454,13 +452,15 @@ describe('clodex-claude process wrapper', () => {
       ]);
       expect(first.code).toBe(0);
       const firstLaunch = JSON.parse(readFileSync(ticketMarker, 'utf8')) as {
-        proxy: string;
+        proxy: string | null;
+        baseUrl: string;
         ticket: string;
         args: string[];
       };
       expect(requests).toEqual([{ accountId: 'Two' }]);
       expect(firstLaunch.ticket).toBe('ticket-for-two');
-      expect(new URL(firstLaunch.proxy).password).toBe('ticket-for-two');
+      expect(firstLaunch.proxy).toBeNull();
+      expect(firstLaunch.baseUrl).toBe(`http://127.0.0.1:${proxy.port}/anthropic`);
       expect(firstLaunch.args).toEqual([]);
 
       const inherited = await runWrapper(

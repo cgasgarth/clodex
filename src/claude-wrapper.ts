@@ -134,17 +134,11 @@ async function main(): Promise<void> {
   let launchTicket = process.env['CLODEX_LAUNCH_TICKET'];
   const daemon = readDaemonRuntimeState();
   const liveServers = readLiveServerRuntimeStates();
-  const daemonBridgeMode = process.env['CLODEX_DAEMON_BRIDGE_MODE'] === 'endpoint'
-    ? 'endpoint'
-    : 'proxy';
   const daemonCandidate: ServerRuntimeState | undefined = daemon?.ready && isPidAlive(daemon.pid)
     ? {
-        mode: daemonBridgeMode,
+        mode: 'endpoint',
         pid: daemon.pid,
-        port: daemonBridgeMode === 'endpoint'
-          ? daemon.endpointPort
-          : daemon.proxyPort,
-        ...(daemonBridgeMode === 'proxy' ? { caPath: daemon.caPath } : {}),
+        port: daemon.port,
         startedAt: daemon.startedAt,
       }
     : undefined;
@@ -156,7 +150,7 @@ async function main(): Promise<void> {
   );
   // A daemon-launched main session and every inherited workflow/subagent must
   // stay on the exact daemon process. Generic discovery remains only for
-  // direct legacy wrapper use that has no daemon identity or launch ticket.
+  // direct standalone-server wrapper use that has no daemon identity or ticket.
   const candidates = daemonCandidate
     ? [daemonCandidate]
     : mustUseDaemon
@@ -178,10 +172,8 @@ async function main(): Promise<void> {
     daemon?.ready
     && state
     && daemon.pid === state.pid
-    && (
-      (state.mode === 'proxy' && daemon.proxyPort === state.port)
-      || (state.mode === 'endpoint' && daemon.endpointPort === state.port)
-    )
+    && state.mode === 'endpoint'
+    && daemon.port === state.port
     && (!launchTicket || requestedAccount)
   ) {
     try {

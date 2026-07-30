@@ -10,7 +10,7 @@ import {
 import { dirname } from 'node:path';
 import { getDaemonRuntimePath } from '../paths.js';
 
-export const DAEMON_PROTOCOL_VERSION = 3;
+export const DAEMON_PROTOCOL_VERSION = 4;
 
 export interface DaemonRuntimeState {
   protocolVersion: number;
@@ -20,9 +20,7 @@ export interface DaemonRuntimeState {
   cliPath: string;
   startedAt: string;
   ready: boolean;
-  proxyPort: number;
-  endpointPort: number;
-  caPath: string;
+  port: number;
   controlSocketPath: string;
   version: string;
 }
@@ -48,14 +46,9 @@ function validState(value: unknown): value is DaemonRuntimeState {
     && state.cliPath.length > 0
     && typeof state.startedAt === 'string'
     && typeof state.ready === 'boolean'
-    && Number.isInteger(state.proxyPort)
-    && (state.proxyPort ?? 0) > 0
-    && (state.proxyPort ?? 0) <= 65_535
-    && Number.isInteger(state.endpointPort)
-    && (state.endpointPort ?? 0) > 0
-    && (state.endpointPort ?? 0) <= 65_535
-    && typeof state.caPath === 'string'
-    && state.caPath.length > 0
+    && Number.isInteger(state.port)
+    && (state.port ?? 0) > 0
+    && (state.port ?? 0) <= 65_535
     && typeof state.controlSocketPath === 'string'
     && state.controlSocketPath.length > 0
     && typeof state.version === 'string';
