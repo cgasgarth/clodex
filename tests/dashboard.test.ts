@@ -5,12 +5,15 @@ import {
   deviceCodeInstruction,
   formatUsd,
   lineChart,
+  loadDashboardPanels,
   secondwindPercentSaved,
   secondwindSessionSummary,
   secondwindTokenSummary,
   usageRange,
   VIEW_SWITCH_HINT,
+  type DashboardRequest,
 } from '../src/dashboard.js';
+import { DASHBOARD_CONTROL_REQUEST_TIMEOUT_MS } from '../src/timeouts.js';
 
 describe('dashboard usage chart', () => {
   it('renders visible x and y axes with activity points', () => {
@@ -120,5 +123,109 @@ describe('dashboard controls', () => {
     }, 0)).toBe(
       '1. session 12345678 · 12.3K tokens (24.7% input) · $0.042 estimated savings · 4 req',
     );
+  });
+});
+
+describe('dashboard refresh resilience', () => {
+  const status = {
+    running: true,
+    ready: true,
+    version: 'test',
+    pid: 123,
+    uptimeSeconds: 60,
+    port: 17_647,
+    websocket: {
+      total: 0,
+      open: 0,
+      inFlight: 0,
+      established: 0,
+      nursery: 0,
+      isolated: 0,
+      partitions: 0,
+      checkpoints: 0,
+    },
+    activeSessions: 0,
+    sessions: [],
+  };
+
+  function requestFrom(
+    responses: Record<string, unknown | Error>,
+    calls: Array<{ path: string; timeoutMs?: number }> = [],
+  ): DashboardRequest {
+    return async <T>(path: string, options = {}): Promise<T> => {
+      calls.push({ path, timeoutMs: options.timeoutMs });
+      const response = responses[path];
+      if (response instanceof Error) throw response;
+      if (response === undefined) throw new Error(`Unexpected request: ${path}`);
+      return response as T;
+    };
+  }
+
+  it('keeps a healthy daemon available when an optional panel fails', async () => {
+    const snapshot = await loadDashboardPanels(requestFrom({
+      '/v1/status': status,
+      '/v1/accounts': new Error('accounts timed out'),
+      '/v1/diagnostics?limit=20': { diagnostics: [] },
+      '/v1/secondwind': {},
+    }));
+
+    expect(snapshot.reachable).toBe(true);
+    expect(snapshot.status).toEqual(status);
+    expect(snapshot.accounts).toBeUndefined();
+    expect(snapshot.warnings).toContain('accounts: accounts timed out');
+  });
+
+  it('uses health as the availability fallback when status is delayed', async () => {
+    const snapshot = await loadDashboardPanels(requestFrom({
+      '/v1/status': new Error('status timed out'),
+      '/v1/health': { ok: true },
+      '/v1/accounts': new Error('accounts timed out'),
+      '/v1/diagnostics?limit=20': new Error('diagnostics timed out'),
+      '/v1/secondwind': new Error('Secondwind timed out'),
+    }));
+
+    expect(snapshot.reachable).toBe(true);
+    expect(snapshot.status).toBeUndefined();
+    expect(snapshot.warnings).toContain('status: status timed out');
+  });
+
+  it('treats any successful control panel as proof the daemon is reachable', async () => {
+    const calls: Array<{ path: string; timeoutMs?: number }> = [];
+    const snapshot = await loadDashboardPanels(requestFrom({
+      '/v1/status': new Error('status timed out'),
+      '/v1/accounts': { accounts: [] },
+      '/v1/diagnostics?limit=20': new Error('diagnostics timed out'),
+      '/v1/secondwind': new Error('Secondwind timed out'),
+    }, calls));
+
+    expect(snapshot.reachable).toBe(true);
+    expect(calls.some(call => call.path === '/v1/health')).toBe(false);
+  });
+
+  it('reports unavailable only when both status and health fail', async () => {
+    const snapshot = await loadDashboardPanels(requestFrom({
+      '/v1/status': new Error('status timed out'),
+      '/v1/health': new Error('health timed out'),
+      '/v1/accounts': new Error('accounts timed out'),
+      '/v1/diagnostics?limit=20': new Error('diagnostics timed out'),
+      '/v1/secondwind': new Error('Secondwind timed out'),
+    }));
+
+    expect(snapshot.reachable).toBe(false);
+    expect(snapshot.warnings).toContain('health: health timed out');
+  });
+
+  it('gives every routine panel the dashboard control timeout budget', async () => {
+    const calls: Array<{ path: string; timeoutMs?: number }> = [];
+    await loadDashboardPanels(requestFrom({
+      '/v1/status': status,
+      '/v1/accounts': { accounts: [] },
+      '/v1/diagnostics?limit=20': { diagnostics: [] },
+      '/v1/secondwind': {},
+    }, calls));
+
+    expect(calls).toHaveLength(4);
+    expect(calls.every(call =>
+      call.timeoutMs === DASHBOARD_CONTROL_REQUEST_TIMEOUT_MS)).toBe(true);
   });
 });
