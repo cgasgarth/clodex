@@ -76,10 +76,11 @@ Bare `clodex` starts the daemon when needed, then opens the Ink dashboard.
 `clodex start` starts it without opening the dashboard, and `clodex stop`
 stops it.
 
-- `1`–`5`: switch Overview, Usage, Accounts, Diagnostics, and Secondwind views
+- `1`–`6`: switch Overview, Usage, Accounts, Diagnostics, Secondwind, and Models views
 - Usage: `Tab` changes range; `←`/`→` changes period
 - Accounts: `↑`/`↓` chooses; `Enter` selects; `l` logs in; `x x` logs out
-- Secondwind: `←`/`→` changes mode; `o`, `s`, and `n` select off, shadow, and on
+- Secondwind: `←`/`→` or `o`, `s`, and `n` choose a mode; `Enter` confirms
+- Models: `↑`/`↓` chooses; `Space` stages enable/disable; `Enter` confirms
 - `r`: refresh
 - `q`: quit the dashboard; the daemon keeps running
 

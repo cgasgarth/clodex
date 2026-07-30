@@ -7,6 +7,9 @@ import type { DaemonRuntimeState } from './runtime.js';
 import type { DaemonInferenceCollector } from './collector.js';
 import type { SecondwindSnapshot } from './secondwind.js';
 import type { SecondwindMode } from '../types.js';
+import type {
+  DaemonClaudeModelSnapshot,
+} from './model-service.js';
 
 const MAX_CONTROL_BODY_BYTES = 64 * 1024;
 const MAX_METRICS_RANGE_MS = 32 * 24 * 60 * 60_000;
@@ -36,12 +39,18 @@ export interface DaemonSecondwindController {
   setMode(mode: SecondwindMode): void;
 }
 
+export interface DaemonClaudeModelController {
+  snapshot(): DaemonClaudeModelSnapshot;
+  setEnabled(modelId: string, enabled: boolean): Promise<DaemonClaudeModelSnapshot>;
+}
+
 export interface DaemonControlApiOptions {
   socketPath: string;
   runtime: DaemonRuntimeState;
   collector: DaemonInferenceCollector;
   accounts: DaemonAccountController;
   secondwind: DaemonSecondwindController;
+  models: DaemonClaudeModelController;
   requestRestart: () => void;
   requestStop: () => void;
 }
@@ -163,6 +172,25 @@ export async function startDaemonControlApi(
         }
         options.secondwind.setMode(mode);
         return sendJson(200, options.secondwind.snapshot());
+      }
+      if (request.method === 'GET' && url.pathname === '/v1/claude/models') {
+        return sendJson(200, options.models.snapshot());
+      }
+      if (request.method === 'POST' && url.pathname === '/v1/claude/models') {
+        const body = await readJsonBody(request);
+        const modelId = body && typeof body === 'object'
+          ? (body as { modelId?: unknown }).modelId
+          : undefined;
+        const enabled = body && typeof body === 'object'
+          ? (body as { enabled?: unknown }).enabled
+          : undefined;
+        if (typeof modelId !== 'string' || !modelId.trim()) {
+          return sendJson(400, { error: 'Claude modelId must be a non-empty string' });
+        }
+        if (typeof enabled !== 'boolean') {
+          return sendJson(400, { error: 'Claude model enabled must be a boolean' });
+        }
+        return sendJson(200, await options.models.setEnabled(modelId, enabled));
       }
       if (request.method === 'GET' && url.pathname === '/v1/accounts') {
         if (url.searchParams.get('refresh') === '1') await options.accounts.refreshUsage?.();

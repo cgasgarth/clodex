@@ -6,7 +6,10 @@ import {
   getLogsPath,
 } from '../paths.js';
 import { VERSION } from '../constants.js';
-import { loadHttpProxyRoutes } from '../http-proxy/index.js';
+import {
+  liveProxyModelAliases,
+  loadHttpProxyRoutes,
+} from '../http-proxy/index.js';
 import { startProxyCatalog, type ProxyHandle } from '../proxy.js';
 import {
   isPidAlive,
@@ -35,6 +38,7 @@ import {
 } from './launch-agent.js';
 import { createDaemonAccountController } from './account-service.js';
 import { createDaemonSecondwindService } from './secondwind.js';
+import { createDaemonClaudeModelController } from './model-service.js';
 
 interface DaemonStatusResponse {
   running: boolean;
@@ -298,7 +302,7 @@ export async function runDaemonProcess(): Promise<number> {
       inferenceLogPath,
       undefined,
       webSocketDiagnosticsLogPath,
-      loaded.aliases,
+      liveProxyModelAliases(loaded),
       resolveRoute,
       resolveDaemonPort(),
       async context => secondwind.rewrite({
@@ -318,6 +322,7 @@ export async function runDaemonProcess(): Promise<number> {
         recordMetrics: context.endpoint === 'messages',
       }),
     );
+    const models = createDaemonClaudeModelController(endpoint);
     runtime = createDaemonRuntimeState({
       pid: process.pid,
       bunPath: process.execPath,
@@ -342,6 +347,7 @@ export async function runDaemonProcess(): Promise<number> {
       collector,
       accounts,
       secondwind,
+      models,
       requestRestart,
       requestStop: requestShutdown,
     });

@@ -22,6 +22,10 @@ import type {
   SecondwindSnapshot,
 } from './daemon/secondwind.js';
 import type { SecondwindMode } from './types.js';
+import type {
+  DaemonClaudeModelSnapshot,
+  DaemonClaudeModelView,
+} from './daemon/model-service.js';
 
 interface WebSocketStatus {
   total: number;
@@ -107,7 +111,13 @@ export interface DeviceCodePrompt {
 }
 
 export type UsagePeriod = 'day' | 'week' | 'month';
-type DashboardView = 'overview' | 'usage' | 'accounts' | 'diagnostics' | 'secondwind';
+type DashboardView =
+  | 'overview'
+  | 'usage'
+  | 'accounts'
+  | 'diagnostics'
+  | 'secondwind'
+  | 'models';
 
 export interface UsageRange {
   period: UsagePeriod;
@@ -129,15 +139,23 @@ export interface DashboardPanelSnapshot {
   accounts?: Account[];
   diagnostics?: Diagnostic[];
   secondwind?: SecondwindSnapshot;
+  models?: DaemonClaudeModelView[];
   warnings: string[];
 }
 
-const VIEWS: DashboardView[] = ['overview', 'usage', 'accounts', 'diagnostics', 'secondwind'];
+const VIEWS: DashboardView[] = [
+  'overview',
+  'usage',
+  'accounts',
+  'diagnostics',
+  'secondwind',
+  'models',
+];
 const SECONDWIND_MODES: SecondwindMode[] = ['off', 'shadow', 'on'];
 const PERIODS: UsagePeriod[] = ['day', 'week', 'month'];
 const CHART_WIDTH = 56;
 const CHART_HEIGHT = 6;
-export const VIEW_SWITCH_HINT = 'Press 1–5 to switch views';
+export const VIEW_SWITCH_HINT = 'Press 1–6 to switch views';
 
 function requestFailure(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -151,11 +169,12 @@ export async function loadDashboardPanels(
   request: DashboardRequest = daemonControlRequest,
 ): Promise<DashboardPanelSnapshot> {
   const options = { timeoutMs: DASHBOARD_CONTROL_REQUEST_TIMEOUT_MS };
-  const [status, accounts, diagnostics, secondwind] = await Promise.allSettled([
+  const [status, accounts, diagnostics, secondwind, models] = await Promise.allSettled([
     request<DaemonStatus>('/v1/status', options),
     request<{ accounts: Account[] }>('/v1/accounts', options),
     request<{ diagnostics: Diagnostic[] }>('/v1/diagnostics?limit=20', options),
     request<SecondwindSnapshot>('/v1/secondwind', options),
+    request<DaemonClaudeModelSnapshot>('/v1/claude/models', options),
   ]);
   const warnings: string[] = [];
   if (status.status === 'rejected') warnings.push(`status: ${requestFailure(status.reason)}`);
@@ -166,8 +185,11 @@ export async function loadDashboardPanels(
   if (secondwind.status === 'rejected') {
     warnings.push(`Secondwind: ${requestFailure(secondwind.reason)}`);
   }
+  if (models.status === 'rejected') {
+    warnings.push(`models: ${requestFailure(models.reason)}`);
+  }
 
-  let reachable = [status, accounts, diagnostics, secondwind]
+  let reachable = [status, accounts, diagnostics, secondwind, models]
     .some(result => result.status === 'fulfilled');
   if (!reachable) {
     try {
@@ -186,6 +208,7 @@ export async function loadDashboardPanels(
       ? diagnostics.value.diagnostics
       : undefined,
     secondwind: secondwind.status === 'fulfilled' ? secondwind.value : undefined,
+    models: models.status === 'fulfilled' ? models.value.models : undefined,
     warnings,
   };
 }
@@ -476,7 +499,9 @@ function Dashboard(): React.ReactNode {
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [diagnostics, setDiagnostics] = useState<Diagnostic[]>([]);
   const [secondwind, setSecondwind] = useState<SecondwindSnapshot | null>(null);
+  const [models, setModels] = useState<DaemonClaudeModelView[]>([]);
   const [selectedIndex, setSelectedIndex] = useState(0);
+  const [selectedModelIndex, setSelectedModelIndex] = useState(0);
   const [message, setMessage] = useState('Connecting to Clodex daemon…');
   const [loading, setLoading] = useState(false);
   const [accountAction, setAccountAction] = useState(false);
@@ -484,6 +509,13 @@ function Dashboard(): React.ReactNode {
   const [pendingRestart, setPendingRestart] = useState(false);
   const [deviceCode, setDeviceCode] = useState<DeviceCodePrompt>();
   const [secondwindAction, setSecondwindAction] = useState(false);
+  const [pendingSecondwindMode, setPendingSecondwindMode] = useState<SecondwindMode>();
+  const [modelAction, setModelAction] = useState(false);
+  const [pendingModelChange, setPendingModelChange] = useState<{
+    modelId: string;
+    name: string;
+    enabled: boolean;
+  }>();
 
   const refresh = useCallback(async () => {
     if (refreshInFlight.current) return;
@@ -503,6 +535,10 @@ function Dashboard(): React.ReactNode {
       }
       if (snapshot.diagnostics) setDiagnostics(snapshot.diagnostics);
       if (snapshot.secondwind) setSecondwind(snapshot.secondwind);
+      if (snapshot.models) {
+        setModels(snapshot.models);
+        setSelectedModelIndex(index => Math.min(index, Math.max(0, snapshot.models!.length - 1)));
+      }
 
       const warnings = [...snapshot.warnings];
       const activeAccount = snapshot.accounts?.find(account => account.selected);
@@ -612,6 +648,28 @@ function Dashboard(): React.ReactNode {
     ).finally(() => setSecondwindAction(false));
   }, [secondwind?.mode, secondwindAction]);
 
+  const setClaudeModelEnabled = useCallback((
+    modelId: string,
+    enabled: boolean,
+  ) => {
+    if (modelAction) return;
+    setModelAction(true);
+    setMessage(`${enabled ? 'Enabling' : 'Disabling'} ${modelId}…`);
+    daemonControlRequest<DaemonClaudeModelSnapshot>('/v1/claude/models', {
+      method: 'POST',
+      body: { modelId, enabled },
+    }).then(
+      snapshot => {
+        setModels(snapshot.models);
+        setMessage(
+          `${modelId} ${enabled ? 'enabled' : 'disabled'}; `
+          + 'the live route catalog and new Claude launches are updated.',
+        );
+      },
+      error => setMessage(error instanceof Error ? error.message : String(error)),
+    ).finally(() => setModelAction(false));
+  }, [modelAction]);
+
   const logout = useCallback((account: Account) => {
     if (accountAction) return;
     setAccountAction(true);
@@ -670,14 +728,39 @@ function Dashboard(): React.ReactNode {
       && pendingRestart;
     if (pendingLogoutId && !confirmsLogout) setPendingLogoutId(undefined);
     if (pendingRestart && !confirmsRestart) setPendingRestart(false);
+
+    if (pendingSecondwindMode) {
+      if (key.return) {
+        const mode = pendingSecondwindMode;
+        setPendingSecondwindMode(undefined);
+        setSecondwindMode(mode);
+      } else {
+        setPendingSecondwindMode(undefined);
+        setMessage('Secondwind mode change cancelled.');
+      }
+      return;
+    }
+    if (pendingModelChange) {
+      if (key.return) {
+        const change = pendingModelChange;
+        setPendingModelChange(undefined);
+        setClaudeModelEnabled(change.modelId, change.enabled);
+      } else {
+        setPendingModelChange(undefined);
+        setMessage('Claude model change cancelled.');
+      }
+      return;
+    }
     if (input === 'q' || key.escape) {
       exit();
       return;
     }
-    if (/^[1-5]$/.test(input)) {
+    if (/^[1-6]$/.test(input)) {
       setView(VIEWS[Number(input) - 1]!);
       setPendingLogoutId(undefined);
       setPendingRestart(false);
+      setPendingSecondwindMode(undefined);
+      setPendingModelChange(undefined);
       return;
     }
     if (input === 'r') {
@@ -714,16 +797,17 @@ function Dashboard(): React.ReactNode {
       }
     }
     if (view === 'secondwind' && secondwind) {
+      if (secondwindAction) return;
       if (input === 'o') {
-        setSecondwindMode('off');
+        if (secondwind.mode !== 'off') setPendingSecondwindMode('off');
         return;
       }
       if (input === 's') {
-        setSecondwindMode('shadow');
+        if (secondwind.mode !== 'shadow') setPendingSecondwindMode('shadow');
         return;
       }
       if (input === 'n') {
-        setSecondwindMode('on');
+        if (secondwind.mode !== 'on') setPendingSecondwindMode('on');
         return;
       }
       if (key.leftArrow || key.rightArrow) {
@@ -732,7 +816,31 @@ function Dashboard(): React.ReactNode {
         const next = SECONDWIND_MODES[
           (current + delta + SECONDWIND_MODES.length) % SECONDWIND_MODES.length
         ]!;
-        setSecondwindMode(next);
+        if (next !== secondwind.mode) setPendingSecondwindMode(next);
+        return;
+      }
+    }
+    if (view === 'models') {
+      if (modelAction) return;
+      if (input === 'j' || key.downArrow) {
+        setSelectedModelIndex(index => Math.min(Math.max(0, models.length - 1), index + 1));
+        return;
+      }
+      if (input === 'k' || key.upArrow) {
+        setSelectedModelIndex(index => Math.max(0, index - 1));
+        return;
+      }
+      if (input === ' ' && models[selectedModelIndex]) {
+        const model = models[selectedModelIndex]!;
+        setPendingModelChange({
+          modelId: model.modelId,
+          name: model.alias ?? model.name,
+          enabled: !model.enabled,
+        });
+        setMessage(
+          `Press Enter to ${model.enabled ? 'disable' : 'enable'} `
+          + `${model.alias ?? model.name}; any other key cancels.`,
+        );
         return;
       }
     }
@@ -1037,8 +1145,8 @@ function Dashboard(): React.ReactNode {
             ))}
       </Box>
     );
-  } else {
-    controls = `←/→ mode · o off · s shadow · n on · ${VIEW_SWITCH_HINT} · r refresh · q quit`;
+  } else if (view === 'secondwind') {
+    controls = `←/→ choose · o off · s shadow · n on · Enter confirm · ${VIEW_SWITCH_HINT} · r refresh · q quit`;
     const modeColor = secondwind?.mode === 'on'
       ? 'green'
       : secondwind?.mode === 'shadow'
@@ -1097,6 +1205,15 @@ function Dashboard(): React.ReactNode {
             Mode and lifetime applied savings persist; live metrics reset with the daemon.
           </Text>
         </Box>
+        {pendingSecondwindMode && (
+          <Box borderStyle="round" borderColor="yellow" paddingX={1} flexDirection="column">
+            <Text bold color="yellow">Confirm Secondwind mode change</Text>
+            <Text>
+              Change <Text bold>{secondwind?.mode}</Text> → <Text bold>{pendingSecondwindMode}</Text>?
+            </Text>
+            <Text dimColor>Press Enter to confirm; any other key cancels.</Text>
+          </Box>
+        )}
         <Box borderStyle="round" paddingX={1} flexDirection="column">
           <Text bold>Lifetime applied savings</Text>
           <Text>
@@ -1151,6 +1268,45 @@ function Dashboard(): React.ReactNode {
         </Box>
       </>
     );
+  } else {
+    controls = `↑/↓ model · Space toggle · Enter confirm · ${VIEW_SWITCH_HINT} · r refresh · q quit`;
+    content = (
+      <>
+        <Box borderStyle="round" paddingX={1} flexDirection="column">
+          <Text bold>Claude OpenAI model list</Text>
+          <Text dimColor>
+            Routes change immediately; the patched picker changes for new Claude launches.
+          </Text>
+          {models.length === 0
+            ? <Text dimColor>No OpenAI models are available in the provider registry.</Text>
+            : models.map((model, index) => (
+                <Text
+                  key={model.modelId}
+                  color={index === selectedModelIndex ? 'cyan' : undefined}
+                >
+                  {index === selectedModelIndex ? '›' : ' '}
+                  {' '}{model.enabled ? '●' : '○'}
+                  {' '}{model.alias ? `${model.alias} · ` : ''}{model.name}
+                  {' · '}{model.modelId}
+                  {model.contextWindow ? ` · ${compactNumber(model.contextWindow)} context` : ''}
+                </Text>
+              ))}
+        </Box>
+        {pendingModelChange && (
+          <Box borderStyle="round" borderColor="yellow" paddingX={1} flexDirection="column">
+            <Text bold color="yellow">Confirm Claude model change</Text>
+            <Text>
+              {pendingModelChange.enabled ? 'Enable' : 'Disable'}{' '}
+              <Text bold>{pendingModelChange.name}</Text>?
+            </Text>
+            <Text dimColor>
+              This updates the live route catalog and repatches Claude. Press Enter to confirm;
+              {' '}any other key cancels.
+            </Text>
+          </Box>
+        )}
+      </>
+    );
   }
 
   return (
@@ -1164,9 +1320,11 @@ function Dashboard(): React.ReactNode {
           ? ' · account action in progress…'
           : secondwindAction
             ? ' · saving Secondwind mode…'
-            : loading
-              ? ' · refreshing…'
-              : ''}
+            : modelAction
+              ? ' · updating Claude model list…'
+              : loading
+                ? ' · refreshing…'
+                : ''}
       </Text>
     </Box>
   );

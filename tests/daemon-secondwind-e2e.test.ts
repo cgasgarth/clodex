@@ -156,6 +156,10 @@ describe('single-endpoint daemon Secondwind integration', () => {
         createLaunchTicket: () => null,
       },
       secondwind,
+      models: {
+        snapshot: () => ({ models: [] }),
+        setEnabled: async () => ({ models: [] }),
+      },
       requestRestart: () => {},
       requestStop: () => {},
     });

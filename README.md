@@ -159,9 +159,11 @@ clodex                      # start if needed, then open the Ink dashboard
 clodex stop                 # stop the daemon
 ```
 
-Bare `clodex` starts the daemon if needed and opens five views: Overview, Usage,
-Accounts, Diagnostics, and Secondwind. Press `1`–`5` to switch views. Usage
+Bare `clodex` starts the daemon if needed and opens six views: Overview, Usage,
+Accounts, Diagnostics, Secondwind, and Models. Press `1`–`6` to switch views. Usage
 supports day/week/month navigation with `Tab`, `Shift+Tab`, `←`, `→`, and `0`.
+Secondwind mode changes require confirmation. The Models view enables or disables OpenAI
+models in the live route catalog and the patched picker used by new Claude launches.
 
 Metrics are retained for 400 days in owner-only SQLite. They aggregate in memory
 and flush as one compact batch row each minute or after 1,000 records; dashboard
