@@ -209,6 +209,17 @@ export function secondwindPercentSaved(
   return `${percent.toFixed(percent >= 10 ? 1 : 2).replace(/\.?0+$/, '')}%`;
 }
 
+export function secondwindPromptPercentSaved(
+  metrics: Pick<SecondwindModeMetrics, 'tokensReduced' | 'observedInputTokens'> | undefined,
+  applied = true,
+): string | undefined {
+  const observed = metrics?.observedInputTokens ?? 0;
+  if (observed <= 0) return undefined;
+  const denominator = observed + (applied ? metrics?.tokensReduced ?? 0 : 0);
+  const percent = Math.min(100, Math.max(0, (metrics?.tokensReduced ?? 0) / denominator * 100));
+  return `${percent.toFixed(percent >= 10 ? 1 : 2).replace(/\.?0+$/, '')}%`;
+}
+
 export function secondwindSessionSummary(
   session: SecondwindSessionSavings,
   index: number,
@@ -216,7 +227,7 @@ export function secondwindSessionSummary(
   const estimate = session.estimatedTokenRequests > 0 ? '~' : '';
   return `${index + 1}. session ${session.sessionHash.slice(0, 8)}`
     + ` · ${estimate}${compactNumber(session.tokensReduced)} tokens`
-    + ` (${secondwindPercentSaved(session)} input)`
+    + ` (${secondwindPercentSaved(session)} inspected tool output)`
     + ` · ${formatUsd(session.estimatedSavingsUsd)} estimated savings`
     + ` · ${session.requests} req`;
 }
@@ -1048,6 +1059,7 @@ function Dashboard(): React.ReactNode {
       label: string,
       metrics: SecondwindModeMetrics | undefined,
       savingsLabel: string,
+      applied: boolean,
     ) => (
       <Box flexDirection="column">
         <Text bold>{label}</Text>
@@ -1056,9 +1068,26 @@ function Dashboard(): React.ReactNode {
         </Text>
         <Text>
           {secondwindTokenSummary(metrics)}
-          {' · '}{secondwindPercentSaved(metrics)} of input
+          {' · '}{secondwindPercentSaved(metrics)} of inspected tool output
           {' · '}{savingsLabel} {formatUsd(metrics?.estimatedSavingsUsd ?? 0)}
         </Text>
+        {(metrics?.observedInputTokens ?? 0) > 0 && (
+          <Text dimColor>
+            {secondwindPromptPercentSaved(metrics, applied)} of full prompt input removed
+            {' · '}saved attribution: {compactNumber(metrics?.savedInputTokens ?? 0)} uncached
+            {' / '}{compactNumber(metrics?.savedCachedInputTokens ?? 0)} cache reads
+            {' / '}{compactNumber(metrics?.savedCacheWriteTokens ?? 0)} cache writes
+          </Text>
+        )}
+        {((metrics?.estimatedInputSavingsUsd ?? 0)
+          + (metrics?.estimatedCacheSavingsUsd ?? 0)
+          + (metrics?.estimatedOutputSavingsUsd ?? 0)) > 0 && (
+          <Text dimColor>
+            estimated dollars: {formatUsd(metrics?.estimatedInputSavingsUsd ?? 0)} input
+            {' + '}{formatUsd(metrics?.estimatedCacheSavingsUsd ?? 0)} cache
+            {' + '}{formatUsd(metrics?.estimatedOutputSavingsUsd ?? 0)} output threshold
+          </Text>
+        )}
         {(metrics?.unpricedRequests ?? 0) > 0 && (
           <Text dimColor>{metrics!.unpricedRequests} unsupported-model requests excluded from dollars</Text>
         )}
@@ -1083,7 +1112,7 @@ function Dashboard(): React.ReactNode {
           <Text bold>Lifetime applied savings</Text>
           <Text>
             {secondwindTokenSummary(secondwind?.lifetime)}
-            {' · '}{secondwindPercentSaved(secondwind?.lifetime)} of input
+            {' · '}{secondwindPercentSaved(secondwind?.lifetime)} of inspected tool output
             {' · '}estimated API-equivalent savings {formatUsd(secondwind?.lifetime?.estimatedSavingsUsd ?? 0)}
           </Text>
           <Text dimColor>
@@ -1091,6 +1120,18 @@ function Dashboard(): React.ReactNode {
             {' · '}{secondwind?.lifetime?.blocksRewritten ?? 0} blocks rewritten
             {' · '}tracking begins with this dashboard version
           </Text>
+          {(secondwind?.lifetime?.observedInputTokens ?? 0) > 0
+            ? (
+                <Text dimColor>
+                  {secondwindPromptPercentSaved(secondwind?.lifetime, true)} of full prompt input removed
+                  {' · '}cache-aware attribution available for this portion
+                </Text>
+              )
+            : (secondwind?.lifetime?.estimatedSavingsUsd ?? 0) > 0 && (
+                <Text dimColor>
+                  Historical total predates cache-attribution tracking.
+                </Text>
+              )}
           <Text bold>Top sessions this daemon run</Text>
           {(secondwind?.topSessions?.length ?? 0) === 0
             ? <Text dimColor>No applied session savings yet.</Text>
@@ -1100,10 +1141,10 @@ function Dashboard(): React.ReactNode {
           <Text dimColor>Parent sessions include subagent and workflow traffic.</Text>
         </Box>
         <Box borderStyle="round" paddingX={1} flexDirection="column">
-          {metricLine('Applied', secondwind?.applied, 'estimated savings')}
+          {metricLine('Applied', secondwind?.applied, 'estimated savings', true)}
           <Text> </Text>
-          {metricLine('Shadow potential', secondwind?.shadow, 'estimated possible savings')}
-          <Text dimColor>API-equivalent uncached input-rate estimate for priced Sol, Terra, and Luna requests.</Text>
+          {metricLine('Shadow potential', secondwind?.shadow, 'estimated possible savings', false)}
+          <Text dimColor>API-equivalent cache-aware estimate for priced Sol, Terra, and Luna requests.</Text>
         </Box>
         <Box borderStyle="round" paddingX={1} flexDirection="column">
           <Text bold>Added request latency</Text>

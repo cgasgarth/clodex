@@ -297,6 +297,15 @@ describe('Secondwind daemon service', () => {
     });
 
     expect(service.snapshot().applied.estimatedSavingsUsd).toBeCloseTo(0.001525);
+    expect(service.snapshot().applied).toMatchObject({
+      observedInputTokens: 1_000,
+      savedInputTokens: 100,
+      savedCachedInputTokens: 800,
+      savedCacheWriteTokens: 100,
+      estimatedInputSavingsUsd: expect.closeTo(0.0005),
+      estimatedCacheSavingsUsd: expect.closeTo(0.001025),
+      estimatedOutputSavingsUsd: 0,
+    });
     expect(service.snapshot().lifetime.estimatedSavingsUsd).toBeCloseTo(0.001525);
     expect(service.snapshot().topSessions).toEqual([
       expect.objectContaining({

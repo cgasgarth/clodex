@@ -128,6 +128,13 @@ describe('DaemonMetricsStore', () => {
       tokensReduced: 12_345,
       estimatedTokenRequests: 0,
       estimatedSavingsUsd: 0.042,
+      observedInputTokens: 18_000,
+      savedInputTokens: 1_000,
+      savedCachedInputTokens: 10_000,
+      savedCacheWriteTokens: 1_345,
+      estimatedInputSavingsUsd: 0.01,
+      estimatedCacheSavingsUsd: 0.032,
+      estimatedOutputSavingsUsd: 0,
     });
     first.close();
 
@@ -139,6 +146,13 @@ describe('DaemonMetricsStore', () => {
       tokensReduced: 12_345,
       estimatedTokenRequests: 0,
       estimatedSavingsUsd: 0.042,
+      observedInputTokens: 18_000,
+      savedInputTokens: 1_000,
+      savedCachedInputTokens: 10_000,
+      savedCacheWriteTokens: 1_345,
+      estimatedInputSavingsUsd: 0.01,
+      estimatedCacheSavingsUsd: 0.032,
+      estimatedOutputSavingsUsd: 0,
     });
     reopened.appendSecondwindSavings({
       requests: 1,
@@ -147,6 +161,13 @@ describe('DaemonMetricsStore', () => {
       tokensReduced: 655,
       estimatedTokenRequests: 1,
       estimatedSavingsUsd: 0.008,
+      observedInputTokens: 4_000,
+      savedInputTokens: 655,
+      savedCachedInputTokens: 0,
+      savedCacheWriteTokens: 0,
+      estimatedInputSavingsUsd: 0.008,
+      estimatedCacheSavingsUsd: 0,
+      estimatedOutputSavingsUsd: 0,
     });
     expect(reopened.secondwindLifetime()).toEqual({
       requests: 3,
@@ -155,6 +176,13 @@ describe('DaemonMetricsStore', () => {
       tokensReduced: 13_000,
       estimatedTokenRequests: 1,
       estimatedSavingsUsd: 0.05,
+      observedInputTokens: 22_000,
+      savedInputTokens: 1_655,
+      savedCachedInputTokens: 10_000,
+      savedCacheWriteTokens: 1_345,
+      estimatedInputSavingsUsd: expect.closeTo(0.018),
+      estimatedCacheSavingsUsd: 0.032,
+      estimatedOutputSavingsUsd: 0,
     });
     reopened.close();
   });
@@ -302,6 +330,46 @@ describe('DaemonMetricsStore', () => {
         cachedInputTokens: 5,
       }),
     ]);
+    store.close();
+  });
+
+  it('migrates schema-v2 lifetime savings and preserves legacy totals', () => {
+    const root = mkdtempSync(join(tmpdir(), 'clodex-metrics-'));
+    roots.push(root);
+    const path = join(root, 'metrics.sqlite');
+    const legacy = new Database(path, { create: true });
+    legacy.exec(`
+      CREATE TABLE schema_meta (version INTEGER NOT NULL);
+      INSERT INTO schema_meta(version) VALUES (2);
+      CREATE TABLE secondwind_lifetime (
+        singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+        requests INTEGER NOT NULL,
+        blocks_rewritten INTEGER NOT NULL,
+        input_tokens_considered INTEGER NOT NULL,
+        tokens_reduced INTEGER NOT NULL,
+        estimated_token_requests INTEGER NOT NULL,
+        estimated_savings_usd REAL NOT NULL
+      );
+      INSERT INTO secondwind_lifetime VALUES (1, 10, 20, 3000, 1000, 0, 0.25);
+    `);
+    legacy.close();
+
+    const store = new DaemonMetricsStore(path);
+    expect(store.secondwindLifetime()).toEqual({
+      requests: 10,
+      blocksRewritten: 20,
+      inputTokensConsidered: 3_000,
+      tokensReduced: 1_000,
+      estimatedTokenRequests: 0,
+      estimatedSavingsUsd: 0.25,
+      observedInputTokens: 0,
+      savedInputTokens: 0,
+      savedCachedInputTokens: 0,
+      savedCacheWriteTokens: 0,
+      estimatedInputSavingsUsd: 0,
+      estimatedCacheSavingsUsd: 0,
+      estimatedOutputSavingsUsd: 0,
+    });
     store.close();
   });
 });

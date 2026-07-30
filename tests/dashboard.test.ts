@@ -7,6 +7,7 @@ import {
   lineChart,
   loadDashboardPanels,
   secondwindPercentSaved,
+  secondwindPromptPercentSaved,
   secondwindSessionSummary,
   secondwindTokenSummary,
   usageRange,
@@ -121,8 +122,19 @@ describe('dashboard controls', () => {
       estimatedTokenRequests: 0,
       estimatedSavingsUsd: 0.042,
     }, 0)).toBe(
-      '1. session 12345678 · 12.3K tokens (24.7% input) · $0.042 estimated savings · 4 req',
+      '1. session 12345678 · 12.3K tokens (24.7% inspected tool output) · $0.042 estimated savings · 4 req',
     );
+  });
+
+  it('separates full-prompt savings from the inspected tool-output denominator', () => {
+    expect(secondwindPromptPercentSaved({
+      observedInputTokens: 900_000,
+      tokensReduced: 100_000,
+    })).toBe('10%');
+    expect(secondwindPromptPercentSaved({
+      observedInputTokens: 1_000_000,
+      tokensReduced: 100_000,
+    }, false)).toBe('10%');
   });
 });
 
