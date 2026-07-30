@@ -2,112 +2,154 @@
 
 [![npm version](https://img.shields.io/npm/v/%40bman654%2Fclodex.svg)](https://www.npmjs.com/package/@bman654/clodex)
 
-**clodex** lets you use your ChatGPT/Codex plan or OpenAI models with Claude Code as if they were Anthropic models.
-You can use them anywhere you use Anthropic models like Opus and Sonnet — as the main session model, and in subagents, workflows, and agent teams. Clodex integrates them directly into Claude Code, using Claude Code's system prompt.
-It works with your existing Claude Code plan as well as your Codex plans WITHOUT violating Anthropic's ToS.
-No messing with CMUX or child codex processes or any of that stuff.
-You can finally have Fable and Sol work together to solve the hardest problems.
+**clodex** lets Claude Code use models from a ChatGPT/Codex plan or the OpenAI
+API. OpenAI models work as main-session models and in subagents, workflows, and
+agent teams while retaining Claude Code's system prompt, tools, and skills.
+
+One persistent local daemon handles model translation, OpenAI WebSocket
+continuation, prompt caching, optional native Codex compaction, accounts,
+metrics, and diagnostics. Anthropic models can continue using Claude Code's own
+login through selective proxy mode.
 
 ![Model picker](./docs/model-picker.png)
 
-You can also run clodex as a local OpenAI-compatible endpoint in front of your Codex plan, so any OpenAI-compatible client can use it.
+Clodex can also expose local Anthropic- and OpenAI-compatible endpoints.
 
 > clodex is derived from the original [relay-ai](https://github.com/jacob-bd/relay-ai) project, heavily modified and streamlined for this one use case, with the full commit history preserved.
 
 Contributions are welcome — see [CONTRIBUTING.md](./CONTRIBUTING.md) for how to scope a PR and what the quality bar is.
 
-## Quick Start (ChatGPT/Codex plan)
+## Quick start
 
 ```bash
-bun add --global @bman654/clodex # 1. install the CLI (Bun 1.3.14+)
-clodex providers auth openai   # 2. sign in with your ChatGPT/Codex plan
-clodex models                  # 3. pick favorite models and aliases
+bun add --global @bman654/clodex
+clodex providers auth openai
+clodex models
 clodex models --alias sol=clodex:openai-oauth:gpt-5.6-sol
 clodex models --alias luna=clodex:openai-oauth:gpt-5.6-luna
 clodex models --alias terra=clodex:openai-oauth:gpt-5.6-terra
-clodex patch                   # 4. (optional) patch Claude Code so those models are first-class
-clodex claude                  # 5. launch Claude Code on an OpenAI model
+clodex patch
+clodex claude
 ```
 
-1. **Install** — puts the `clodex` command on your PATH.
-2. **Sign in** — opens a device-code OAuth flow for your ChatGPT/Codex plan; the token is stored in your OS credential store. (API-key users: `clodex providers add` instead.)
-3. **Pick models** — an interactive manager for favorites (max 20) and short aliases like `sol` so you do not need to type the long names. Favorites drive the `/model` switch menu, proxy-mode routing, and the patcher.
-4. **Patch** *(optional but recommended for proxy mode)* — bakes your favorites and aliases into the Claude Code binary so they pass model validation, appear in `/model`, and report their real context windows. Re-run after each `claude` update; `clodex patch --restore` undoes it. This step is required if you want to use your OpenAI models as subagents via the Agent tool.
-5. **Launch** — starts Claude Code bridged to the model you choose.
+OAuth credentials are stored in the OS credential store. API-key users can run
+`clodex providers add` instead. Favorites and aliases feed `/model`, routing,
+and patching. `clodex patch` is optional for ordinary launches but required for
+OpenAI aliases in the Agent tool; it also supplies correct context windows.
+Re-run it after Claude Code updates, or restore with `clodex patch --restore`.
 
-## Difference between Clodex and other solutions
+## Highlights
 
-| Feature | Clodex | relay-ai | CLIProxyAPI | Various process-based solutions |
-|--------|--------|----------|-------------|----|
-| url       | https://github.com/bman654/clodex |  https://github.com/jacob-bd/relay-ai | https://help.router-for.me/ |    |
-| Works with Claude Code Plans without violating Anthropic TOS | ✅ | ✅ | ❌ | ✅ |
-| Can use all claude models + All Codex models together? | ✅ | ✅ | ❌ | ✅ |
-| Claude Code aware of true model context window size | ✅ | ❌ | ❌ | n/a |
-| Supports Agent tool | ✅ | ❌ | ✅ | ❌ |
-| Supports use in Dynamic Workflows | ✅ | ✅ | ✅ | ❌ |
-| OpenAI models use Claude Code skills/tools | ✅ | ✅ | ✅ | ❌ |
-| OpenAI models use Claude Code system prompt | ✅ | ✅ | ✅ | ❌ |
-| Supports use in skill/agent frontmatter | ✅ | ❌ | ✅ | ❌ |
-| Supports OpenAI prompt caching | ✅ | ❌ | ? | ✅ |
-| Uses Websockets to talk to OpenAI API | ✅ | ❌ | ? | ✅ |
+| Capability | Clodex |
+| --- | --- |
+| Main sessions, subagents, workflows, and agent teams | Yes |
+| Claude Code system prompt, skills, tools, and model frontmatter | Yes |
+| Anthropic and OpenAI models in the same Claude installation | Yes |
+| Correct per-model context windows in patched Claude Code | Yes |
+| Persistent shared daemon and OpenAI WebSocket continuation | Yes |
+| Stable prompt-cache routing and explicit cache breakpoints | Yes |
+| Native OpenAI/Codex compaction with durable recovery | Optional |
+| In-process Secondwind tool-output optimization | Optional |
+| Multiple manually selected ChatGPT/Codex accounts | Up to five |
 
 ### Claude Code Plans and ToS
 
-It's important to understand that any tool that duplicates Claude Code's OAuth login flow violates Anthropic's Terms of Service
-and risks getting your account banned.  Any tool that initiates a Claude Code OAuth flow from outside of the Claude Code app falls
-into this category.
+Clodex does not duplicate Claude Code's OAuth flow. In selective proxy mode,
+Anthropic requests pass through to `api.anthropic.com` with Claude Code's own
+credentials unchanged; only configured OpenAI models are rerouted.
 
-Another way to tell: if a tool needs you to set `ANTHROPIC_BASE_URL` to a custom value, Claude Code can't run on your plan credentials — so the only way that tool can use your plan is by duplicating Claude Code's OAuth flow, which is against the ToS.
+## How it works
 
-Clodex avoids this. In proxy mode it uses an HTTP proxy to intercept requests bound for `api.anthropic.com`: requests for an Anthropic model pass through unmodified, still carrying Claude Code's own auth token untouched — your plan credentials are never duplicated or replaced.
-
-## Claude transport and standalone server modes
-
-`clodex claude` always launches through the persistent daemon's single,
-restart-stable Anthropic-format endpoint. All Claude sessions, workflows, and
-subagents share that endpoint, its OpenAI WebSocket pools, and its in-process
-request middleware. `--endpoint` remains accepted for startup-script
-compatibility; `--proxy` is rejected for this command.
-
-The standalone `clodex server` command still supports two modes:
-
-- **`--proxy`** (the standalone default): a selective man-in-the-middle proxy
-  for `api.anthropic.com`. Claude Code keeps its normal Anthropic login while
-  `clodex:` models and saved aliases route to OpenAI.
-- **`--endpoint`**: an Anthropic-format gateway. With favorites saved,
-  `/v1/models` exposes the configured routes for live model switching.
-
-> [!TIP]
-> Proxy mode allows you to continue using your Claude Code plan: login to claude code like normal and the proxy will intercept requests and leave requests for Anthropic models untouched, while requests for your favorite OpenAI models will be re-routed to OpenAI.
+`clodex claude` routes every main session and Claude-spawned child through one
+restart-stable daemon endpoint. Signed launch tickets keep workflows and
+subagents pinned to their parent's account.
 
 ```mermaid
 flowchart LR
-    CC["Claude Code<br/>(own Anthropic login)"] -->|"HTTPS via HTTPS_PROXY,<br/>trusts the clodex CA"| MITM["clodex MITM proxy"]
-    MITM --> DEC{"model is clodex:...<br/>or a saved alias?"}
-    DEC -->|"yes — translated request,<br/>clodex-managed OpenAI credentials"| OAI["OpenAI<br/>(OAuth: Responses WebSocket /<br/>API key: HTTPS)"]
-    DEC -->|"no — passed through untouched,<br/>Claude Code's Anthropic credentials ride along"| ANT["api.anthropic.com"]
+  CC["Claude Code"] --> D["Clodex daemon"]
+  CHILD["Workflows and subagents"] --> D
+  D --> SW{"Secondwind mode"}
+  SW --> CACHE["Translation, cache routing, and compaction"]
+  CACHE --> OAI["OpenAI Responses WebSocket"]
+  D -.->|"selective proxy passthrough"| ANT["Anthropic API"]
 ```
 
-In endpoint mode, no Anthropic account is involved — Claude Code is launched pointing at the local gateway with a local API key, and its startup `/v1/models` fetch powers the `/model` menu:
+Standalone `clodex server` supports:
 
-```mermaid
-flowchart LR
-    CC["Claude Code<br/>(ANTHROPIC_BASE_URL + local API key,<br/>no Anthropic account credentials)"] -->|"Anthropic-format /v1/messages<br/>+ local API key"| GW["clodex gateway<br/>(:17645/anthropic)"]
-    CC -->|"GET /v1/models at startup"| GW
-    GW -->|"model catalog with context windows<br/>(feeds the /model menu)"| CC
-    GW -->|"translated request,<br/>clodex-managed OpenAI credentials"| OAI["OpenAI"]
-```
+- **`--proxy`** — selectively reroutes saved OpenAI models while Anthropic
+  requests retain Claude Code's own login.
+- **`--endpoint`** — exposes local Anthropic- and OpenAI-format gateways plus a
+  `/v1/models` catalog.
 
-> [!TIP]
-> Using Claude Code workflows, agents, or background sessions? Run one persistent
-> Clodex daemon and point Claude Code at the `clodex-claude` wrapper. See
-> [docs/background-agents.md](docs/background-agents.md).
+See [background agents](docs/background-agents.md) for wrapper and service
+details.
 
-## Persistent daemon and Ink dashboard
+## Efficiency and context lifecycle
 
-The persistent daemon gives all Claude sessions, workflows, and subagents one
-shared Anthropic-format endpoint and set of OpenAI WebSocket continuation
-pools:
+### Prompt caching
+
+Clodex keeps cacheable prefixes stable across main sessions, workflows, and
+subagent waves:
+
+- stable session-derived `prompt_cache_key` routing;
+- OpenAI cache breakpoints and 30-minute cache options on supported API-key
+  models;
+- removal of changing Anthropic billing metadata from OpenAI OAuth prompts;
+- persistent WebSocket `previous_response_id` continuation, isolated by
+  account, model, effort, session, and agent lineage; and
+- unchanged request bytes when Secondwind has nothing to rewrite.
+
+The dashboard reports uncached input, cache reads, cache writes, output, cache
+share, and API-equivalent cost.
+
+### Native OpenAI/Codex compaction
+
+Optional native compaction keeps long model-facing chains inside OpenAI instead
+of asking a model to summarize the full Claude transcript. Clodex first uses a
+cache-warm in-band `compaction_trigger`; when no live response head is
+available, it falls back to `POST /responses/compact`. Manual `/compact` stores
+the opaque result behind a synthetic Claude checkpoint, and durable checkpoints
+allow matching parent, subagent, and workflow histories to recover after daemon
+restart.
+
+Native compaction is off by default because OpenAI's compacted chain and
+Claude's saved transcript are different state. Enable and tune it with
+`CLODEX_OPENAI_COMPACTION=1` and `CLODEX_OPENAI_COMPACT_THRESHOLD`; read the
+[native compaction guide](docs/native-codex-compaction.md) before doing so.
+
+### Secondwind
+
+[Secondwind](https://github.com/orchetron/secondwind) is optional, in-process
+tool-output optimization:
+
+- `off` bypasses it;
+- `shadow` measures a lossless rewrite while sending the original request; and
+- `on` sends rewritten tool outputs, with fail-open fallback.
+
+The selected daemon-wide mode persists and applies to the next request.
+Secondwind reports measured tokens and input percentage saved, cache-aware
+API-equivalent savings, lifetime totals, top parent sessions, and median/p95
+latency.
+
+An initial Luna/medium codec-stress screen used three fresh sessions per
+condition. All hidden graders passed, while median total input fell in each
+case:
+
+| Benchmark | Correct off / on | Median input off | Median input on | Change |
+| --- | ---: | ---: | ---: | ---: |
+| Null, empty, and absent values | 3/3 · 3/3 | 139K | 118K | −15.2% |
+| Parent-child dependency join | 3/3 · 3/3 | 163K | 118K | −27.5% |
+| Grouped path restoration | 3/3 · 3/3 | 126K | 119K | −5.3% |
+
+Across optimized requests, Secondwind rewrote 42 blocks and removed 23,992 of
+53,178 measured tool-output tokens (45.1%). See the
+[benchmark report](benchmarks/secondwind/results/luna-medium-2026-07-30/README.md)
+for the method, latency, and raw results.
+
+## Persistent daemon and dashboard
+
+The daemon owns the shared endpoint, WebSocket pools, compaction checkpoints,
+accounts, metrics, and diagnostics:
 
 ```bash
 clodex daemon install       # macOS LaunchAgent; starts at login
@@ -117,42 +159,15 @@ clodex                      # start if needed, then open the Ink dashboard
 clodex stop                 # stop the daemon
 ```
 
-Bare `clodex` opens a five-view dashboard:
+Bare `clodex` starts the daemon if needed and opens five views: Overview, Usage,
+Accounts, Diagnostics, and Secondwind. Press `1`–`5` to switch views. Usage
+supports day/week/month navigation with `Tab`, `Shift+Tab`, `←`, `→`, and `0`.
 
-- **Overview** — live WebSocket/session counts, active-account quota, and recent
-  diagnostics.
-- **Usage** — account-scoped token and API-equivalent cost charts for calendar
-  days, weeks, or months. Both charts use the same buckets and explicit axes;
-  cost is split into input, cache, output, total, and Normal/Fast processing.
-- **Accounts** — manual account selection and guarded login/logout controls.
-- **Diagnostics** — bounded failures plus a guarded daemon restart.
-- **[Secondwind](https://github.com/orchetron/secondwind)** — daemon-wide `off`, `shadow`, or `on` tool-output
-  optimization, with measured compacted-token totals, persisted lifetime
-  API-equivalent savings, input-token reduction percentages, the current
-  daemon's top three parent sessions, and median/p95 added-latency metrics. It
-  defaults to `off`; the selected mode is persisted and affects the next
-  request without draining active sessions.
-
-Use `1`–`5` to switch views. In Usage, `Tab`/`Shift+Tab` changes the period,
-`←`/`→` moves between periods, and `0` returns to the current period. Metrics
-are stored in an indexed owner-only SQLite database with 400-day retention;
-legacy JSONL metrics migrate as unattributed history rather than being assigned
-to the active account. API-equivalent prices cover GPT-5.6 Sol, Terra, and Luna
-using the current OpenAI Standard/Priority rates, including cache writes and
-long-context pricing. They are estimates, not ChatGPT subscription charges.
-Secondwind runs in-process and inline-only: shadow mode measures the same
-lossless rewrite while forwarding original request bytes; on mode forwards the
-rewritten tool outputs; any optimizer failure falls back to the original
-request. Dollar savings are finalized from each request's observed OpenAI uncached,
-cache-read, and cache-write mix; token reduction comes directly from Secondwind.
-Metrics aggregate in memory by minute/account/model/mode and flush once per
-minute as one compact SQLite batch row (or at 1,000 pending records). Dashboard
-reads merge pending memory without forcing writes; shutdown flushes immediately.
-
-The daemon uses one restart-stable loopback endpoint (`17647`, overridden by
-`CLODEX_DAEMON_PORT`) and an owner-only Unix control socket. `clodex claude …`
-also starts the daemon when needed and launches Claude through that shared
-process.
+Metrics are retained for 400 days in owner-only SQLite. They aggregate in memory
+and flush as one compact batch row each minute or after 1,000 records; dashboard
+reads do not force disk writes, and shutdown flushes immediately. Cost figures
+for Sol, Terra, and Luna include Standard/Fast, cache, and long-context pricing.
+They are API-equivalent estimates, not ChatGPT subscription charges.
 
 Up to five ChatGPT/Codex logins can be stored:
 
@@ -163,13 +178,9 @@ clodex accounts select person@example.com
 clodex accounts usage
 ```
 
-Accounts are identified by their OpenAI sign-in email. Selection is deliberately
-manual: it changes the default for new launches, while existing sessions and
-their workflow/subagent children stay pinned to the account they started with.
-Clodex never changes accounts after quota, capacity, or authentication errors.
-Endpoint launches use a stable local API key so Claude Code can remember its
-approval; the signed per-launch account ticket is sent separately in the
-`x-clodex-launch-ticket` header and inherited by spawned agents.
+Accounts are identified by OpenAI sign-in email. Selection is manual and affects
+new launches only; existing sessions and their children remain pinned. Clodex
+does not fail over after quota, capacity, or authentication errors.
 
 ## CLI reference
 
@@ -222,11 +233,14 @@ Endpoint mode only (an error if combined with `--proxy`):
 | `--mask-gateway-ids` / `--no-mask-gateway-ids` | Mask or expose vendor names in discovery model ids (see below) |
 | `--password <value>` | One-run network-mode server password |
 
-Proxy mode has no extra options — it takes only the common options.
+Bare `clodex server` uses the saved mode, defaulting to proxy. Endpoint mode
+opens its wizard only on a TTY; `--quick` and non-interactive launches use saved
+settings. Network endpoint mode requires a saved password or `--password`.
 
-Bare `clodex server` uses the saved default mode (proxy if none saved). Proxy mode starts immediately. Endpoint mode on a TTY opens a short wizard — start from saved settings, or configure: favorites-only catalog?, which providers to expose, discovery-id masking, and listen local/network (network asks for a password). Without a TTY (or with `--quick`/any endpoint-mode option) it skips all prompts and starts from saved settings; network mode then needs a saved password or `--password`.
-
-**`--mask-gateway-ids`:** endpoint-mode discovery ids look like `anthropic-openai-oauth__gpt-5.6`. Some Claude clients validate model names (Claude Desktop / Cowork pickers, Claude Code skill/agent `model:` frontmatter) and reject or filter ids containing non-Anthropic vendor names. Masking reverses the provider and model segments (`anthropic-htuao-ianepo__6.5-tpg`) so vendor strings never appear literally; display names stay readable (`GPT 5.6 (OpenAI)`). As the request `model`, the gateway accepts the masked id, the unmasked id, the canonical `clodex:<provider>:<model>` id, or a saved alias (e.g. `luna`) — and the response echoes back whichever id you sent. Tradeoff: masked ids are unreadable — copy them exactly from the printed catalog. Masking is on by default; use `--no-mask-gateway-ids` for clients that don't need it.
+Endpoint discovery masks vendor strings by default for Claude clients that
+reject non-Anthropic model ids. Requests may still use the masked id, canonical
+`clodex:<provider>:<model>` id, or a saved alias. Use
+`--no-mask-gateway-ids` when readable discovery ids are preferred.
 
 Endpoint-mode endpoints (default port 17645):
 
@@ -235,9 +249,10 @@ ANTHROPIC_BASE_URL=http://127.0.0.1:17645/anthropic
 OPENAI_BASE_URL=http://127.0.0.1:17645/openai/v1
 ```
 
-Use any API key locally; network mode requires the server password. Proxy mode prints `HTTPS_PROXY`, `HTTP_PROXY`, `NODE_EXTRA_CA_CERTS`, and adjusted `NO_PROXY` / `no_proxy` values to export. The adjusted bypass lists preserve unrelated hosts while ensuring `api.anthropic.com` reaches the selective proxy. Do **not** set `ANTHROPIC_BASE_URL` in that mode.
-
-Several `clodex server` instances can run at once — each advertises itself in `~/.clodex/server-runtime.json`, and `clodex-claude` prefers a proxy-mode server (newest first) when bridging (see [docs/background-agents.md](docs/background-agents.md)). Pass `--no-discovery` to keep a server out of that file, e.g. a dedicated endpoint you point another tool at.
+Local endpoint mode accepts any API key; network mode requires its password.
+Proxy mode prints the proxy and CA environment to export—do not set
+`ANTHROPIC_BASE_URL` there. Multiple standalone servers may coexist through
+`~/.clodex/server-runtime.json`; `--no-discovery` keeps one private.
 
 Examples:
 
@@ -301,52 +316,19 @@ clodex --version    # version
 
 ## Configuration
 
-- Config home: `~/.clodex` (override with `CLODEX_HOME`). On first run, config is migrated automatically from a legacy `~/.relay-ai` directory if present; the legacy directory is never modified.
-- The config-home filesystem and the native account home must support hard
-  links because registry and credential locks are published atomically. Keep
-  `CLODEX_HOME` and `~/.clodex/credential-locks` on local filesystems rather
-  than FAT, exFAT, or a network mount that rejects hard links. An abrupt process
-  kill during lock publication can leave a `*.lock.*.tmp` file; it does not
-  block later lock acquisition and can be removed when no Clodex process is
-  running. A canonical `providers.json.lock` whose recorded PID is no longer
-  running is reclaimed automatically on the next lock acquisition. If it
-  remains while that PID is active, stop every Clodex process and verify the
-  recorded PID before removing the lock manually. Never remove the canonical
-  lock while a Clodex process is active.
-- Credentials live in the OS credential store (Keychain / Windows Credential
-  Manager / Secret Service). The `clodex` service holds the main value or
-  published marker; `clodex-chunks` holds current long-credential chunks;
-  `clodex-journal` holds crash-recovery metadata and a deletion marker; and
-  `clodex-deleted` holds a redundant non-secret deletion guard. A
-  `clodex-state-key` entry protects each account's recovery metadata. Use
-  Clodex provider removal instead of deleting these entries individually.
-  Authenticated encrypted per-account managed-state markers live under the
-  native OS account home at `~/.clodex/keyring-state`; before each journal
-  write they record the exact recovery intent so a retry can replay and verify
-  it. The encryption key remains in the OS credential store, so the filesystem
-  marker alone cannot be used to test credential guesses. The marker also
-  prevents a temporarily unavailable keyring journal from being mistaken for
-  an absent one. If the OS credential store was completely reset, Clodex
-  permits direct reauthorization only after sentinel checks prove the main and
-  chunk namespaces are empty. Hidden, locked, or partially restored state
-  remains fail-closed. Credential mutation locks live beside that state at
-  `~/.clodex/credential-locks`. Both paths are independent of `CLODEX_HOME` and
-  runtime or temporary-directory environment overrides. This keeps concurrent
-  processes serialized when they use different config homes. Set
-  `CLODEX_CREDENTIAL_HELPER` to an absolute executable path to use an external
-  secure store instead; see [credential helpers](docs/credential-helpers.md).
-- Proxied routes forward configured provider headers for API-key and OAuth authentication. Anonymous routes preserve non-credential headers while removing authorization, API-key, cookie, token, secret, and credential-bearing header names before dispatch.
+- Config lives under `~/.clodex`; override it with `CLODEX_HOME`. Legacy
+  `~/.relay-ai` config migrates automatically without modifying the source.
+- Credentials live in the OS credential store. Recovery metadata and mutation
+  locks are fail-closed and serialized under the native `~/.clodex` account
+  home. Use Clodex commands rather than deleting keychain entries or active lock
+  files manually. Local filesystems must support hard links.
+- Set `CLODEX_CREDENTIAL_HELPER` to an absolute executable to use an external
+  secure store; see [credential helpers](docs/credential-helpers.md).
+- Anonymous routes strip credential-bearing headers; authenticated routes
+  forward configured provider headers.
 - `CLODEX_CLAUDE_PATH` overrides Claude Code binary discovery.
-- **Outbound proxy:** when `HTTP_PROXY`/`HTTPS_PROXY` (and optionally `NO_PROXY`) are set in clodex's environment, all clodex-originated network calls honor them — OAuth sign-in and token refresh, model-list and models.dev refreshes, upstream OpenAI API calls, and the ChatGPT/Codex OAuth WebSocket transport (tunneled via HTTP CONNECT).
-
-## Experimental OpenAI compaction
-
-ChatGPT/Codex OAuth sessions can opt into OpenAI's native opaque Responses
-compaction. It is off by default because OpenAI-side compaction does not shrink
-Claude Code's saved transcript. Matching durable checkpoints can restore
-compacted parent, subagent, and workflow histories after a daemon restart.
-Read [How to configure OpenAI compaction](docs/native-codex-compaction.md)
-before enabling it.
+- `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY` apply to Clodex OAuth, discovery,
+  OpenAI HTTP, and Responses WebSocket traffic.
 
 ## Known limitations
 
