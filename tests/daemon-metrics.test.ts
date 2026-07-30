@@ -116,6 +116,93 @@ describe('DaemonMetricsStore', () => {
     store.close();
   });
 
+  it('persists lifetime Secondwind savings across store restarts', () => {
+    const root = mkdtempSync(join(tmpdir(), 'clodex-metrics-'));
+    roots.push(root);
+    const path = join(root, 'metrics.sqlite');
+    const first = new DaemonMetricsStore(path);
+    first.appendSecondwindSavings({
+      requests: 2,
+      blocksRewritten: 7,
+      inputTokensConsidered: 20_000,
+      tokensReduced: 12_345,
+      estimatedTokenRequests: 0,
+      estimatedSavingsUsd: 0.042,
+    });
+    first.close();
+
+    const reopened = new DaemonMetricsStore(path);
+    expect(reopened.secondwindLifetime()).toEqual({
+      requests: 2,
+      blocksRewritten: 7,
+      inputTokensConsidered: 20_000,
+      tokensReduced: 12_345,
+      estimatedTokenRequests: 0,
+      estimatedSavingsUsd: 0.042,
+    });
+    reopened.appendSecondwindSavings({
+      requests: 1,
+      blocksRewritten: 2,
+      inputTokensConsidered: 5_000,
+      tokensReduced: 655,
+      estimatedTokenRequests: 1,
+      estimatedSavingsUsd: 0.008,
+    });
+    expect(reopened.secondwindLifetime()).toEqual({
+      requests: 3,
+      blocksRewritten: 9,
+      inputTokensConsidered: 25_000,
+      tokensReduced: 13_000,
+      estimatedTokenRequests: 1,
+      estimatedSavingsUsd: 0.05,
+    });
+    reopened.close();
+  });
+
+  it('batches inference rows and Secondwind deltas until a read flushes both', () => {
+    const root = mkdtempSync(join(tmpdir(), 'clodex-metrics-'));
+    roots.push(root);
+    const path = join(root, 'metrics.sqlite');
+    const store = new DaemonMetricsStore(path);
+    const timestamp = new Date().toISOString();
+    for (const requestId of ['batch-1', 'batch-2']) {
+      store.append({
+        timestamp,
+        requestId,
+        modelId: 'sol',
+        provider: 'openai-oauth',
+        inputTokens: 10,
+        cachedInputTokens: 5,
+        cacheWriteTokens: 0,
+        outputTokens: 1,
+        error: false,
+      });
+    }
+    store.appendSecondwindSavings({
+      requests: 2,
+      blocksRewritten: 3,
+      inputTokensConsidered: 1_000,
+      tokensReduced: 500,
+      estimatedTokenRequests: 0,
+      estimatedSavingsUsd: 0.002,
+    });
+
+    const observer = new Database(path, { readonly: true });
+    expect(observer.query<{ count: number }, []>(
+      'SELECT COUNT(*) AS count FROM metric_events',
+    ).get()?.count).toBe(0);
+    expect(store.readSince(0)).toHaveLength(2);
+    expect(observer.query<{ count: number }, []>(
+      'SELECT COUNT(*) AS count FROM metric_events',
+    ).get()?.count).toBe(2);
+    expect(store.secondwindLifetime()).toMatchObject({
+      requests: 2,
+      tokensReduced: 500,
+    });
+    observer.close();
+    store.close();
+  });
+
   it('migrates schema-v1 databases to normal processing without losing rows', () => {
     const root = mkdtempSync(join(tmpdir(), 'clodex-metrics-'));
     roots.push(root);

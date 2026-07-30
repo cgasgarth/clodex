@@ -23,6 +23,8 @@ import {
 const METRICS_RETENTION_MS = 400 * 24 * 60 * 60_000;
 const FIVE_MINUTES_MS = 5 * 60_000;
 const PRUNE_INTERVAL_MS = 5 * 60_000;
+const METRICS_FLUSH_INTERVAL_MS = 250;
+const METRICS_FLUSH_BATCH_SIZE = 32;
 const METRICS_SCHEMA_VERSION = 2;
 
 export interface DaemonMetricEvent {
@@ -62,6 +64,24 @@ export interface DaemonMetricBucket {
   fastRequests: number;
   standardCost: number;
   fastCost: number;
+}
+
+export interface SecondwindLifetimeMetrics {
+  requests: number;
+  blocksRewritten: number;
+  inputTokensConsidered: number;
+  tokensReduced: number;
+  estimatedTokenRequests: number;
+  estimatedSavingsUsd: number;
+}
+
+export interface SecondwindSavingsEvent {
+  requests: number;
+  blocksRewritten: number;
+  inputTokensConsidered: number;
+  tokensReduced: number;
+  estimatedTokenRequests: number;
+  estimatedSavingsUsd: number;
 }
 
 interface MetricRow {
@@ -206,6 +226,9 @@ export class DaemonMetricsStore {
   readonly legacyPath?: string;
   private readonly db: Database;
   private readonly now: () => number;
+  private readonly pendingEvents: DaemonMetricEvent[] = [];
+  private readonly pendingSecondwind: SecondwindSavingsEvent[] = [];
+  private flushTimer: ReturnType<typeof setTimeout> | undefined;
   private lastPrunedAt = 0;
 
   constructor(
@@ -245,6 +268,19 @@ export class DaemonMetricsStore {
         ON metric_events(timestamp_ms);
       CREATE INDEX IF NOT EXISTS metric_events_account_timestamp
         ON metric_events(account_id, timestamp_ms);
+      CREATE TABLE IF NOT EXISTS secondwind_lifetime (
+        singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+        requests INTEGER NOT NULL,
+        blocks_rewritten INTEGER NOT NULL,
+        input_tokens_considered INTEGER NOT NULL,
+        tokens_reduced INTEGER NOT NULL,
+        estimated_token_requests INTEGER NOT NULL,
+        estimated_savings_usd REAL NOT NULL
+      );
+      INSERT OR IGNORE INTO secondwind_lifetime (
+        singleton, requests, blocks_rewritten, input_tokens_considered, tokens_reduced,
+        estimated_token_requests, estimated_savings_usd
+      ) VALUES (1, 0, 0, 0, 0, 0, 0);
     `);
     let schema = this.db.query<{ version: number }, []>(
       'SELECT version FROM schema_meta LIMIT 1',
@@ -277,14 +313,15 @@ export class DaemonMetricsStore {
     try {
       const timestampMs = Date.parse(event.timestamp);
       if (!Number.isFinite(timestampMs) || timestampMs < this.now() - METRICS_RETENTION_MS) return;
-      this.insert(event);
-      this.prune(this.now());
+      this.pendingEvents.push(event);
+      this.scheduleFlush();
     } catch {
       // Metrics must never alter inference behavior.
     }
   }
 
   readSince(sinceMs: number, accountId?: string): DaemonMetricEvent[] {
+    this.flush();
     const rows = accountId
       ? this.db.query<MetricRow, [number, string]>(`
           SELECT * FROM metric_events
@@ -314,6 +351,7 @@ export class DaemonMetricsStore {
     bucketMs: number,
     accountId?: string,
   ): DaemonMetricBucket[] {
+    this.flush();
     if (
       !Number.isFinite(startMs)
       || !Number.isFinite(endMs)
@@ -365,8 +403,124 @@ export class DaemonMetricsStore {
     return buckets;
   }
 
+  secondwindLifetime(): SecondwindLifetimeMetrics {
+    this.flush();
+    const row = this.db.query<{
+      requests: number;
+      blocks_rewritten: number;
+      input_tokens_considered: number;
+      tokens_reduced: number;
+      estimated_token_requests: number;
+      estimated_savings_usd: number;
+    }, []>(`
+      SELECT requests, blocks_rewritten, input_tokens_considered, tokens_reduced,
+        estimated_token_requests, estimated_savings_usd
+      FROM secondwind_lifetime
+      WHERE singleton = 1
+    `).get();
+    return {
+      requests: safeInteger(row?.requests),
+      blocksRewritten: safeInteger(row?.blocks_rewritten),
+      inputTokensConsidered: safeInteger(row?.input_tokens_considered),
+      tokensReduced: safeInteger(row?.tokens_reduced),
+      estimatedTokenRequests: safeInteger(row?.estimated_token_requests),
+      estimatedSavingsUsd: typeof row?.estimated_savings_usd === 'number'
+        && Number.isFinite(row.estimated_savings_usd)
+        ? Math.max(0, row.estimated_savings_usd)
+        : 0,
+    };
+  }
+
+  appendSecondwindSavings(event: SecondwindSavingsEvent): void {
+    try {
+      this.pendingSecondwind.push(event);
+      this.scheduleFlush();
+    } catch {
+      // Metrics must never alter inference behavior.
+    }
+  }
+
   close(): void {
+    if (this.flushTimer) clearTimeout(this.flushTimer);
+    this.flushTimer = undefined;
+    this.flush();
     this.db.close();
+  }
+
+  private scheduleFlush(): void {
+    if (this.pendingEvents.length + this.pendingSecondwind.length >= METRICS_FLUSH_BATCH_SIZE) {
+      this.flush();
+      return;
+    }
+    if (this.flushTimer) return;
+    this.flushTimer = setTimeout(() => {
+      this.flushTimer = undefined;
+      this.flush();
+    }, METRICS_FLUSH_INTERVAL_MS);
+    this.flushTimer.unref();
+  }
+
+  private flush(): void {
+    if (this.flushTimer) clearTimeout(this.flushTimer);
+    this.flushTimer = undefined;
+    if (this.pendingEvents.length === 0 && this.pendingSecondwind.length === 0) return;
+    const events = this.pendingEvents.splice(0);
+    const secondwind = this.pendingSecondwind.splice(0);
+    try {
+      const persist = this.db.transaction(() => {
+        for (const event of events) this.insert(event);
+        if (secondwind.length > 0) {
+          const total = secondwind.reduce<SecondwindSavingsEvent>(
+            (sum, event) => ({
+              requests: sum.requests + safeInteger(event.requests),
+              blocksRewritten: sum.blocksRewritten + safeInteger(event.blocksRewritten),
+              inputTokensConsidered:
+                sum.inputTokensConsidered + safeInteger(event.inputTokensConsidered),
+              tokensReduced: sum.tokensReduced + safeInteger(event.tokensReduced),
+              estimatedTokenRequests:
+                sum.estimatedTokenRequests + safeInteger(event.estimatedTokenRequests),
+              estimatedSavingsUsd: sum.estimatedSavingsUsd
+                + (Number.isFinite(event.estimatedSavingsUsd)
+                  ? Math.max(0, event.estimatedSavingsUsd)
+                  : 0),
+            }),
+            {
+              requests: 0,
+              blocksRewritten: 0,
+              inputTokensConsidered: 0,
+              tokensReduced: 0,
+              estimatedTokenRequests: 0,
+              estimatedSavingsUsd: 0,
+            },
+          );
+          this.updateSecondwindSavings(total);
+        }
+      });
+      persist.immediate();
+      this.prune(this.now());
+    } catch {
+      // Metrics must never alter inference behavior.
+    }
+  }
+
+  private updateSecondwindSavings(event: SecondwindSavingsEvent): void {
+    this.db.query(`
+      UPDATE secondwind_lifetime
+      SET requests = requests + ?,
+        blocks_rewritten = blocks_rewritten + ?,
+        input_tokens_considered = input_tokens_considered + ?,
+        tokens_reduced = tokens_reduced + ?,
+        estimated_token_requests = estimated_token_requests + ?,
+        estimated_savings_usd = estimated_savings_usd + ?
+      WHERE singleton = 1
+    `).run(
+      event.requests,
+      event.blocksRewritten,
+      event.inputTokensConsidered,
+      event.tokensReduced,
+      event.estimatedTokenRequests,
+      event.estimatedSavingsUsd,
+    );
   }
 
   private insert(event: DaemonMetricEvent): void {

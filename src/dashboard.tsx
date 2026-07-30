@@ -12,6 +12,7 @@ import {
 } from './daemon/api-pricing.js';
 import type {
   SecondwindModeMetrics,
+  SecondwindSessionSavings,
   SecondwindSnapshot,
 } from './daemon/secondwind.js';
 import type { SecondwindMode } from './types.js';
@@ -119,13 +120,34 @@ const CHART_HEIGHT = 6;
 export const VIEW_SWITCH_HINT = 'Press 1–5 to switch views';
 
 export function secondwindTokenSummary(
-  metrics: SecondwindModeMetrics | undefined,
+  metrics: Pick<SecondwindModeMetrics, 'tokensReduced' | 'estimatedTokenRequests'> | undefined,
 ): string {
   const tokens = compactNumber(metrics?.tokensReduced ?? 0);
   const estimatedRequests = metrics?.estimatedTokenRequests ?? 0;
   return estimatedRequests > 0
     ? `~${tokens} tool-output tokens compacted · ${estimatedRequests} fallback estimate${estimatedRequests === 1 ? '' : 's'}`
     : `${tokens} tool-output tokens compacted · measured by Secondwind`;
+}
+
+export function secondwindPercentSaved(
+  metrics: Pick<SecondwindModeMetrics, 'tokensReduced' | 'inputTokensConsidered'> | undefined,
+): string {
+  const input = metrics?.inputTokensConsidered ?? 0;
+  if (input <= 0) return '0%';
+  const percent = Math.min(100, Math.max(0, (metrics?.tokensReduced ?? 0) / input * 100));
+  return `${percent.toFixed(percent >= 10 ? 1 : 2).replace(/\.?0+$/, '')}%`;
+}
+
+export function secondwindSessionSummary(
+  session: SecondwindSessionSavings,
+  index: number,
+): string {
+  const estimate = session.estimatedTokenRequests > 0 ? '~' : '';
+  return `${index + 1}. session ${session.sessionHash.slice(0, 8)}`
+    + ` · ${estimate}${compactNumber(session.tokensReduced)} tokens`
+    + ` (${secondwindPercentSaved(session)} input)`
+    + ` · ${formatUsd(session.estimatedSavingsUsd)} estimated savings`
+    + ` · ${session.requests} req`;
 }
 
 export function accountDisplayName(account: Pick<Account, 'email'>): string {
@@ -910,6 +932,7 @@ function Dashboard(): React.ReactNode {
         </Text>
         <Text>
           {secondwindTokenSummary(metrics)}
+          {' · '}{secondwindPercentSaved(metrics)} of input
           {' · '}{savingsLabel} {formatUsd(metrics?.estimatedSavingsUsd ?? 0)}
         </Text>
         {(metrics?.unpricedRequests ?? 0) > 0 && (
@@ -928,7 +951,29 @@ function Dashboard(): React.ReactNode {
           <Text dimColor>
             off bypasses · shadow measures and sends original · on sends losslessly rewritten tool outputs
           </Text>
-          <Text dimColor>Mode is persisted across daemon restarts. Metrics are since this daemon started.</Text>
+          <Text dimColor>
+            Mode and lifetime applied savings persist; live metrics reset with the daemon.
+          </Text>
+        </Box>
+        <Box borderStyle="round" paddingX={1} flexDirection="column">
+          <Text bold>Lifetime applied savings</Text>
+          <Text>
+            {secondwindTokenSummary(secondwind?.lifetime)}
+            {' · '}{secondwindPercentSaved(secondwind?.lifetime)} of input
+            {' · '}estimated API-equivalent savings {formatUsd(secondwind?.lifetime?.estimatedSavingsUsd ?? 0)}
+          </Text>
+          <Text dimColor>
+            {secondwind?.lifetime?.requests ?? 0} requests
+            {' · '}{secondwind?.lifetime?.blocksRewritten ?? 0} blocks rewritten
+            {' · '}tracking begins with this dashboard version
+          </Text>
+          <Text bold>Top sessions this daemon run</Text>
+          {(secondwind?.topSessions?.length ?? 0) === 0
+            ? <Text dimColor>No applied session savings yet.</Text>
+            : secondwind!.topSessions!.map((session, index) => (
+                <Text key={session.sessionHash}>{secondwindSessionSummary(session, index)}</Text>
+              ))}
+          <Text dimColor>Parent sessions include subagent and workflow traffic.</Text>
         </Box>
         <Box borderStyle="round" paddingX={1} flexDirection="column">
           {metricLine('Applied', secondwind?.applied, 'estimated savings')}

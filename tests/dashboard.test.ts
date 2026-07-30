@@ -5,6 +5,8 @@ import {
   deviceCodeInstruction,
   formatUsd,
   lineChart,
+  secondwindPercentSaved,
+  secondwindSessionSummary,
   secondwindTokenSummary,
   usageRange,
   VIEW_SWITCH_HINT,
@@ -73,6 +75,7 @@ describe('dashboard controls', () => {
       pricedRequests: 1,
       unpricedRequests: 0,
       blocksRewritten: 1,
+      inputTokensConsidered: 1_503,
       tokensReduced: 732,
       estimatedTokenRequests: 0,
       estimatedSavingsUsd: 0.001,
@@ -85,9 +88,37 @@ describe('dashboard controls', () => {
       pricedRequests: 2,
       unpricedRequests: 0,
       blocksRewritten: 1,
+      inputTokensConsidered: 4_000,
       tokensReduced: 1_200,
       estimatedTokenRequests: 1,
       estimatedSavingsUsd: 0.002,
     })).toBe('~1.2K tool-output tokens compacted · 1 fallback estimate');
+  });
+
+  it('reports measured input-token reduction as a percentage', () => {
+    expect(secondwindPercentSaved({
+      inputTokensConsidered: 4_000,
+      tokensReduced: 1_000,
+    })).toBe('25%');
+    expect(secondwindPercentSaved({
+      inputTokensConsidered: 0,
+      tokensReduced: 0,
+    })).toBe('0%');
+  });
+
+  it('formats ranked current-daemon session savings', () => {
+    expect(secondwindSessionSummary({
+      sessionHash: '1234567890abcdef',
+      requests: 4,
+      pricedRequests: 4,
+      unpricedRequests: 0,
+      blocksRewritten: 8,
+      inputTokensConsidered: 50_000,
+      tokensReduced: 12_345,
+      estimatedTokenRequests: 0,
+      estimatedSavingsUsd: 0.042,
+    }, 0)).toBe(
+      '1. session 12345678 · 12.3K tokens (24.7% input) · $0.042 estimated savings · 4 req',
+    );
   });
 });

@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from 'bun:test';
+import { estimateApiCost } from '../src/daemon/api-pricing.js';
+import { hashSessionId } from '../src/daemon/metrics.js';
 import { SecondwindService } from '../src/daemon/secondwind.js';
 
 function toolRequest(content: string): Record<string, unknown> {
@@ -240,6 +242,185 @@ describe('Secondwind daemon service', () => {
       unpricedRequests: 1,
       estimatedSavingsUsd: 0,
     });
+  });
+
+  it('prices savings from observed cache reads and cache writes', async () => {
+    const service = new SecondwindService({
+      initialMode: 'on',
+      createSession: async () => ({
+        rewrite: () => ({
+          request: toolRequest('short'),
+          stats: {
+            blocks_rewritten: 1,
+            input_tokens: 2_000,
+            output_tokens: 1_000,
+            tokens_saved: 1_000,
+          },
+        }),
+        close: () => {},
+      }),
+    });
+    const request = toolRequest('long output');
+    await service.rewrite({
+      requestId: 'cache-aware',
+      body: Buffer.from(JSON.stringify(request)),
+      request,
+      sessionId: 'optimizer:agent',
+      reportingSessionId: 'parent-session',
+      modelId: 'gpt-5.6-sol',
+    });
+    expect(service.snapshot().applied.estimatedSavingsUsd).toBe(0);
+
+    service.handleTrace({
+      kind: 'lifecycle',
+      entry: {
+        event: 'response_usage',
+        requestId: 'cache-aware',
+        modelId: 'gpt-5.6-sol',
+        provider: 'openai-oauth',
+        route: 'translated',
+        inputTokens: 100,
+        cacheReadInputTokens: 800,
+        cacheCreationInputTokens: 100,
+        outputTokens: 20,
+      },
+    });
+    service.handleTrace({
+      kind: 'lifecycle',
+      entry: {
+        event: 'response_completed',
+        requestId: 'cache-aware',
+        modelId: 'gpt-5.6-sol',
+        provider: 'openai-oauth',
+        route: 'translated',
+      },
+    });
+
+    expect(service.snapshot().applied.estimatedSavingsUsd).toBeCloseTo(0.001525);
+    expect(service.snapshot().lifetime.estimatedSavingsUsd).toBeCloseTo(0.001525);
+    expect(service.snapshot().topSessions).toEqual([
+      expect.objectContaining({
+        sessionHash: hashSessionId('parent-session'),
+        tokensReduced: 1_000,
+        estimatedSavingsUsd: expect.closeTo(0.001525),
+      }),
+    ]);
+  });
+
+  it('groups agents under parent sessions and returns only the top three', async () => {
+    const saved = [100, 400, 300, 200, 50];
+    let index = 0;
+    const service = new SecondwindService({
+      initialMode: 'on',
+      createSession: async () => ({
+        rewrite: () => {
+          const tokensSaved = saved[index++]!;
+          return {
+            request: toolRequest('short'),
+            stats: {
+              blocks_rewritten: 1,
+              input_tokens: 1_000 + tokensSaved,
+              output_tokens: 1_000,
+              tokens_saved: tokensSaved,
+            },
+          };
+        },
+        close: () => {},
+      }),
+    });
+    const parentIds = ['parent-a', 'parent-a', 'parent-b', 'parent-c', 'parent-d'];
+    for (const [requestIndex, reportingSessionId] of parentIds.entries()) {
+      const request = toolRequest(`request-${requestIndex}`);
+      await service.rewrite({
+        body: Buffer.from(JSON.stringify(request)),
+        request,
+        sessionId: `${reportingSessionId}:agent-${requestIndex}`,
+        reportingSessionId,
+        modelId: 'gpt-5.6-sol',
+      });
+    }
+
+    expect(service.snapshot().topSessions.map(session => ({
+      sessionHash: session.sessionHash,
+      tokensReduced: session.tokensReduced,
+    }))).toEqual([
+      { sessionHash: hashSessionId('parent-a'), tokensReduced: 500 },
+      { sessionHash: hashSessionId('parent-b'), tokensReduced: 300 },
+      { sessionHash: hashSessionId('parent-c'), tokensReduced: 200 },
+    ]);
+    expect(service.snapshot().lifetime).toMatchObject({
+      requests: 5,
+      blocksRewritten: 5,
+      tokensReduced: 1_050,
+    });
+  });
+
+  it('does not claim savings when a fast-mode tier change offsets reduction', async () => {
+    const service = new SecondwindService({
+      initialMode: 'on',
+      createSession: async () => ({
+        rewrite: () => ({
+          request: toolRequest('short'),
+          stats: {
+            blocks_rewritten: 1,
+            input_tokens: 275_000,
+            output_tokens: 265_000,
+            tokens_saved: 10_000,
+          },
+        }),
+        close: () => {},
+      }),
+    });
+    const request = toolRequest('long output');
+    await service.rewrite({
+      requestId: 'long-context',
+      body: Buffer.from(JSON.stringify(request)),
+      request,
+      sessionId: 'long-context',
+      modelId: 'gpt-5.6-sol',
+      processingMode: 'fast',
+    });
+    service.handleTrace({
+      kind: 'lifecycle',
+      entry: {
+        event: 'response_usage',
+        requestId: 'long-context',
+        modelId: 'gpt-5.6-sol',
+        provider: 'openai-oauth',
+        route: 'translated',
+        inputTokens: 265_000,
+        outputTokens: 10_000,
+      },
+    });
+    service.handleTrace({
+      kind: 'lifecycle',
+      entry: {
+        event: 'response_completed',
+        requestId: 'long-context',
+        modelId: 'gpt-5.6-sol',
+        provider: 'openai-oauth',
+        route: 'translated',
+      },
+    });
+
+    const original = estimateApiCost({
+      modelId: 'gpt-5.6-sol',
+      processingMode: 'fast',
+      inputTokens: 275_000,
+      cachedInputTokens: 0,
+      cacheWriteTokens: 0,
+      outputTokens: 10_000,
+    })!;
+    const optimized = estimateApiCost({
+      modelId: 'gpt-5.6-sol',
+      processingMode: 'fast',
+      inputTokens: 265_000,
+      cachedInputTokens: 0,
+      cacheWriteTokens: 0,
+      outputTokens: 10_000,
+    })!;
+    expect(original.total).toBeLessThan(optimized.total);
+    expect(service.snapshot().applied.estimatedSavingsUsd).toBe(0);
   });
 
   it('shares one optimizer session across concurrent requests for a conversation', async () => {
