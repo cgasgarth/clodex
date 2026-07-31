@@ -69,7 +69,7 @@ describe('dashboard device-code login', () => {
 
 describe('dashboard controls', () => {
   it('explicitly tells users to press the numbered view keys', () => {
-    expect(VIEW_SWITCH_HINT).toBe('Press 1–5 to switch views');
+    expect(VIEW_SWITCH_HINT).toBe('Press 1–6 to switch views');
   });
 
   it('labels native Secondwind token accounting as measured', () => {
@@ -167,6 +167,7 @@ describe('dashboard refresh resilience', () => {
       '/v1/accounts': new Error('accounts timed out'),
       '/v1/diagnostics?limit=20': { diagnostics: [] },
       '/v1/secondwind': {},
+      '/v1/claude/models': { models: [] },
     }));
 
     expect(snapshot.reachable).toBe(true);
@@ -182,6 +183,7 @@ describe('dashboard refresh resilience', () => {
       '/v1/accounts': new Error('accounts timed out'),
       '/v1/diagnostics?limit=20': new Error('diagnostics timed out'),
       '/v1/secondwind': new Error('Secondwind timed out'),
+      '/v1/claude/models': new Error('models timed out'),
     }));
 
     expect(snapshot.reachable).toBe(true);
@@ -196,6 +198,7 @@ describe('dashboard refresh resilience', () => {
       '/v1/accounts': { accounts: [] },
       '/v1/diagnostics?limit=20': new Error('diagnostics timed out'),
       '/v1/secondwind': new Error('Secondwind timed out'),
+      '/v1/claude/models': new Error('models timed out'),
     }, calls));
 
     expect(snapshot.reachable).toBe(true);
@@ -209,6 +212,7 @@ describe('dashboard refresh resilience', () => {
       '/v1/accounts': new Error('accounts timed out'),
       '/v1/diagnostics?limit=20': new Error('diagnostics timed out'),
       '/v1/secondwind': new Error('Secondwind timed out'),
+      '/v1/claude/models': new Error('models timed out'),
     }));
 
     expect(snapshot.reachable).toBe(false);
@@ -222,9 +226,10 @@ describe('dashboard refresh resilience', () => {
       '/v1/accounts': { accounts: [] },
       '/v1/diagnostics?limit=20': { diagnostics: [] },
       '/v1/secondwind': {},
+      '/v1/claude/models': { models: [] },
     }, calls));
 
-    expect(calls).toHaveLength(4);
+    expect(calls).toHaveLength(5);
     expect(calls.every(call =>
       call.timeoutMs === DASHBOARD_CONTROL_REQUEST_TIMEOUT_MS)).toBe(true);
   });

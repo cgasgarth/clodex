@@ -20,6 +20,7 @@ import {
   describeModelAliasRejection,
   normalizeModelAliases,
 } from '../model-aliases.js';
+import type { ProxyModelAlias } from '../proxy.js';
 
 export interface LoadedHttpProxyRoutes extends HttpProxyRouteResult {
   favoriteCount: number;
@@ -51,6 +52,31 @@ export async function loadHttpProxyRoutes(): Promise<LoadedHttpProxyRoutes> {
     ...buildHttpProxyRoutes(catalog, favorites, prefs.modelAliases),
     favoriteCount: favorites.length,
   };
+}
+
+/** Include inactive saved aliases so they fail closed instead of selecting the default route. */
+export function liveProxyModelAliases(
+  loaded: LoadedHttpProxyRoutes,
+): ProxyModelAlias[] {
+  const inactive = normalizeModelAliases(loaded.unavailableAliases);
+  return [
+    ...loaded.aliases,
+    ...inactive.accepted.map(({ alias, source, sources }) => ({
+      name: alias.name,
+      ...(source.name === alias.name ? {} : { savedName: source.name }),
+      ...(sources.length === 1 && sources[0]!.name === alias.name
+        ? {}
+        : { sourceNames: [...new Set(sources.map(entry => entry.name))] }),
+      unavailableReason: 'target unavailable',
+    })),
+    ...inactive.rejections.map(rejection => ({
+      name: canonicalModelAliasName(rejection.alias.name),
+      ...(rejection.alias.name === canonicalModelAliasName(rejection.alias.name)
+        ? {}
+        : { savedName: rejection.alias.name }),
+      unavailableReason: describeModelAliasRejection(rejection.reason),
+    })),
+  ];
 }
 
 export function formatHttpProxyModelLines(

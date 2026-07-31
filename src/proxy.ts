@@ -256,6 +256,12 @@ function anthropicError(res: ServerResponse, status: number, message: string, re
 export interface ProxyHandle {
   port: number;
   token: string;
+  /** Atomically replace the live model catalog without interrupting in-flight requests. */
+  replaceCatalog: (
+    routes: ProxyRoute[],
+    defaultAliasId: string,
+    modelAliases?: ProxyModelAlias[],
+  ) => void;
   close: () => void;
 }
 
@@ -356,6 +362,55 @@ function configuredAliasLookupNames(alias: ProxyModelAlias): string[] {
   }))].map(normalizeRouteLookupId);
 }
 
+interface ProxyCatalogState {
+  byAlias: Map<string, ProxyRoute>;
+  configuredAliasNames: Set<string>;
+  unavailableAliasReasons: Map<string, string>;
+  defaultRoute: ProxyRoute;
+  modelsPayload: string;
+}
+
+function createProxyCatalogState(
+  routes: ProxyRoute[],
+  defaultAliasId: string,
+  modelAliases: ProxyModelAlias[] = [],
+): ProxyCatalogState {
+  if (routes.length === 0) {
+    throw new Error('Proxy catalog requires at least one route');
+  }
+  const byAlias = new Map(routes.map(route => [normalizeRouteLookupId(route.aliasId), route]));
+  const configuredAliasNames = new Set(modelAliases.flatMap(configuredAliasLookupNames));
+  const unavailableAliasReasons = new Map(
+    modelAliases
+      .filter(alias => alias.unavailableReason !== undefined)
+      .flatMap(alias => configuredAliasLookupNames(alias).map(name => (
+        [name, alias.unavailableReason!] as const
+      ))),
+  );
+  for (const alias of modelAliases) {
+    if (alias.routeId === undefined || alias.unavailableReason !== undefined) continue;
+    const route = lookupRoute(byAlias, alias.routeId);
+    const aliasId = normalizeRouteLookupId(alias.name);
+    if (route && !byAlias.has(aliasId)) byAlias.set(aliasId, route);
+  }
+  const defaultRoute = lookupRoute(byAlias, defaultAliasId) ?? routes[0]!;
+  return {
+    byAlias,
+    configuredAliasNames,
+    unavailableAliasReasons,
+    defaultRoute,
+    modelsPayload: JSON.stringify(
+      formatAnthropicModelList(
+        routes.map(route => ({
+          id: route.aliasId,
+          name: route.displayName,
+          contextWindow: route.contextWindow,
+        })),
+      ),
+    ),
+  };
+}
+
 /** Multi-model proxy: routes each request by body.model to the correct upstream. */
 export async function startProxyCatalog(
   routes: ProxyRoute[],
@@ -372,28 +427,7 @@ export async function startProxyCatalog(
   const proxyToken = getOrCreateProxyToken();
   silenceSdkWarnings();
 
-  if (routes.length === 0) {
-    throw new Error('Proxy catalog requires at least one route');
-  }
-
-  const byAlias = new Map(routes.map(r => [normalizeRouteLookupId(r.aliasId), r]));
-  const configuredAliasNames = new Set(
-    (modelAliases ?? []).flatMap(configuredAliasLookupNames),
-  );
-  const unavailableAliasReasons = new Map(
-    (modelAliases ?? [])
-      .filter(alias => alias.unavailableReason !== undefined)
-      .flatMap(alias => configuredAliasLookupNames(alias).map(name => (
-        [name, alias.unavailableReason!] as const
-      ))),
-  );
-  for (const alias of modelAliases ?? []) {
-    if (alias.routeId === undefined || alias.unavailableReason !== undefined) continue;
-    const route = lookupRoute(byAlias, alias.routeId);
-    const aliasId = normalizeRouteLookupId(alias.name);
-    if (route && !byAlias.has(aliasId)) byAlias.set(aliasId, route);
-  }
-  const defaultRoute = lookupRoute(byAlias, defaultAliasId) ?? routes[0]!;
+  let catalog = createProxyCatalogState(routes, defaultAliasId, modelAliases);
 
   const plog = makeProxyLog(debug, debugLogPath);
 
@@ -405,12 +439,6 @@ export async function startProxyCatalog(
   };
   process.on('unhandledRejection', onRejection);
   process.on('uncaughtException', onException);
-
-  const modelsPayload = JSON.stringify(
-    formatAnthropicModelList(
-      routes.map(r => ({ id: r.aliasId, name: r.displayName, contextWindow: r.contextWindow })),
-    ),
-  );
 
   let server: Bun.Server<undefined>;
   try {
@@ -435,10 +463,11 @@ export async function startProxyCatalog(
 
     // GET /v1/models — Claude Code validates the model on startup and populates /model picker
     if (req.method === 'GET' && requestPath.startsWith('/v1/models')) {
+      const requestCatalog = catalog;
       const modelPathMatch = requestPath.match(/^\/v1\/models\/([^?]+)/);
       if (modelPathMatch) {
         const id = decodeURIComponent(modelPathMatch[1]);
-        const route = lookupRoute(byAlias, id);
+        const route = lookupRoute(requestCatalog.byAlias, id);
         if (route) {
           res.writeHead(200, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify(formatAnthropicModelEntry(route.aliasId, route.displayName, route.contextWindow)));
@@ -448,7 +477,7 @@ export async function startProxyCatalog(
         }
       } else {
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(modelsPayload);
+        res.end(requestCatalog.modelsPayload);
       }
       return;
     }
@@ -491,18 +520,19 @@ export async function startProxyCatalog(
       }
 
       const originalModel = anthropicBody.model;
+      const requestCatalog = catalog;
       const clientWantsStream = Boolean(anthropicBody.stream);
       const forwardedRequestId = req.headers.get('x-relay-request-id') ?? undefined;
       const relayRequestId = forwardedRequestId ?? randomUUID();
 
       // Per-request route resolution: look up the alias, fall back to default
       const resolvedRoute = typeof originalModel === 'string'
-        ? lookupRoute(byAlias, originalModel)
+        ? lookupRoute(requestCatalog.byAlias, originalModel)
         : undefined;
       const configuredModelUnavailable = typeof originalModel === 'string'
         && (
           normalizeRouteLookupId(originalModel).startsWith('clodex:')
-          || configuredAliasNames.has(normalizeRouteLookupId(originalModel))
+          || requestCatalog.configuredAliasNames.has(normalizeRouteLookupId(originalModel))
         );
       if (!resolvedRoute && configuredModelUnavailable) {
         anthropicError(
@@ -510,12 +540,12 @@ export async function startProxyCatalog(
           400,
           routeUnavailableMessage(
             originalModel,
-            unavailableAliasReasons.get(normalizeRouteLookupId(originalModel)),
+            requestCatalog.unavailableAliasReasons.get(normalizeRouteLookupId(originalModel)),
           ),
         );
         return;
       }
-      let route = resolvedRoute ?? defaultRoute;
+      let route = resolvedRoute ?? requestCatalog.defaultRoute;
       if (resolveRouteForRequest) {
         const launchTicketFromHeader = req.headers.get('x-clodex-launch-ticket') ?? undefined;
         try {
@@ -982,11 +1012,21 @@ export async function startProxyCatalog(
     throw new Error('Proxy did not bind to a TCP port');
   }
   plog(() =>
-    `started on port ${boundPort}, catalog=${routes.length} model(s), default=${defaultRoute.aliasId}`,
+    `started on port ${boundPort}, catalog=${routes.length} model(s), default=${catalog.defaultRoute.aliasId}`,
   );
   return {
     port: boundPort,
     token: proxyToken,
+    replaceCatalog: (nextRoutes, nextDefaultAliasId, nextModelAliases) => {
+      catalog = createProxyCatalogState(
+        nextRoutes,
+        nextDefaultAliasId,
+        nextModelAliases,
+      );
+      plog(() =>
+        `catalog replaced: ${nextRoutes.length} model(s), default=${catalog.defaultRoute.aliasId}`,
+      );
+    },
     close: () => {
       process.off('unhandledRejection', onRejection);
       process.off('uncaughtException', onException);

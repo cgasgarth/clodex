@@ -54,6 +54,9 @@ describe('daemon control API', () => {
       new DaemonMetricsStore(join(root, 'metrics.jsonl')),
     );
     const select = vi.fn();
+    const setModelEnabled = vi.fn(async (modelId: string, enabled: boolean) => ({
+      models: [{ providerId: 'openai-oauth', modelId, name: modelId, enabled }],
+    }));
     const requestStop = vi.fn();
     let secondwindMode: 'off' | 'shadow' | 'on' = 'off';
     const secondwindSnapshot = () => ({
@@ -121,6 +124,17 @@ describe('daemon control API', () => {
           secondwindMode = mode;
         },
       },
+      models: {
+        snapshot: () => ({
+          models: [{
+            providerId: 'openai-oauth',
+            modelId: 'gpt-5.6-sol',
+            name: 'GPT-5.6 Sol',
+            enabled: true,
+          }],
+        }),
+        setEnabled: setModelEnabled,
+      },
       requestRestart: vi.fn(),
       requestStop,
     });
@@ -181,6 +195,23 @@ describe('daemon control API', () => {
         method: 'POST',
         body: { mode: 'invalid' },
       })).rejects.toThrow('Secondwind mode must be off, shadow, or on');
+      expect(await daemonControlRequest('/v1/claude/models', { socketPath }))
+        .toMatchObject({
+          models: [expect.objectContaining({ modelId: 'gpt-5.6-sol', enabled: true })],
+        });
+      expect(await daemonControlRequest('/v1/claude/models', {
+        socketPath,
+        method: 'POST',
+        body: { modelId: 'gpt-5.6-luna', enabled: true },
+      })).toMatchObject({
+        models: [expect.objectContaining({ modelId: 'gpt-5.6-luna', enabled: true })],
+      });
+      expect(setModelEnabled).toHaveBeenCalledWith('gpt-5.6-luna', true);
+      await expect(daemonControlRequest('/v1/claude/models', {
+        socketPath,
+        method: 'POST',
+        body: { modelId: '', enabled: true },
+      })).rejects.toThrow('Claude modelId must be a non-empty string');
       await expect(daemonControlRequest(
         `/v1/metrics?start=${encodeURIComponent(new Date(now - 3_600_000).toISOString())}`
         + `&end=${encodeURIComponent(new Date(now).toISOString())}`
