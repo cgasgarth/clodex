@@ -85,6 +85,9 @@
     "url": "https://github.com/cgasgarth/clodex/issues"
   },
   "knip": {
+    "ignoreUnresolved": [
+      "/bin/launchctl"
+    ],
     "entry": [
       "scripts/*.ts",
       "tests/**/*.test.ts",
