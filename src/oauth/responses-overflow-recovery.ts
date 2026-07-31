@@ -23,7 +23,7 @@ const TOOL_OUTPUT_KINDS = new Set([
   'local_shell_call_output',
 ]);
 
-export type OverflowRecoverySourceKind = 'live_head' | 'checkpoint' | 'inferred';
+type OverflowRecoverySourceKind = 'live_head' | 'checkpoint' | 'inferred';
 
 export interface OverflowRecoverySource {
   kind: Exclude<OverflowRecoverySourceKind, 'inferred'>;
@@ -66,7 +66,7 @@ function record(value: unknown): JsonObject | undefined {
     : undefined;
 }
 
-export function responsesItemKind(value: unknown): string {
+function responsesItemKind(value: unknown): string {
   const item = record(value);
   if (!item) return typeof value;
   if (typeof item.type === 'string') return item.type;
@@ -97,14 +97,15 @@ function itemFingerprint(items: unknown[]): string {
 
 function approximateItemTokens(value: unknown): number {
   let imageCount = 0;
-  const serialized = JSON.stringify(value, (_key, nested: unknown) => {
+  const rawSerialized: unknown = JSON.stringify(value, (_key, nested: unknown) => {
     const item = record(nested);
     if (item?.type === 'input_image' || item?.type === 'input_audio') {
       imageCount += 1;
       return { type: item.type };
     }
     return nested;
-  }) ?? '';
+  });
+  const serialized = typeof rawSerialized === 'string' ? rawSerialized : '';
   return Math.max(1, Math.ceil(Buffer.byteLength(serialized, 'utf8') / 4))
     + imageCount * IMAGE_INPUT_TOKEN_ESTIMATE;
 }

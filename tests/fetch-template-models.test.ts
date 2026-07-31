@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { fetchTemplateModels } from '../src/registry/fetch-template-models.js';
 import type { ProviderTemplate } from '../src/provider-templates.js';
 import { clearTraceSecrets, getProviderDebugLogPath } from '../src/trace-log.js';
+import { asMocked, restoreTestGlobals, stubTestGlobal } from './test-helpers.js';
 
 function template(partial: Partial<ProviderTemplate> & Pick<ProviderTemplate, 'id' | 'name' | 'npm'>): ProviderTemplate {
   return {
@@ -31,16 +32,16 @@ const openaiCompatTemplate = template({
 
 describe('fetchTemplateModels', () => {
   beforeEach(() => {
-    vi.stubGlobal('fetch', vi.fn());
+    stubTestGlobal('fetch', vi.fn());
   });
 
   afterEach(() => {
     clearTraceSecrets();
-    vi.unstubAllGlobals();
+    restoreTestGlobals();
   });
 
   it('uses x-api-key for Anthropic, not Bearer auth', async () => {
-    vi.mocked(fetch).mockResolvedValue({
+    asMocked(fetch).mockResolvedValue({
       ok: true,
       status: 200,
       text: async () => JSON.stringify({
@@ -61,12 +62,12 @@ describe('fetchTemplateModels', () => {
         }),
       }),
     );
-    const call = vi.mocked(fetch).mock.calls[0]![1] as RequestInit;
+    const call = asMocked(fetch).mock.calls[0]![1] as RequestInit;
     expect((call.headers as Record<string, string>)['Authorization']).toBeUndefined();
   });
 
   it('uses Bearer auth for OpenAI-compatible providers', async () => {
-    vi.mocked(fetch).mockResolvedValue({
+    asMocked(fetch).mockResolvedValue({
       ok: true,
       status: 200,
       text: async () => JSON.stringify({ data: [{ id: 'model-a', name: 'model-a' }] }),
@@ -89,7 +90,7 @@ describe('fetchTemplateModels', () => {
     const previousHome = process.env.CLODEX_HOME;
     const previousTrace = process.env.CLODEX_TRACE;
     const secret = 'opaque.credential+$value[42]';
-    vi.mocked(fetch).mockResolvedValue({
+    asMocked(fetch).mockResolvedValue({
       ok: false,
       status: 500,
       text: async () => JSON.stringify({ echo: secret }),
@@ -113,7 +114,7 @@ describe('fetchTemplateModels', () => {
   });
 
   it('merges extra headers for custom endpoints needing plan/auth-tracking headers', async () => {
-    vi.mocked(fetch).mockResolvedValue({
+    asMocked(fetch).mockResolvedValue({
       ok: true,
       status: 200,
       text: async () => JSON.stringify({ data: [{ id: 'model-a', name: 'model-a' }] }),
@@ -133,7 +134,7 @@ describe('fetchTemplateModels', () => {
   });
 
   it('preserves provider-supported request parameters from model list rows', async () => {
-    vi.mocked(fetch).mockResolvedValue({
+    asMocked(fetch).mockResolvedValue({
       ok: true,
       status: 200,
       text: async () => JSON.stringify({
@@ -164,7 +165,7 @@ describe('fetchTemplateModels', () => {
       apiKeyOptional: true,
       anonymousFreeModels: true,
     });
-    vi.mocked(fetch).mockResolvedValue({
+    asMocked(fetch).mockResolvedValue({
       ok: true,
       status: 200,
       text: async () => JSON.stringify({
@@ -199,7 +200,7 @@ describe('fetchTemplateModels', () => {
   });
 
   it('derives verified free status from zero pricing even when provider flag is false', async () => {
-    vi.mocked(fetch).mockResolvedValue({
+    asMocked(fetch).mockResolvedValue({
       ok: true,
       status: 200,
       text: async () => JSON.stringify({

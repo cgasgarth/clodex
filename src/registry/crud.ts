@@ -47,6 +47,7 @@ async function removeProviderWithinLifecycle(
     }
 
     const [removedProvider] = registry.providers.splice(index, 1);
+    if (!removedProvider) throw new Error(`Provider disappeared during removal: ${id}`);
     const cleanupQueued = opts?.deleteCredential !== false
       ? await queueCredentialDelete(removedProvider.authRef)
       : false;

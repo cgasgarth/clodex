@@ -8,8 +8,8 @@
 import type { ServerRuntimeState } from './server-runtime.js';
 
 const PROXY_ENV_VARS = ['HTTPS_PROXY', 'HTTP_PROXY', 'https_proxy', 'http_proxy'] as const;
-export const REQUIRE_SERVER_ENV = 'CLODEX_REQUIRE_SERVER';
-export const LAUNCH_TICKET_ENV = 'CLODEX_LAUNCH_TICKET';
+const REQUIRE_SERVER_ENV = 'CLODEX_REQUIRE_SERVER';
+const LAUNCH_TICKET_ENV = 'CLODEX_LAUNCH_TICKET';
 export const LAUNCH_TICKET_HEADER = 'x-clodex-launch-ticket';
 export const CLAUDE_STREAM_IDLE_TIMEOUT_MS = 15 * 60_000;
 

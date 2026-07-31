@@ -8,7 +8,7 @@ function isZeroOrMissing(value: number | undefined): boolean {
   return value === undefined || value === 0;
 }
 
-export function isZeroCost(cost: ModelCost | undefined): boolean {
+function isZeroCost(cost: ModelCost | undefined): boolean {
   if (!cost) return false;
   return cost.input === 0
     && cost.output === 0
@@ -16,7 +16,7 @@ export function isZeroCost(cost: ModelCost | undefined): boolean {
     && isZeroOrMissing(cost.cache_write);
 }
 
-export function isPaidCost(cost: ModelCost | undefined): boolean {
+function isPaidCost(cost: ModelCost | undefined): boolean {
   if (!cost) return false;
   return cost.input > 0
     || cost.output > 0
@@ -24,7 +24,7 @@ export function isPaidCost(cost: ModelCost | undefined): boolean {
     || (cost.cache_write ?? 0) > 0;
 }
 
-export function isFreeProviderAccess(providerId?: string, templateId?: string): boolean {
+function isFreeProviderAccess(providerId?: string, templateId?: string): boolean {
   return FREE_PROVIDER_IDS.has((providerId ?? '').toLowerCase())
     || FREE_PROVIDER_IDS.has((templateId ?? '').toLowerCase());
 }
@@ -44,11 +44,4 @@ export function classifyFreeStatus(opts: {
 
 export function isFreeStatus(status: FreeStatus | undefined): boolean {
   return status === 'verified_free' || status === 'free_provider';
-}
-
-export function freeStatusLabel(status: FreeStatus | undefined): string {
-  if (status === 'verified_free') return 'Free';
-  if (status === 'free_provider') return 'Free dev access';
-  if (status === 'paid') return 'Paid';
-  return 'Unknown price';
 }

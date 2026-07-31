@@ -35,7 +35,7 @@ export interface StoredModelAlias {
   modelId?: unknown;
 }
 
-export interface NormalizedModelAliasSource {
+interface NormalizedModelAliasSource {
   alias: ModelAlias;
   /** First saved record retained for compatibility with single-source consumers. */
   source: StoredModelAlias;
@@ -58,7 +58,7 @@ export function isReservedModelAlias(name: string): boolean {
   );
 }
 
-export function isModelAliasNameSyntax(name: string): boolean {
+function isModelAliasNameSyntax(name: string): boolean {
   return MODEL_ALIAS_PATTERN.test(canonicalModelAliasName(name));
 }
 

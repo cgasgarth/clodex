@@ -2,9 +2,7 @@
 
 import type { FreeStatus } from './free-models.js';
 
-export type ModelFormat = 'anthropic' | 'openai' | 'unsupported';
-
-export type StarterCommand =
+type StarterCommand =
   | 'root'
   | 'start'
   | 'stop'

@@ -7,6 +7,7 @@ import {
   listVisibleOAuthTemplates,
 } from '../src/provider-templates.js';
 import { fetchTemplateModels } from '../src/registry/fetch-template-models.js';
+import { stubTestGlobal } from './test-helpers.js';
 
 describe('provider templates', () => {
   it('offers exactly the OpenAI API-key template as addable', () => {
@@ -42,7 +43,7 @@ describe('fetchTemplateModels', () => {
   });
 
   it('parses OpenAI-style model list', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+    stubTestGlobal('fetch', vi.fn().mockResolvedValue({
       ok: true,
       status: 200,
       text: async () => JSON.stringify({
@@ -59,7 +60,7 @@ describe('fetchTemplateModels', () => {
   });
 
   it('returns helpful error on 401', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+    stubTestGlobal('fetch', vi.fn().mockResolvedValue({
       ok: false,
       status: 401,
       text: async () => 'invalid key',

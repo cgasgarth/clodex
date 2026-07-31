@@ -2,7 +2,6 @@
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import pkg from '../package.json' with { type: 'json' };
-import type { ModelFormat } from './types.js';
 
 // ChatGPT Codex WebSocket Responses transport. Models flagged prefer_websockets
 // require it; clodex also uses it for other OAuth Responses models so
@@ -37,8 +36,6 @@ export const CONFLICTING_ENV_VARS = [
   'ANTHROPIC_DEFAULT_HAIKU_MODEL',
 ] as const;
 
-export type ConflictingEnvVar = (typeof CONFLICTING_ENV_VARS)[number];
-
 // Optional enrichment from OpenCode CLI (~/.cache/opencode/models.json) — not a runtime dependency.
 export const OPENCODE_CACHE_PATH = join(homedir(), '.cache', 'opencode', 'models.json');
 
@@ -50,24 +47,5 @@ export const DEFAULT_SERVER_PORT = 17645;
 
 /** Vercel AI SDK package for Anthropic Claude models on Google Vertex AI (ADC auth). */
 export const VERTEX_ANTHROPIC_NPM = '@ai-sdk/google-vertex/anthropic';
-
-// Classify a model's API format based on cache provider data or ID heuristics.
-// Used to decide whether to route directly or through the translation proxy.
-export function classifyModelFormat(
-  modelId: string,
-  providerNpm: string | undefined,
-): ModelFormat {
-  if (providerNpm === '@ai-sdk/anthropic') return 'anthropic';
-  if (providerNpm === '@ai-sdk/openai') return 'unsupported';
-  if (providerNpm === '@ai-sdk/google') return 'unsupported';
-
-  // Fallback: ID-prefix heuristics for models not in cache
-  const lower = modelId.toLowerCase();
-  if (lower.startsWith('claude-')) return 'anthropic';
-  if (lower.startsWith('gpt-')) return 'unsupported';
-  if (lower.startsWith('gemini-')) return 'unsupported';
-
-  return 'openai';
-}
 
 export const VERSION = pkg.version;

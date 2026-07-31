@@ -123,8 +123,7 @@ export async function pickGlobalFavoriteModel(
         ],
       });
       if (p.isCancel(fallback) || fallback === 'back') return null;
-      if (fallback === ADD_BY_PROVIDER) return ADD_BY_PROVIDER;
-      continue;
+      return ADD_BY_PROVIDER;
     }
 
     const matched = filterGlobalFavoriteIndex(index, String(searchInput), { freeOnly });

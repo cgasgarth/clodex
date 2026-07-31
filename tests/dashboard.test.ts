@@ -12,7 +12,7 @@ import {
   usageRange,
   VIEW_SWITCH_HINT,
   type DashboardRequest,
-} from '../src/dashboard.js';
+} from '../src/dashboard-data.js';
 import { DASHBOARD_CONTROL_REQUEST_TIMEOUT_MS } from '../src/timeouts.js';
 
 describe('dashboard usage chart', () => {

@@ -214,7 +214,7 @@ async function main(): Promise<void> {
   });
   child.on('exit', (code, signal) => {
     if (signal) {
-      const signum = osConstants.signals[signal as keyof typeof osConstants.signals];
+      const signum = osConstants.signals[signal];
       process.exit(signum ? 128 + signum : 1);
     }
     process.exit(code ?? 0);

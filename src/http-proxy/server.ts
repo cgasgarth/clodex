@@ -760,6 +760,7 @@ async function forwardToAdapterWithFetch(
   let chunks = 0;
   let failed = false;
   let clientDisconnected = false;
+  const isClientDisconnected = () => clientDisconnected;
   const abort = new AbortController();
   const writeLifecycle = (
     event: Parameters<typeof writeInferenceResponseLifecycleLog>[1]['event'],
@@ -850,7 +851,7 @@ async function forwardToAdapterWithFetch(
       body: new Uint8Array(rawBody),
       signal: abort.signal,
     });
-    if (clientDisconnected) return;
+    if (isClientDisconnected()) return;
     statusCode = response.status;
     lastActivityAt = Date.now();
     const responseHeaders = Object.fromEntries(response.headers);
@@ -882,7 +883,7 @@ async function forwardToAdapterWithFetch(
     }
     if (!res.writableEnded) res.end();
   } catch (error) {
-    if (clientDisconnected || abort.signal.aborted) return;
+    if (isClientDisconnected() || abort.signal.aborted) return;
     failed = true;
     stopProgress();
     const err = error instanceof Error ? error : new Error(String(error));

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'bun:test';
 import { generateText, streamText } from 'ai';
 import { collectOpenAiStream, generateOpenAiResponse, streamOpenAiResponse, translateOpenAiRequest } from '../src/openai-adapter.js';
+import { asMocked } from './test-helpers.js';
 
 vi.mock('ai', () => ({
   streamText: vi.fn(),
@@ -16,7 +17,7 @@ describe('streamOpenAiResponse', () => {
       yield { type: 'text-delta', text: 'partial' };
       yield { type: 'error', error: upstreamError };
     }
-    vi.mocked(streamText).mockReturnValue({ stream: stream() } as never);
+    asMocked(streamText).mockReturnValue({ stream: stream() } as never);
     let output = '';
 
     await expect(streamOpenAiResponse(
@@ -113,8 +114,8 @@ describe('generateOpenAiResponse with forceStream', () => {
       yield { type: 'tool-call', toolCallId: 'call_9', toolName: 'lookup', input: { q: 'x' } };
       yield { type: 'finish', finishReason: 'stop', totalUsage: { inputTokens: 3, outputTokens: 2, totalTokens: 5 } };
     }
-    vi.mocked(streamText).mockReturnValue({ stream: stream() } as never);
-    vi.mocked(generateText).mockClear();
+    asMocked(streamText).mockReturnValue({ stream: stream() } as never);
+    asMocked(generateText).mockClear();
 
     const response: any = await generateOpenAiResponse(
       {} as never,
@@ -139,8 +140,8 @@ describe('generateOpenAiResponse with forceStream', () => {
   });
 
   it('uses a non-streaming upstream request when forceStream is not set', async () => {
-    vi.mocked(streamText).mockClear();
-    vi.mocked(generateText).mockResolvedValue({
+    asMocked(streamText).mockClear();
+    asMocked(generateText).mockResolvedValue({
       text: 'plain',
       toolCalls: [],
       finishReason: 'stop',

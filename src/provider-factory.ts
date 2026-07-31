@@ -88,7 +88,7 @@ export function shouldUseOpenAiResponsesEndpoint(modelId: string): boolean {
   return !OPENAI_CHAT_COMPLETIONS_ONLY.includes(modelId.toLowerCase());
 }
 
-export interface VertexProviderConfig {
+interface VertexProviderConfig {
   project: string;
   location: string;
 }
@@ -300,16 +300,16 @@ export async function createLanguageModel(
     return wrapLanguageModel({
       model: model as Parameters<typeof wrapLanguageModel>[0]['model'],
       middleware: [extractReasoningMiddleware({ tagName: 'think' })],
-    }) as unknown as LanguageModel;
+    });
   }
 
   return model;
 }
 
-export type ReasoningMode = 'none' | 'internal-only' | 'controllable';
-export type ReasoningSource = 'provider-metadata' | 'provider-rule' | 'model-metadata' | 'none';
-export type ReasoningConfidence = 'verified' | 'documented' | 'inferred';
-export type ReasoningWireFormat =
+type ReasoningMode = 'none' | 'internal-only' | 'controllable';
+type ReasoningSource = 'provider-metadata' | 'provider-rule' | 'model-metadata' | 'none';
+type ReasoningConfidence = 'verified' | 'documented' | 'inferred';
+type ReasoningWireFormat =
   | { kind: 'openrouter-reasoning' }
   | { kind: 'openai-reasoning-effort' }
   | { kind: 'anthropic-thinking' }
@@ -360,17 +360,6 @@ const EMPTY_REASONING: ReasoningCapabilities = {
   mode: 'none',
   source: 'none',
   confidence: 'inferred',
-};
-
-const EFFORT_DESCRIPTIONS: Record<string, string> = {
-  off: 'Turn off extended reasoning',
-  none: 'No reasoning',
-  minimal: 'Minimal reasoning',
-  low: 'Light reasoning',
-  medium: 'Balanced reasoning',
-  high: 'Deep reasoning',
-  xhigh: 'Maximum reasoning',
-  max: 'Maximum effort',
 };
 
 const GEMINI_25_BUDGETS: Record<string, number> = {
@@ -859,15 +848,6 @@ export function getPatchReasoningCapabilities(
       return true;
     }),
   };
-}
-
-export function buildCodexReasoningLevels(
-  capabilities: Pick<ReasoningCapabilities, 'levels'>,
-): Array<{ effort: string; description: string }> {
-  return capabilities.levels.map(effort => ({
-    effort,
-    description: EFFORT_DESCRIPTIONS[effort] ?? effort,
-  }));
 }
 
 /** Per-provider providerOptions for user-selected reasoning effort. */

@@ -10,7 +10,7 @@ import {
 import { dirname } from 'node:path';
 import { getDaemonRuntimePath } from '../paths.js';
 
-export const DAEMON_PROTOCOL_VERSION = 4;
+const DAEMON_PROTOCOL_VERSION = 4;
 
 export interface DaemonRuntimeState {
   protocolVersion: number;

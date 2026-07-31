@@ -5,7 +5,7 @@ import { createHash, randomUUID } from 'node:crypto';
 
 export const CLAUDE_CODE_CLI_VERSION = '2.1.195';
 export const CLAUDE_CODE_USER_AGENT = `claude-cli/${CLAUDE_CODE_CLI_VERSION} (external, cli)`;
-export const CLAUDE_CODE_ENTRYPOINT = process.env.CLAUDE_CODE_ENTRYPOINT ?? 'cli';
+const CLAUDE_CODE_ENTRYPOINT = process.env.CLAUDE_CODE_ENTRYPOINT ?? 'cli';
 export const CLAUDE_CODE_BILLING_HEADER_PREFIX = 'x-anthropic-billing-header:';
 
 // Per-process session IDs keyed by seed — same value emitted for X-Claude-Code-Session-Id
@@ -29,7 +29,7 @@ const HEX64_RE = /^[a-f0-9]{64}$/i;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** Resolve cliUserID (device_id) from stored providerData, falling back to a hash. */
-export function resolveCliUserID(
+function resolveCliUserID(
   providerData: Record<string, unknown> | undefined,
   seed: string,
 ): string {
@@ -39,7 +39,7 @@ export function resolveCliUserID(
 }
 
 /** Resolve accountUUID from stored providerData, falling back to a deterministic UUID. */
-export function resolveAccountUUID(
+function resolveAccountUUID(
   providerData: Record<string, unknown> | undefined,
   seed: string,
 ): string {
@@ -48,11 +48,11 @@ export function resolveAccountUUID(
   return uuidFromHash(`account:${seed}`);
 }
 
-export function buildUserIdJson(deviceId: string, accountUUID: string, sessionId: string): string {
+function buildUserIdJson(deviceId: string, accountUUID: string, sessionId: string): string {
   return JSON.stringify({ device_id: deviceId, account_uuid: accountUUID, session_id: sessionId });
 }
 
-export function buildClaudeCodeBillingSystemLine(): string {
+function buildClaudeCodeBillingSystemLine(): string {
   return `${CLAUDE_CODE_BILLING_HEADER_PREFIX} cc_version=${CLAUDE_CODE_CLI_VERSION}.0; cc_entrypoint=${CLAUDE_CODE_ENTRYPOINT};`;
 }
 

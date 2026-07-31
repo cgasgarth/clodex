@@ -1,4 +1,4 @@
-import { OPENAI_METADATA_TIMEOUT_MS } from '../timeouts.js';
+import { PROVIDER_METADATA_TIMEOUT_MS } from '../timeouts.js';
 
 const OPENAI_PROFILE_URL = 'https://api.openai.com/v1/me';
 
@@ -14,7 +14,7 @@ export async function fetchOpenAiProfileEmail(
   const controller = new AbortController();
   const timer = setTimeout(
     () => controller.abort(),
-    options.timeoutMs ?? OPENAI_METADATA_TIMEOUT_MS,
+    options.timeoutMs ?? PROVIDER_METADATA_TIMEOUT_MS,
   );
   timer.unref();
   try {

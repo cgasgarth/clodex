@@ -14,11 +14,11 @@ import { getAppHome } from '../paths.js';
 import { PROVIDER_METADATA_TIMEOUT_MS } from '../timeouts.js';
 import { normalizeModelIdCandidates } from './pricing.js';
 
-export const MODELS_DEV_API_URL = 'https://models.dev/api.json';
+const MODELS_DEV_API_URL = 'https://models.dev/api.json';
 const FETCH_TIMEOUT_MS = PROVIDER_METADATA_TIMEOUT_MS;
 const FILE_MODE = 0o600;
 
-export interface ModelsDevModalities {
+interface ModelsDevModalities {
   input?: string[];
   output?: string[];
 }
@@ -34,7 +34,7 @@ export interface ModelsDevModel {
   modalities?: ModelsDevModalities;
 }
 
-export interface ModelsDevProvider {
+interface ModelsDevProvider {
   id?: string;
   name?: string;
   models?: Record<string, ModelsDevModel>;
@@ -56,7 +56,7 @@ let memoryCachePath: string | null = null;
 let memoryCacheMtime = 0;
 
 /** Registry / OpenCode provider id → models.dev top-level key */
-export const REGISTRY_TO_MODELS_DEV: Record<string, string> = {
+const REGISTRY_TO_MODELS_DEV: Record<string, string> = {
   google: 'google',
   openai: 'openai',
   groq: 'groq',
@@ -92,7 +92,7 @@ export function loadBundledModelsDevCache(): ModelsDevCacheFile {
   return bundledCache as unknown as ModelsDevCacheFile;
 }
 
-export function invalidateModelsDevCache(): void {
+function invalidateModelsDevCache(): void {
   memoryCache = null;
   memoryCachePath = null;
   memoryCacheMtime = 0;
@@ -141,7 +141,7 @@ function writeModelsDevCache(path: string, data: ModelsDevCacheFile): void {
   invalidateModelsDevCache();
 }
 
-export function getUserModelsDevCachePath(): string {
+function getUserModelsDevCachePath(): string {
   return join(getAppHome(), 'models-dev-cache.json');
 }
 
@@ -175,7 +175,7 @@ export function loadModelsDevCache(): ModelsDevCacheFile {
   return rememberModelsDevCache('bundled', loadBundledModelsDevCache());
 }
 
-export async function fetchModelsDevCache(): Promise<ModelsDevCacheFile | null> {
+async function fetchModelsDevCache(): Promise<ModelsDevCacheFile | null> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   try {
@@ -185,7 +185,6 @@ export async function fetchModelsDevCache(): Promise<ModelsDevCacheFile | null> 
     });
     if (!response.ok) return null;
     const data = (await response.json()) as Record<string, ModelsDevProvider>;
-    if (!data || typeof data !== 'object') return null;
     const withMeta = attachModelsDevCacheMeta(data);
     writeModelsDevCache(getUserModelsDevCachePath(), withMeta);
     return withMeta;
@@ -196,7 +195,7 @@ export async function fetchModelsDevCache(): Promise<ModelsDevCacheFile | null> 
   }
 }
 
-export function resolveModelsDevSlug(providerId: string): string {
+function resolveModelsDevSlug(providerId: string): string {
   return REGISTRY_TO_MODELS_DEV[providerId] ?? providerId;
 }
 

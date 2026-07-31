@@ -37,6 +37,7 @@ if (values.watch) {
   console.error('clodex: watching src/');
   let pending = false;
   let building = false;
+  const hasPendingBuild = () => pending;
   const rebuild = async (): Promise<void> => {
     if (building) {
       pending = true;
@@ -48,7 +49,7 @@ if (values.watch) {
       const started = performance.now();
       const success = await build();
       console.error(`clodex: ${success ? 'rebuilt' : 'build failed'} in ${Math.round(performance.now() - started)}ms`);
-    } while (pending);
+    } while (hasPendingBuild());
     building = false;
   };
   let debounce: ReturnType<typeof setTimeout> | undefined;

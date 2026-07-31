@@ -5,7 +5,7 @@ import { getAppHome } from './paths.js';
 
 export const CREDENTIAL_HELPER_ENV = 'CLODEX_CREDENTIAL_HELPER';
 export const CREDENTIAL_HELPER_TIMEOUT_ENV = 'CLODEX_CREDENTIAL_HELPER_TIMEOUT_MS';
-export const CREDENTIAL_HELPER_SERVICE = 'clodex';
+const CREDENTIAL_HELPER_SERVICE = 'clodex';
 
 const CREDENTIAL_ACCOUNT_INSTANCE_SEPARATOR = '::credential::';
 const CREDENTIAL_ACCOUNT_INSTANCE_PATTERN = /^v1:[0-9a-f]{32}$/;
@@ -32,7 +32,7 @@ export interface ConfiguredCredentialHelper {
   id: string;
 }
 
-export function credentialHelperIdForPath(path: string): string {
+function credentialHelperIdForPath(path: string): string {
   return createHash('sha256')
     .update('clodex-credential-helper\0')
     .update(normalize(path))

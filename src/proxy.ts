@@ -42,6 +42,7 @@ import {
   isClaudeCodeCompactRequest,
   sdkTranslationErrorSignature,
   silenceSdkWarnings,
+  type AnthropicRequest,
 } from './sdk-adapter.js';
 import {
   anthropicErrorType,
@@ -346,7 +347,7 @@ export type ProxyRouteRequestResolver = (
   context: { launchTicket?: string },
 ) => Promise<ProxyRoute>;
 
-export interface ProxyRequestOptimizationContext {
+interface ProxyRequestOptimizationContext {
   requestId: string;
   body: Buffer;
   request: Record<string, unknown>;
@@ -423,6 +424,22 @@ function createProxyCatalogState(
 }
 
 /** Multi-model proxy: routes each request by body.model to the correct upstream. */
+async function runSdkRequestWithRecovery(
+  run: () => Promise<void>,
+  handleError: (error: unknown) => Promise<'retry' | 'cancelled' | 'done'>,
+): Promise<'cancelled' | 'done'> {
+  for (;;) {
+    try {
+      await run();
+      return 'done';
+    } catch (error) {
+      const outcome = await handleError(error);
+      if (outcome === 'retry') continue;
+      return outcome;
+    }
+  }
+}
+
 export async function startProxyCatalog(
   routes: ProxyRoute[],
   defaultAliasId: string,
@@ -477,7 +494,7 @@ export async function startProxyCatalog(
       const requestCatalog = catalog;
       const modelPathMatch = requestPath.match(/^\/v1\/models\/([^?]+)/);
       if (modelPathMatch) {
-        const id = decodeURIComponent(modelPathMatch[1]);
+        const id = decodeURIComponent(modelPathMatch[1]!);
         const route = lookupRoute(requestCatalog.byAlias, id);
         if (route) {
           res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -518,13 +535,13 @@ export async function startProxyCatalog(
       response.setClientCancelHandler(abortForClientDisconnect);
 
       let decodedBody: Buffer;
-      let anthropicBody: any;
+      let anthropicBody: AnthropicRequest;
       try {
         const rawBytes = Buffer.from(await req.arrayBuffer());
         if (rawBytes.length > 50 * 1024 * 1024) throw new Error('Request body too large');
         const raw = decodeRequestBody(rawBytes, req.headers.get('content-encoding') ?? undefined);
         decodedBody = Buffer.from(raw);
-        anthropicBody = JSON.parse(raw);
+        anthropicBody = JSON.parse(raw) as AnthropicRequest;
       } catch {
         anthropicError(res, 400, 'Invalid JSON body');
         return;
@@ -580,7 +597,7 @@ export async function startProxyCatalog(
         const optimizedBody = await optimizeRequest({
           requestId: relayRequestId,
           body: decodedBody,
-          request: anthropicBody,
+          request: anthropicBody as unknown as Record<string, unknown>,
           endpoint: messagesEndpoint,
           claudeSessionId,
           claudeAgentId: claudeAgentIdHeader,
@@ -637,7 +654,6 @@ export async function startProxyCatalog(
         const inboundBeta = req.headers.get('anthropic-beta') ?? undefined;
         const forwardBody = { ...anthropicBody, model: route.realModelId };
         const targetUrl = `${upstreamUrl}/v1/messages/count_tokens`;
-        const isOAuth = routeAuthType === 'oauth';
         try {
           await relayAnthropicMessages(res, targetUrl, forwardBody, apiKey, false, {
             inboundBeta,
@@ -984,31 +1000,22 @@ export async function startProxyCatalog(
               res,
               upstreamStatus === 500 ? 502 : upstreamStatus,
               clientMessage,
-              contextLengthExceeded ? (relayRequestId ?? randomUUID()) : undefined,
+              contextLengthExceeded ? relayRequestId : undefined,
             );
           } else {
             const errorType = anthropicErrorType(upstreamStatus);
             res.write(`event: error\ndata: ${JSON.stringify({
               type: 'error',
               error: { type: errorType, message: clientMessage },
-              request_id: relayRequestId ?? randomUUID(),
+              request_id: relayRequestId,
             })}\n\n`);
             res.end();
           }
           return 'done';
         };
 
-        for (;;) {
-          try {
-            await runSdkRequest();
-            break;
-          } catch (err) {
-            const outcome = await handleSdkError(err);
-            if (outcome === 'retry') continue;
-            if (outcome === 'cancelled') return;
-            break;
-          }
-        }
+        const outcome = await runSdkRequestWithRecovery(runSdkRequest, handleSdkError);
+        if (outcome === 'cancelled') return;
         return;
       }
 

@@ -3,6 +3,7 @@ import { accessTokenIsExpiring, oauthCredentialNeedsRefresh, tokensToStoredCrede
 import { extractOpenAiAccountId } from '../src/oauth/openai.js';
 import { postOAuthRefresh } from '../src/oauth/refresh-http.js';
 import { oauthCredentialShouldRefresh, refreshStoredOAuthCredential } from '../src/oauth/refresh.js';
+import { advanceTestTimersByTime, restoreTestGlobals, stubTestGlobal } from './test-helpers.js';
 
 describe('oauth types', () => {
   it('detects expiring oauth credentials', () => {
@@ -48,12 +49,12 @@ describe('oauth types', () => {
 describe('oauth refresh http', () => {
   afterEach(() => {
     vi.useRealTimers();
-    vi.unstubAllGlobals();
+    restoreTestGlobals();
     vi.restoreAllMocks();
   });
 
   it('posts form refresh requests and includes response text in the error', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => ({
+    stubTestGlobal('fetch', vi.fn(async () => ({
       ok: false,
       status: 401,
       text: async () => 'bad refresh',
@@ -74,7 +75,7 @@ describe('oauth refresh http', () => {
   it('cancels an unread failed response body when error details are disabled', async () => {
     const cancel = vi.fn(async () => {});
     const text = vi.fn(async () => 'must stay unread');
-    vi.stubGlobal('fetch', vi.fn(async () => ({
+    stubTestGlobal('fetch', vi.fn(async () => ({
       ok: false,
       status: 401,
       body: { cancel },
@@ -107,7 +108,7 @@ describe('oauth refresh http', () => {
           signal.addEventListener('abort', () => reject(signal.reason), { once: true });
         }),
     );
-    vi.stubGlobal('fetch', fetchMock);
+    stubTestGlobal('fetch', fetchMock);
 
     const refresh = postOAuthRefresh(
       'https://auth/token',
@@ -120,9 +121,9 @@ describe('oauth refresh http', () => {
     const signal = fetchMock.mock.calls[0]?.[1]?.signal as AbortSignal;
     const rejection = refresh.catch((error: unknown) => error);
 
-    await vi.advanceTimersByTimeAsync(59_999);
+    await advanceTestTimersByTime(59_999);
     expect(signal.aborted).toBe(false);
-    await vi.advanceTimersByTimeAsync(1);
+    await advanceTestTimersByTime(1);
     expect(signal.aborted).toBe(true);
     await expect(rejection).resolves.toMatchObject({ name: 'TimeoutError' });
   });
@@ -141,7 +142,7 @@ describe('oauth refresh http', () => {
         } as Response;
       },
     );
-    vi.stubGlobal('fetch', fetchMock);
+    stubTestGlobal('fetch', fetchMock);
 
     const refresh = postOAuthRefresh(
       'https://auth/token',
@@ -154,9 +155,9 @@ describe('oauth refresh http', () => {
     const signal = fetchMock.mock.calls[0]?.[1]?.signal as AbortSignal;
     const rejection = refresh.catch((error: unknown) => error);
 
-    await vi.advanceTimersByTimeAsync(59_999);
+    await advanceTestTimersByTime(59_999);
     expect(signal.aborted).toBe(false);
-    await vi.advanceTimersByTimeAsync(1);
+    await advanceTestTimersByTime(1);
     expect(signal.aborted).toBe(true);
     await expect(rejection).resolves.toMatchObject({ name: 'TimeoutError' });
   });
@@ -175,12 +176,12 @@ describe('openai oauth helpers', () => {
 
 describe('oauth refresh', () => {
   afterEach(() => {
-    vi.unstubAllGlobals();
+    restoreTestGlobals();
     vi.restoreAllMocks();
   });
 
   it('refreshes openai tokens', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
+    stubTestGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
       access_token: 'new-access',
       refresh_token: 'new-refresh',
       expires_in: 3600,

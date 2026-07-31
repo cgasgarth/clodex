@@ -11,7 +11,7 @@ const TOOL_SEARCH_TYPE_PREFIX = 'tool_search_tool';
 
 export function isToolSearchTool(tool: AnthropicToolDefinition): boolean {
   if (typeof tool.type === 'string' && tool.type.startsWith(TOOL_SEARCH_TYPE_PREFIX)) return true;
-  const name = tool.name ?? '';
+  const name = tool.name;
   return name.includes('tool_search') || name === 'ToolSearch';
 }
 
@@ -19,7 +19,18 @@ export function isToolSearchTool(tool: AnthropicToolDefinition): boolean {
 export function extractReferencedToolNames(messages: AnthropicRequestMessage[] | undefined): Set<string> {
   const names = new Set<string>();
 
-  const visitContent = (content: unknown) => {
+  const addToolSearchReferences = (content: unknown): void => {
+    if (!content || typeof content !== 'object') return;
+    const refs = (content as Record<string, unknown>).tool_references;
+    if (!Array.isArray(refs)) return;
+    for (const ref of refs) {
+      if (!ref || typeof ref !== 'object') continue;
+      const toolName = (ref as Record<string, unknown>).tool_name;
+      if (typeof toolName === 'string') names.add(toolName);
+    }
+  };
+
+  const visitContent = (content: unknown): void => {
     if (typeof content === 'string') return;
     if (!Array.isArray(content)) return;
 
@@ -31,17 +42,7 @@ export function extractReferencedToolNames(messages: AnthropicRequestMessage[] |
         names.add(part.tool_name);
       }
 
-      if (part.type === 'tool_search_tool_result') {
-        const inner = part.content as Record<string, unknown> | undefined;
-        const refs = inner?.tool_references;
-        if (Array.isArray(refs)) {
-          for (const ref of refs) {
-            if (ref && typeof ref === 'object' && typeof (ref as Record<string, unknown>).tool_name === 'string') {
-              names.add((ref as Record<string, string>).tool_name);
-            }
-          }
-        }
-      }
+      if (part.type === 'tool_search_tool_result') addToolSearchReferences(part.content);
 
       if (part.type === 'tool_result' && part.content) {
         visitContent(part.content);

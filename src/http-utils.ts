@@ -53,14 +53,6 @@ export function readBody(req: IncomingMessage): Promise<string> {
   });
 }
 
-export function extractApiKey(req: IncomingMessage): string | null {
-  const xApiKey = req.headers['x-api-key'];
-  if (typeof xApiKey === 'string') return xApiKey;
-  const auth = req.headers['authorization'];
-  if (typeof auth === 'string') return auth.replace(/^Bearer\s+/i, '').trim();
-  return null;
-}
-
 export function sendJson(res: ServerResponse, status: number, body: unknown): void {
   const json = JSON.stringify(body);
   res.writeHead(status, { 'Content-Type': 'application/json' });

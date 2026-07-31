@@ -22,15 +22,15 @@ import bundledPricing from '../data/pricing-cache.json';
 import { getAppHome } from '../paths.js';
 import type { CachedModel } from './types.js';
 import { loadRegistryStrict, saveRegistry } from './io.js';
-import { withRegistryWriteLock, withRegistryWriteLockSync } from './lock.js';
+import { withRegistryWriteLock } from './lock.js';
 import { classifyFreeStatus, isFreeStatus } from '../free-models.js';
 import { PROVIDER_METADATA_TIMEOUT_MS } from '../timeouts.js';
 
-export const PRICING_API_URL = 'https://ai-model-pricing.com/api/v1/pricing.json';
+const PRICING_API_URL = 'https://ai-model-pricing.com/api/v1/pricing.json';
 const FETCH_TIMEOUT_MS = PROVIDER_METADATA_TIMEOUT_MS;
 const FILE_MODE = 0o600;
 
-export interface PricingTierRow {
+interface PricingTierRow {
   platform?: string;
   tier?: string;
   modality?: string;
@@ -39,7 +39,7 @@ export interface PricingTierRow {
   cached_input_per_1m_tokens?: number;
 }
 
-export interface PricingModelEntry {
+interface PricingModelEntry {
   provider?: string;
   model_id?: string;
   aliases?: Record<string, string>;
@@ -53,7 +53,7 @@ export interface PricingCacheFile {
 }
 
 /** Registry template id → ai-model-pricing platform slug */
-export const TEMPLATE_TO_PRICING_PLATFORM: Record<string, string> = {
+const TEMPLATE_TO_PRICING_PLATFORM: Record<string, string> = {
   groq: 'groq',
   mistral: 'mistral',
   togetherai: 'together',
@@ -103,7 +103,7 @@ function mkdirSafe(dir: string): void {
   }
 }
 
-export function getUserPricingCachePath(): string {
+function getUserPricingCachePath(): string {
   return join(getAppHome(), 'pricing-cache.json');
 }
 
@@ -111,7 +111,7 @@ export function loadPricingCache(): PricingCacheFile {
   return readPricingFile(getUserPricingCachePath()) ?? loadBundledPricingCache();
 }
 
-export async function fetchPricingCache(): Promise<PricingCacheFile | null> {
+async function fetchPricingCache(): Promise<PricingCacheFile | null> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
   try {
@@ -215,14 +215,16 @@ export function enrichModelsWithPricing(
   return models.map(model => {
     const cost =
       lookupModelCost(index, model.id, platform) ??
-      lookupModelCost(index, model.upstreamModelId, platform);
+      (model.upstreamModelId
+        ? lookupModelCost(index, model.upstreamModelId, platform)
+        : undefined);
     if (!cost) return model;
     const freeStatus = classifyFreeStatus({ model: { ...model, cost } });
     return { ...model, cost, isFree: isFreeStatus(freeStatus), freeStatus };
   });
 }
 
-export function applyPricingToRegistryProviders(
+function applyPricingToRegistryProviders(
   registry: import('./types.js').ProviderRegistry,
   cache: PricingCacheFile,
 ): boolean {
@@ -241,17 +243,6 @@ export function applyPricingToRegistryProviders(
     registry.pricingCacheAt = cache.generated_at ?? new Date().toISOString();
   }
   return changed;
-}
-
-/** Apply bundled or on-disk pricing cache synchronously (non-blocking enrich baseline). */
-export function applyCachedPricing(): boolean {
-  return withRegistryWriteLockSync(() => {
-    const registry = loadRegistryStrict();
-    const cache = loadPricingCache();
-    const changed = applyPricingToRegistryProviders(registry, cache);
-    if (changed) saveRegistry(registry);
-    return changed;
-  });
 }
 
 /** Fetch latest pricing in the background; updates registry when complete. */

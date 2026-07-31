@@ -190,7 +190,7 @@ export function formatHttpProxyEnvironmentLines(
   ];
 }
 
-export async function startConfiguredHttpProxy(
+async function startConfiguredHttpProxy(
   port: number,
   debug = false,
   inferenceLogPath = getInferenceRequestLogPath(),

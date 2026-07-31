@@ -35,7 +35,7 @@ import {
 import { refreshProviderModels } from './refresh-models.js';
 import type { RegistryProvider } from './types.js';
 
-export type { StoredOAuthCredential } from '../oauth/types.js';
+;
 
 export type ProviderAuthMethod = 'native';
 
@@ -81,16 +81,6 @@ async function runNativeDeviceCode(providerId: NativeOAuthProviderId): Promise<S
     spinner.stop('');
     throw err;
   }
-}
-
-export async function saveNativeOAuthCredential(
-  providerId: string,
-  tokens: import('../oauth/types.js').OAuthTokenResponse,
-  accountId?: string,
-  providerData?: Record<string, unknown>,
-): Promise<void> {
-  const cred = tokensToStoredCredential(tokens, undefined, accountId, providerData);
-  await persistNativeOAuthCredential(providerId, cred);
 }
 
 /**

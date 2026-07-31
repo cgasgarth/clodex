@@ -10,7 +10,7 @@ const ISSUER = 'https://auth.openai.com';
 const OAUTH_POLLING_SAFETY_MARGIN_MS = 3_000;
 const DEVICE_CODE_DEFAULT_EXPIRES_MS = 5 * 60 * 1000;
 
-export interface OpenAiIdTokenClaims {
+interface OpenAiIdTokenClaims {
   chatgpt_account_id?: string;
   email?: string;
   preferred_username?: string;
@@ -18,7 +18,7 @@ export interface OpenAiIdTokenClaims {
   'https://api.openai.com/auth'?: { chatgpt_account_id?: string };
 }
 
-export interface OpenAiDeviceCodeData {
+interface OpenAiDeviceCodeData {
   device_auth_id: string;
   user_code: string;
   interval: string;
@@ -52,7 +52,7 @@ export function extractOpenAiEmail(tokens: OAuthTokenResponse): string | undefin
     : undefined;
 }
 
-export async function requestOpenAiDeviceCode(): Promise<OpenAiDeviceCodeData> {
+async function requestOpenAiDeviceCode(): Promise<OpenAiDeviceCodeData> {
   const response = await fetch(`${ISSUER}/api/accounts/deviceauth/usercode`, {
     method: 'POST',
     headers: {
@@ -67,11 +67,11 @@ export async function requestOpenAiDeviceCode(): Promise<OpenAiDeviceCodeData> {
   return response.json() as Promise<OpenAiDeviceCodeData>;
 }
 
-export function openAiDeviceCodeUrl(): string {
+function openAiDeviceCodeUrl(): string {
   return `${ISSUER}/codex/device`;
 }
 
-export async function pollOpenAiDeviceCodeToken(
+async function pollOpenAiDeviceCodeToken(
   deviceData: OpenAiDeviceCodeData,
   opts?: { sleep?: (ms: number) => Promise<void>; now?: () => number },
 ): Promise<{ tokens: OAuthTokenResponse; accountId?: string; email?: string }> {

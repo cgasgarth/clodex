@@ -90,10 +90,8 @@ function parseState(raw: string): DaemonAccountState {
 
 export class DaemonAccountStore {
   readonly path: string;
-  private readonly env: HomeEnv;
 
   constructor(env: HomeEnv = process.env, path = getDaemonAccountsPath(env)) {
-    this.env = env;
     this.path = path;
   }
 

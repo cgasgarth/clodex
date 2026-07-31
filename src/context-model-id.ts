@@ -1,15 +1,11 @@
 // Claude Code treats third-party routes as 200K unless the model id ends with [1m].
 import { resolveContextWindow } from './context-window.js';
 
-export const ONE_M_CONTEXT_SUFFIX = '[1m]';
-export const ONE_M_CONTEXT_WINDOW = 1_000_000;
+const ONE_M_CONTEXT_SUFFIX = '[1m]';
+const ONE_M_CONTEXT_WINDOW = 1_000_000;
 
 export function stripOneMContextSuffix(modelId: string): string {
   return modelId.replace(/\[1m\]$/i, '');
-}
-
-export function hasOneMContextSuffix(modelId: string): boolean {
-  return /\[1m\]$/i.test(modelId);
 }
 
 /** Canonical key for matching route ids across context suffix and Google prefix variants. */

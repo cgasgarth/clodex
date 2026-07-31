@@ -106,14 +106,14 @@ export function getPatchManifestPath(): string {
   return join(getAppHome(), 'patch-state.json');
 }
 
-export function getPatchLockPath(): string {
+function getPatchLockPath(): string {
   return join(getAppHome(), 'patch.lock');
 }
 
 export function readPatchManifest(path = getPatchManifestPath()): PatchManifest | null {
   try {
     const parsed = JSON.parse(readFileSync(path, 'utf8')) as PatchManifest;
-    if (parsed && typeof parsed.binaryPath === 'string' && typeof parsed.configHash === 'string') {
+    if (typeof parsed.binaryPath === 'string' && typeof parsed.configHash === 'string') {
       return parsed;
     }
   } catch {
@@ -368,7 +368,7 @@ export function tryAcquirePatchLock(
 // ── Binary + backup helpers ─────────────────────────────────────────────────
 
 /** Outcome of locating the binary `clodex patch` should operate on. */
-export type ClaudePatchTarget =
+type ClaudePatchTarget =
   | { ok: true; binaryPath: string; version: string }
   | { ok: false; reason: 'binary-not-found' }
   | { ok: false; reason: 'version-unknown'; binaryPath: string };
@@ -386,7 +386,7 @@ export type ClaudePatchTarget =
  * another install publishes those other bytes over the user's Claude Code. There
  * is no fallback version for the same reason: an unprobeable binary is an error.
  */
-export function resolveClaudeBinaryForPatch(): ClaudePatchTarget {
+function resolveClaudeBinaryForPatch(): ClaudePatchTarget {
   const envOverride = process.env['TWEAKCC_CC_INSTALLATION_PATH'];
   const nativeSymlink = join(
     process.env['HOME'] ?? process.env['USERPROFILE'] ?? homedir(),
@@ -415,7 +415,7 @@ export function resolveClaudeBinaryForPatch(): ClaudePatchTarget {
 }
 
 /** Accurate, actionable message per failure reason — the two are NOT the same problem. */
-export function describePatchTargetFailure(target: Extract<ClaudePatchTarget, { ok: false }>): string {
+function describePatchTargetFailure(target: Extract<ClaudePatchTarget, { ok: false }>): string {
   return target.reason === 'binary-not-found'
     ? 'claude binary not found. Install Claude Code or set TWEAKCC_CC_INSTALLATION_PATH.'
     : `Could not determine the version of ${target.binaryPath} (\`claude --version\` failed). `
@@ -895,7 +895,7 @@ export async function runLaunchPatchCheck(opts: { agentStdout?: boolean; dryRun?
     if (state === 'current') return;
 
     const interactive = !opts.dryRun && !opts.agentStdout
-      && process.stdin.isTTY === true && process.stdout.isTTY === true;
+      && process.stdin.isTTY && process.stdout.isTTY;
     if (!interactive) {
       if (!opts.agentStdout) {
         console.error(pc.dim(`clodex: claude binary is ${state === 'unpatched' ? 'not patched' : 'stale-patched'} for your favorites — run \`clodex patch\`.`));
@@ -909,7 +909,7 @@ export async function runLaunchPatchCheck(opts: { agentStdout?: boolean; dryRun?
         : 'The Claude Code patch is stale (config or claude version changed). Re-patch now?',
       initialValue: false,
     });
-    if (p.isCancel(answer) || answer !== true) return;
+    if (p.isCancel(answer) || !answer) return;
 
     await runPatchCommand({});
   } catch (err) {

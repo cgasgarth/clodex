@@ -33,7 +33,7 @@ export async function selectServerProviders(
 
   const lookup = new Map(available.map(provider => [provider.id, provider]));
 
-  // eslint-disable-next-line no-constant-condition
+
   while (true) {
     type MenuChoice = string;
     const options: Array<{ value: MenuChoice; label: string; hint: string }> = [];
@@ -47,7 +47,7 @@ export async function selectServerProviders(
       const hint = provider
         ? `${provider.modelCount} model${provider.modelCount !== 1 ? 's' : ''}`
         : 'select to remove';
-      options.push({ value: `prov-${i}`, label, hint: 'select to remove' });
+      options.push({ value: `prov-${i}`, label, hint });
     }
 
     const unselected = available.filter(provider => !isSelected(selected, provider.id));

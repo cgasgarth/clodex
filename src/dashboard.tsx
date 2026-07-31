@@ -1,9 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Box, Text, render, useApp, useInput } from 'ink';
-import {
-  daemonControlRequest,
-  type DaemonControlRequestOptions,
-} from './daemon/control-client.js';
+import { daemonControlRequest } from './daemon/control-client.js';
 import {
   DASHBOARD_CONTROL_REQUEST_TIMEOUT_MS,
   DASHBOARD_USAGE_REQUEST_TIMEOUT_MS,
@@ -16,101 +13,31 @@ import {
   API_PRICING_AS_OF,
   API_PRICING_SOURCE,
 } from './daemon/api-pricing.js';
-import type {
-  SecondwindModeMetrics,
-  SecondwindSessionSavings,
-  SecondwindSnapshot,
-} from './daemon/secondwind.js';
+import type { SecondwindModeMetrics, SecondwindSnapshot } from './daemon/secondwind.js';
 import type { SecondwindMode } from './types.js';
-import type {
-  DaemonClaudeModelSnapshot,
-  DaemonClaudeModelView,
-} from './daemon/model-service.js';
-
-interface WebSocketStatus {
-  total: number;
-  open: number;
-  inFlight: number;
-  established: number;
-  nursery: number;
-  isolated: number;
-  partitions: number;
-  checkpoints: number;
-}
-
-interface SessionStatus {
-  sessionHash: string;
-  modelId: string;
-  provider: string;
-  lastActivityAt: string;
-  activeRequests: number;
-  completedRequests: number;
-  cancelledRequests: number;
-  failedRequests: number;
-}
-
-export interface DaemonStatus {
-  running: boolean;
-  ready: boolean;
-  version: string;
-  pid: number;
-  uptimeSeconds: number;
-  port: number;
-  websocket: WebSocketStatus;
-  activeSessions: number;
-  sessions: SessionStatus[];
-}
-
-export interface MetricBucket {
-  timestamp: string;
-  inputTokens: number;
-  cachedInputTokens: number;
-  cacheWriteTokens: number;
-  outputTokens: number;
-  requests: number;
-  errors: number;
-  cancellations: number;
-  durationMs: number;
-  inputCost: number;
-  cacheCost: number;
-  outputCost: number;
-  totalCost: number;
-  pricedRequests: number;
-  unpricedRequests: number;
-  standardRequests: number;
-  fastRequests: number;
-  standardCost: number;
-  fastCost: number;
-}
-
-export interface Account {
-  id: string;
-  email?: string;
-  selected: boolean;
-  plan?: string;
-  usage?: {
-    primaryUsedPercent?: number;
-    primaryResetAt?: number;
-    weeklyUsedPercent?: number;
-    weeklyResetAt?: number;
-    stale?: boolean;
-    error?: string;
-  };
-}
-
-export interface Diagnostic {
-  timestamp: string;
-  kind: string;
-  code?: string;
-  statusCode?: number;
-}
-
-export interface DeviceCodePrompt {
-  url: string;
-  userCode: string;
-}
-
-export type UsagePeriod = 'day' | 'week' | 'month';
+import type { DaemonClaudeModelSnapshot, DaemonClaudeModelView } from './daemon/model-service.js';
+import {
+  accountDisplayName,
+  compactNumber,
+  cyclePeriod,
+  deviceCodeInstruction,
+  formatUsd,
+  lineChart,
+  loadDashboardPanels,
+  requestFailure,
+  secondwindPercentSaved,
+  secondwindSessionSummary,
+  secondwindTokenSummary,
+  usageRange,
+  VIEW_SWITCH_HINT,
+  type Account,
+  type DaemonStatus,
+  type DeviceCodePrompt,
+  type Diagnostic,
+  type MetricBucket,
+  type UsagePeriod,
+  type UsageRange,
+} from './dashboard-data.js';
 type DashboardView =
   | 'overview'
   | 'usage'
@@ -118,30 +45,6 @@ type DashboardView =
   | 'diagnostics'
   | 'secondwind'
   | 'models';
-
-export interface UsageRange {
-  period: UsagePeriod;
-  offset: number;
-  start: Date;
-  end: Date;
-  label: string;
-  bucketMinutes: number;
-}
-
-export type DashboardRequest = <T>(
-  path: string,
-  options?: DaemonControlRequestOptions,
-) => Promise<T>;
-
-export interface DashboardPanelSnapshot {
-  reachable: boolean;
-  status?: DaemonStatus;
-  accounts?: Account[];
-  diagnostics?: Diagnostic[];
-  secondwind?: SecondwindSnapshot;
-  models?: DaemonClaudeModelView[];
-  warnings: string[];
-}
 
 const VIEWS: DashboardView[] = [
   'overview',
@@ -152,253 +55,11 @@ const VIEWS: DashboardView[] = [
   'models',
 ];
 const SECONDWIND_MODES: SecondwindMode[] = ['off', 'shadow', 'on'];
-const PERIODS: UsagePeriod[] = ['day', 'week', 'month'];
-const CHART_WIDTH = 56;
-const CHART_HEIGHT = 6;
-export const VIEW_SWITCH_HINT = 'Press 1–6 to switch views';
-
-function requestFailure(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
-/**
- * Load independent dashboard panels without allowing one slow panel to turn a
- * healthy daemon into a false "unavailable" state.
- */
-export async function loadDashboardPanels(
-  request: DashboardRequest = daemonControlRequest,
-): Promise<DashboardPanelSnapshot> {
-  const options = { timeoutMs: DASHBOARD_CONTROL_REQUEST_TIMEOUT_MS };
-  const [status, accounts, diagnostics, secondwind, models] = await Promise.allSettled([
-    request<DaemonStatus>('/v1/status', options),
-    request<{ accounts: Account[] }>('/v1/accounts', options),
-    request<{ diagnostics: Diagnostic[] }>('/v1/diagnostics?limit=20', options),
-    request<SecondwindSnapshot>('/v1/secondwind', options),
-    request<DaemonClaudeModelSnapshot>('/v1/claude/models', options),
-  ]);
-  const warnings: string[] = [];
-  if (status.status === 'rejected') warnings.push(`status: ${requestFailure(status.reason)}`);
-  if (accounts.status === 'rejected') warnings.push(`accounts: ${requestFailure(accounts.reason)}`);
-  if (diagnostics.status === 'rejected') {
-    warnings.push(`diagnostics: ${requestFailure(diagnostics.reason)}`);
-  }
-  if (secondwind.status === 'rejected') {
-    warnings.push(`Secondwind: ${requestFailure(secondwind.reason)}`);
-  }
-  if (models.status === 'rejected') {
-    warnings.push(`models: ${requestFailure(models.reason)}`);
-  }
-
-  let reachable = [status, accounts, diagnostics, secondwind, models]
-    .some(result => result.status === 'fulfilled');
-  if (!reachable) {
-    try {
-      await request('/v1/health', options);
-      reachable = true;
-    } catch (error) {
-      warnings.push(`health: ${requestFailure(error)}`);
-    }
-  }
-
-  return {
-    reachable,
-    status: status.status === 'fulfilled' ? status.value : undefined,
-    accounts: accounts.status === 'fulfilled' ? accounts.value.accounts : undefined,
-    diagnostics: diagnostics.status === 'fulfilled'
-      ? diagnostics.value.diagnostics
-      : undefined,
-    secondwind: secondwind.status === 'fulfilled' ? secondwind.value : undefined,
-    models: models.status === 'fulfilled' ? models.value.models : undefined,
-    warnings,
-  };
-}
-
-export function secondwindTokenSummary(
-  metrics: Pick<SecondwindModeMetrics, 'tokensReduced' | 'estimatedTokenRequests'> | undefined,
-): string {
-  const tokens = compactNumber(metrics?.tokensReduced ?? 0);
-  const estimatedRequests = metrics?.estimatedTokenRequests ?? 0;
-  return estimatedRequests > 0
-    ? `~${tokens} tool-output tokens compacted · ${estimatedRequests} fallback estimate${estimatedRequests === 1 ? '' : 's'}`
-    : `${tokens} tool-output tokens compacted · measured by Secondwind`;
-}
-
-export function secondwindPercentSaved(
-  metrics: Pick<SecondwindModeMetrics, 'tokensReduced' | 'inputTokensConsidered'> | undefined,
-): string {
-  const input = metrics?.inputTokensConsidered ?? 0;
-  if (input <= 0) return '0%';
-  const percent = Math.min(100, Math.max(0, (metrics?.tokensReduced ?? 0) / input * 100));
-  return `${percent.toFixed(percent >= 10 ? 1 : 2).replace(/\.?0+$/, '')}%`;
-}
-
-export function secondwindSessionSummary(
-  session: SecondwindSessionSavings,
-  index: number,
-): string {
-  const estimate = session.estimatedTokenRequests > 0 ? '~' : '';
-  return `${index + 1}. session ${session.sessionHash.slice(0, 8)}`
-    + ` · ${estimate}${compactNumber(session.tokensReduced)} tokens`
-    + ` (${secondwindPercentSaved(session)} of tool output saved)`
-    + ` · ${formatUsd(session.estimatedSavingsUsd)} estimated savings`
-    + ` · ${session.requests} req`;
-}
-
-export function accountDisplayName(account: Pick<Account, 'email'>): string {
-  return account.email ?? 'Email unavailable';
-}
-
-export function deviceCodeInstruction({ userCode }: DeviceCodePrompt): string {
-  return `Enter code ${userCode} in the browser.`;
-}
-
-function startOfDay(date: Date): Date {
-  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
-}
-
-function startOfWeek(date: Date): Date {
-  const day = startOfDay(date);
-  const mondayOffset = (day.getDay() + 6) % 7;
-  day.setDate(day.getDate() - mondayOffset);
-  return day;
-}
-
-export function usageRange(
-  period: UsagePeriod,
-  offset = 0,
-  now = new Date(),
-): UsageRange {
-  let start: Date;
-  let end: Date;
-  let label: string;
-  if (period === 'day') {
-    start = startOfDay(now);
-    start.setDate(start.getDate() + offset);
-    end = new Date(start);
-    end.setDate(end.getDate() + 1);
-    label = start.toLocaleDateString(undefined, {
-      weekday: 'short',
-      month: 'short',
-      day: 'numeric',
-      year: 'numeric',
-    });
-  } else if (period === 'week') {
-    start = startOfWeek(now);
-    start.setDate(start.getDate() + offset * 7);
-    end = new Date(start);
-    end.setDate(end.getDate() + 7);
-    const inclusiveEnd = new Date(end);
-    inclusiveEnd.setDate(inclusiveEnd.getDate() - 1);
-    label = `${start.toLocaleDateString(undefined, {
-      month: 'short',
-      day: 'numeric',
-    })} – ${inclusiveEnd.toLocaleDateString(undefined, {
-      month: 'short',
-      day: 'numeric',
-      year: 'numeric',
-    })}`;
-  } else {
-    start = new Date(now.getFullYear(), now.getMonth() + offset, 1);
-    end = new Date(start.getFullYear(), start.getMonth() + 1, 1);
-    label = start.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
-  }
-  return { period, offset, start, end, label, bucketMinutes: 60 };
-}
-
-export function cyclePeriod(
-  period: UsagePeriod,
-  direction: 1 | -1,
-): UsagePeriod {
-  const index = PERIODS.indexOf(period);
-  return PERIODS[(index + direction + PERIODS.length) % PERIODS.length]!;
-}
-
-export function compactNumber(value: number): string {
-  return new Intl.NumberFormat('en-US', {
-    notation: 'compact',
-    maximumFractionDigits: 1,
-  }).format(value);
-}
-
-export function formatUsd(value: number): string {
-  if (value === 0) return '$0.00';
-  if (value < 0.01) return `$${value.toFixed(4)}`;
-  if (value < 1) return `$${value.toFixed(3)}`;
-  return `$${value.toFixed(2)}`;
-}
 
 function formatLatency(value: number): string {
   if (value < 1) return `${value.toFixed(2)}ms`;
   if (value < 100) return `${value.toFixed(1)}ms`;
   return `${Math.round(value)}ms`;
-}
-
-function sampledValues(values: number[], width: number): number[] {
-  if (values.length <= width) return values;
-  return Array.from({ length: width }, (_, index) => {
-    const start = Math.floor(index * values.length / width);
-    const end = Math.max(start + 1, Math.floor((index + 1) * values.length / width));
-    return values.slice(start, end).reduce((sum, value) => sum + value, 0);
-  });
-}
-
-function axisDate(date: Date, period: UsagePeriod): string {
-  return period === 'day'
-    ? date.toLocaleTimeString(undefined, { hour: 'numeric' })
-    : date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-}
-
-export function lineChart(
-  values: number[],
-  range: Pick<UsageRange, 'start' | 'end' | 'period'>,
-  options: {
-    width?: number;
-    height?: number;
-    formatY?: (value: number) => string;
-  } = {},
-): string[] {
-  const width = options.width ?? CHART_WIDTH;
-  const height = options.height ?? CHART_HEIGHT;
-  const formatY = options.formatY ?? compactNumber;
-  const sampled = sampledValues(values, width);
-  const padded = sampled.length === 0 ? [0] : sampled;
-  const max = Math.max(0, ...padded);
-  const plotWidth = Math.max(1, padded.length);
-  const grid = Array.from(
-    { length: height },
-    () => Array.from({ length: plotWidth }, () => ' '),
-  );
-  padded.forEach((value, index) => {
-    const normalized = max > 0 ? Math.max(0, Math.min(1, value / max)) : 0;
-    const row = height - 1 - Math.round(normalized * (height - 1));
-    grid[row]![index] = '●';
-  });
-  const yLabelWidth = Math.max(
-    formatY(max).length,
-    formatY(max / 2).length,
-    formatY(0).length,
-  );
-  const lines = grid.map((row, index) => {
-    const value = max * (height - 1 - index) / Math.max(1, height - 1);
-    const showLabel = index === 0 || index === Math.floor((height - 1) / 2) || index === height - 1;
-    const label = showLabel ? formatY(value).padStart(yLabelWidth) : ' '.repeat(yLabelWidth);
-    return `${label} ┤${row.join('')}`;
-  });
-  lines.push(`${' '.repeat(yLabelWidth)} └${'─'.repeat(plotWidth)}`);
-  const middle = new Date((range.start.getTime() + range.end.getTime()) / 2);
-  const startLabel = axisDate(range.start, range.period);
-  const middleLabel = axisDate(middle, range.period);
-  const endLabel = axisDate(new Date(range.end.getTime() - 1), range.period);
-  const innerWidth = Math.max(
-    plotWidth,
-    startLabel.length + middleLabel.length + endLabel.length + 2,
-  );
-  const leftGap = Math.max(1, Math.floor((innerWidth - startLabel.length - middleLabel.length - endLabel.length) / 2));
-  const rightGap = Math.max(1, innerWidth - startLabel.length - middleLabel.length - endLabel.length - leftGap);
-  lines.push(
-    `${' '.repeat(yLabelWidth + 2)}${startLabel}${' '.repeat(leftGap)}${middleLabel}${' '.repeat(rightGap)}${endLabel}`,
-  );
-  return lines;
 }
 
 function duration(seconds: number): string {
@@ -831,7 +492,7 @@ function Dashboard(): React.ReactNode {
         return;
       }
       if (input === ' ' && models[selectedModelIndex]) {
-        const model = models[selectedModelIndex]!;
+        const model = models[selectedModelIndex];
         setPendingModelChange({
           modelId: model.modelId,
           name: model.alias ?? model.name,
@@ -850,7 +511,7 @@ function Dashboard(): React.ReactNode {
         return;
       }
       if (input === 'x' && accounts[selectedIndex]) {
-        const account = accounts[selectedIndex]!;
+        const account = accounts[selectedIndex];
         if (pendingLogoutId === account.id) {
           logout(account);
         } else {
@@ -867,8 +528,8 @@ function Dashboard(): React.ReactNode {
         setSelectedIndex(index => Math.max(0, index - 1));
         return;
       }
-      if (key.return && accounts[selectedIndex] && !accounts[selectedIndex]!.selected) {
-        const account = accounts[selectedIndex]!;
+      if (key.return && accounts[selectedIndex] && !accounts[selectedIndex].selected) {
+        const account = accounts[selectedIndex];
         if (accountAction) return;
         setAccountAction(true);
         refreshSequence.current += 1;
@@ -897,7 +558,7 @@ function Dashboard(): React.ReactNode {
       daemonControlRequest('/v1/service/restart', { method: 'POST' })
         .then(() => setMessage('Restart requested; reconnecting…'))
         .catch(error => setMessage(error instanceof Error ? error.message : String(error)));
-      return;
+
     }
   });
 
@@ -1214,39 +875,41 @@ function Dashboard(): React.ReactNode {
             <Text dimColor>Press Enter to confirm; any other key cancels.</Text>
           </Box>
         )}
+        {secondwind && (
         <Box borderStyle="round" paddingX={1} flexDirection="column">
           <Text bold>Lifetime applied savings</Text>
           <Text>
-            {secondwindTokenSummary(secondwind?.lifetime)}
-            {' · '}{secondwindPercentSaved(secondwind?.lifetime)} of tool-output tokens saved
-            {' · '}estimated API-equivalent savings {formatUsd(secondwind?.lifetime?.estimatedSavingsUsd ?? 0)}
+            {secondwindTokenSummary(secondwind.lifetime)}
+            {' · '}{secondwindPercentSaved(secondwind.lifetime)} of tool-output tokens saved
+            {' · '}estimated API-equivalent savings {formatUsd(secondwind.lifetime.estimatedSavingsUsd)}
           </Text>
           <Text dimColor>
-            {secondwind?.lifetime?.requests ?? 0} requests
-            {' · '}{secondwind?.lifetime?.blocksRewritten ?? 0} blocks rewritten
+            {secondwind.lifetime.requests} requests
+            {' · '}{secondwind.lifetime.blocksRewritten} blocks rewritten
             {' · '}tracking begins with this dashboard version
           </Text>
-          {((secondwind?.lifetime?.savedInputTokens ?? 0)
-            + (secondwind?.lifetime?.savedCachedInputTokens ?? 0)
-            + (secondwind?.lifetime?.savedCacheWriteTokens ?? 0)) > 0
+          {(secondwind.lifetime.savedInputTokens
+            + secondwind.lifetime.savedCachedInputTokens
+            + secondwind.lifetime.savedCacheWriteTokens) > 0
             ? (
                 <Text dimColor>
                   Cache-aware savings attribution is available for this portion.
                 </Text>
               )
-            : (secondwind?.lifetime?.estimatedSavingsUsd ?? 0) > 0 && (
+            : secondwind.lifetime.estimatedSavingsUsd > 0 && (
                 <Text dimColor>
                   Historical total predates cache-attribution tracking.
                 </Text>
               )}
           <Text bold>Top sessions this daemon run</Text>
-          {(secondwind?.topSessions?.length ?? 0) === 0
+          {secondwind.topSessions.length === 0
             ? <Text dimColor>No applied session savings yet.</Text>
-            : secondwind!.topSessions!.map((session, index) => (
+            : secondwind.topSessions.map((session, index) => (
                 <Text key={session.sessionHash}>{secondwindSessionSummary(session, index)}</Text>
               ))}
           <Text dimColor>Parent sessions include subagent and workflow traffic.</Text>
         </Box>
+        )}
         <Box borderStyle="round" paddingX={1} flexDirection="column">
           {metricLine('Applied', secondwind?.applied, 'estimated savings')}
           <Text> </Text>

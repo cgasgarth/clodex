@@ -30,7 +30,7 @@ export function providersForPicker(providers: LocalProvider[]): LocalProvider[] 
 export async function resolveLocalProviderApiKey(provider: LocalProvider): Promise<string | null> {
   if (provider.authRef === 'none:anonymous' || provider.authType === 'none') return '';
 
-  const direct = provider.apiKey?.trim();
+  const direct = provider.apiKey.trim();
   if (direct) return direct;
 
   const template = getTemplateById(provider.id);

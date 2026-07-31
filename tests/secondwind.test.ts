@@ -18,8 +18,11 @@ function toolRequest(content: string): Record<string, unknown> {
 }
 
 describe('Secondwind daemon service', () => {
-  it('defaults to off and does not load the optimizer', async () => {
-    const createSession = vi.fn();
+  it('defaults to on and loads the optimizer', async () => {
+    const createSession = vi.fn(async () => ({
+      rewrite: (request: Record<string, unknown>) => ({ request }),
+      close: () => {},
+    }));
     const service = new SecondwindService({ createSession });
     const body = Buffer.from(JSON.stringify(toolRequest('unchanged')));
 
@@ -29,11 +32,11 @@ describe('Secondwind daemon service', () => {
       sessionId: 'session-1',
       modelId: 'gpt-5.6-sol',
     })).toBe(body);
-    expect(createSession).not.toHaveBeenCalled();
+    expect(createSession).toHaveBeenCalledTimes(1);
     expect(service.snapshot()).toMatchObject({
-      mode: 'off',
-      loaded: false,
-      applied: { requests: 0 },
+      mode: 'on',
+      loaded: true,
+      applied: { requests: 1 },
       shadow: { requests: 0 },
     });
   });
@@ -509,30 +512,29 @@ describe('Secondwind daemon service', () => {
   });
 
   it('loads the real native package and compresses structured Anthropic tool output', async () => {
-    const records = Array.from({ length: 400 }, (_, index) => ({
-      id: index,
-      path: `file-${index}.txt`,
-      state: index % 2 ? 'open' : 'closed',
-      owner: `team-${index % 5}`,
-    }));
-    const request = toolRequest(JSON.stringify(records));
-    const body = Buffer.from(JSON.stringify(request));
-    const service = new SecondwindService({ initialMode: 'on' });
-
-    const rewritten = await service.rewrite({
-      body,
-      request,
-      sessionId: 'native-smoke',
-      modelId: 'gpt-5.6-sol',
+    const child = Bun.spawn({
+      cmd: [process.execPath, 'tests/fixtures/secondwind-native-smoke.ts'],
+      cwd: new URL('..', import.meta.url).pathname,
+      stdout: 'pipe',
+      stderr: 'pipe',
     });
-
-    expect(rewritten.length).toBeLessThan(body.length);
-    expect(service.snapshot().applied).toMatchObject({
+    const [exitCode, stdout, stderr] = await Promise.all([
+      child.exited,
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+    ]);
+    expect(exitCode, stderr).toBe(0);
+    const result = JSON.parse(stdout) as {
+      originalBytes: number;
+      rewrittenBytes: number;
+      snapshot: ReturnType<SecondwindService['snapshot']>;
+    };
+    expect(result.rewrittenBytes).toBeLessThan(result.originalBytes);
+    expect(result.snapshot.applied).toMatchObject({
       requests: 1,
       blocksRewritten: 1,
       estimatedTokenRequests: 0,
     });
-    expect(service.snapshot().applied.tokensReduced).toBeGreaterThan(0);
-    service.close();
+    expect(result.snapshot.applied.tokensReduced).toBeGreaterThan(0);
   });
 });

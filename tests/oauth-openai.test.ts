@@ -4,6 +4,7 @@ import {
   refreshOpenAiAccessToken,
   runOpenAiDeviceCodeFlow,
 } from '../src/oauth/openai.js';
+import { asMocked } from './test-helpers.js';
 
 describe('oauth/openai', () => {
   const originalFetch = global.fetch;
@@ -49,7 +50,7 @@ describe('oauth/openai', () => {
 
   describe('refreshOpenAiAccessToken', () => {
     it('returns tokens on success', async () => {
-      vi.mocked(global.fetch).mockResolvedValueOnce({
+      asMocked(global.fetch).mockResolvedValueOnce({
         ok: true,
         json: async () => ({ access_token: 'new_token' }),
       } as Response);
@@ -63,7 +64,7 @@ describe('oauth/openai', () => {
     });
 
     it('throws on non-ok response', async () => {
-      vi.mocked(global.fetch).mockResolvedValueOnce({
+      asMocked(global.fetch).mockResolvedValueOnce({
         ok: false,
         status: 401,
       } as Response);
@@ -75,7 +76,7 @@ describe('oauth/openai', () => {
   describe('runOpenAiDeviceCodeFlow', () => {
     it('handles successful polling loop', async () => {
       // 1. Device initiation response
-      vi.mocked(global.fetch).mockResolvedValueOnce({
+      asMocked(global.fetch).mockResolvedValueOnce({
         ok: true,
         json: async () => ({
           device_auth_id: 'auth_id',
@@ -86,19 +87,19 @@ describe('oauth/openai', () => {
       } as Response);
 
       // 2. First polling attempt: authorization pending (403)
-      vi.mocked(global.fetch).mockResolvedValueOnce({
+      asMocked(global.fetch).mockResolvedValueOnce({
         ok: false,
         status: 403,
       } as Response);
 
       // 3. Second polling attempt: user authorized (200 OK)
-      vi.mocked(global.fetch).mockResolvedValueOnce({
+      asMocked(global.fetch).mockResolvedValueOnce({
         ok: true,
         json: async () => ({ authorization_code: 'auth_code', code_verifier: 'verifier' }),
       } as Response);
 
       // 4. Token exchange response
-      vi.mocked(global.fetch).mockResolvedValueOnce({
+      asMocked(global.fetch).mockResolvedValueOnce({
         ok: true,
         json: async () => ({ access_token: 'final_access_token' }),
       } as Response);
@@ -124,7 +125,7 @@ describe('oauth/openai', () => {
     });
 
     it('throws if device initiation fails', async () => {
-      vi.mocked(global.fetch).mockResolvedValueOnce({
+      asMocked(global.fetch).mockResolvedValueOnce({
         ok: false,
         status: 500,
       } as Response);
@@ -134,13 +135,13 @@ describe('oauth/openai', () => {
 
     it('throws if polling hits an unexpected error (e.g. 500)', async () => {
       // 1. Device initiation
-      vi.mocked(global.fetch).mockResolvedValueOnce({
+      asMocked(global.fetch).mockResolvedValueOnce({
         ok: true,
         json: async () => ({ device_auth_id: 'auth_id', user_code: 'user_code', interval: '1', expires_in: 60 }),
       } as Response);
 
       // 2. Polling fails with 500
-      vi.mocked(global.fetch).mockResolvedValueOnce({
+      asMocked(global.fetch).mockResolvedValueOnce({
         ok: false,
         status: 500,
       } as Response);
@@ -150,13 +151,13 @@ describe('oauth/openai', () => {
 
     it('throws if device authorization times out', async () => {
       // 1. Device initiation (succeeds)
-      vi.mocked(global.fetch).mockResolvedValueOnce({
+      asMocked(global.fetch).mockResolvedValueOnce({
         ok: true,
         json: async () => ({ device_auth_id: 'auth_id', user_code: 'user_code', interval: '1', expires_in: 0 }),
       } as Response);
       
       // 2. Polling loop (fails with 403 authorization pending, but we time out)
-      vi.mocked(global.fetch).mockResolvedValue({
+      asMocked(global.fetch).mockResolvedValue({
         ok: false,
         status: 403,
       } as Response);

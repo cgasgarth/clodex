@@ -103,9 +103,13 @@ export function launchClaude(
     const originalStdoutWrite = process.stdout.write;
     const originalStderrWrite = process.stderr.write;
 
-    const muteWrite = (chunk: string | Uint8Array, encoding?: any, callback?: any) => {
-      if (typeof encoding === 'function') {
-        callback = encoding;
+    const muteWrite = (
+      chunk: string | Uint8Array,
+      encodingOrCallback?: BufferEncoding | ((error?: Error | null) => void),
+      callback?: (error?: Error | null) => void,
+    ) => {
+      if (typeof encodingOrCallback === 'function') {
+        callback = encodingOrCallback;
       }
       if (debugLogPath) {
         try {
@@ -119,8 +123,8 @@ export function launchClaude(
       return true;
     };
 
-    process.stdout.write = muteWrite as any;
-    process.stderr.write = muteWrite as any;
+    process.stdout.write = muteWrite;
+    process.stderr.write = muteWrite;
 
     const restore = () => {
       process.stdout.write = originalStdoutWrite;
@@ -145,7 +149,7 @@ export function launchClaude(
       resolve(code ?? 0);
     });
 
-    child.on('error', (err) => {
+    child.on('error', () => {
       restore();
       resolve(1);
     });

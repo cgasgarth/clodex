@@ -12,13 +12,14 @@ import {
   thinkingProviderOptions,
 } from '../src/provider-factory.js';
 import { VERTEX_ANTHROPIC_NPM } from '../src/constants.js';
+import { restoreTestGlobals, stubTestGlobal } from './test-helpers.js';
 
 async function expectCredentialHeadersStripped(
   fetchImpl: typeof fetch,
   extraHeaders: Record<string, string> = {},
 ): Promise<void> {
   const transport = vi.fn(async () => new Response(null, { status: 204 }));
-  vi.stubGlobal('fetch', transport);
+  stubTestGlobal('fetch', transport);
   try {
     await fetchImpl('https://anonymous.example/v1/messages', {
       headers: {
@@ -64,7 +65,7 @@ async function expectCredentialHeadersStripped(
       }
     }
   } finally {
-    vi.unstubAllGlobals();
+    restoreTestGlobals();
   }
 }
 

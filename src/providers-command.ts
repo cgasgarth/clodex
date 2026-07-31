@@ -185,7 +185,7 @@ export async function runProvidersAuth(providerId: string, method?: ProviderAuth
   return runProvidersAuthWithCleanupState(providerId, method);
 }
 
-export async function runProvidersRefreshModels(providerId?: string): Promise<number> {
+async function runProvidersRefreshModels(providerId?: string): Promise<number> {
   const resolveKey = async (provider: import('./registry/types.js').RegistryProvider) =>
     resolveProviderCredential(provider.id, provider.authRef);
 
@@ -259,7 +259,7 @@ export async function runProvidersRefreshModels(providerId?: string): Promise<nu
   return failed.length > 0 ? 1 : 0;
 }
 
-export async function runProvidersList(): Promise<number> {
+async function runProvidersList(): Promise<number> {
   const entries = await resolveProvidersForDisplay();
   if (entries.length === 0) {
     p.log.info('No providers configured. Run clodex providers add or clodex providers auth openai.');
@@ -329,7 +329,7 @@ async function runTemplateAddFlow(cleanupState?: ProviderCommandCleanupState): P
 async function runProvidersAddWithCleanupState(
   cleanupState?: ProviderCommandCleanupState,
 ): Promise<number> {
-  const choice = await p.select({
+  const choice: unknown = await p.select({
     message: 'Add a provider',
     options: [
       {
@@ -497,7 +497,7 @@ async function runProviderDetail(id: string): Promise<'back' | 'removed'> {
   return code === 0 ? 'removed' : 'back';
 }
 
-export async function runProvidersHub(): Promise<number> {
+async function runProvidersHub(): Promise<number> {
   while (true) {
     const entries = await resolveProvidersForDisplay();
     const options: Array<{ value: string; label: string; hint?: string }> = [

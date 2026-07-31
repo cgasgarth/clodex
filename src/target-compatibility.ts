@@ -31,12 +31,8 @@ export function isTargetCompatibleModel(ctx: TargetCompatibilityContext): Target
     return { compatible: true };
   }
 
-  if (ctx.model.modelFormat === 'openai') {
-    if (ctx.model.npm) return { compatible: true };
-    return { compatible: false, reason: 'OpenAI-format model is missing an SDK provider package' };
-  }
-
-  return { compatible: false, reason: `Unsupported model format: ${ctx.model.modelFormat}` };
+  if (ctx.model.npm) return { compatible: true };
+  return { compatible: false, reason: 'OpenAI-format model is missing an SDK provider package' };
 }
 
 export function routableModelsForTarget(
@@ -53,7 +49,7 @@ export function routableModelsForTarget(
   );
 }
 
-export function providerForTarget(provider: LocalProvider, target: RelayLaunchTarget): LocalProvider {
+function providerForTarget(provider: LocalProvider, target: RelayLaunchTarget): LocalProvider {
   return { ...provider, models: routableModelsForTarget(provider, target) };
 }
 

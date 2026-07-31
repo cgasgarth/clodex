@@ -11,6 +11,7 @@ import { getProxyDebugLogPath } from '../src/trace-log.js';
 import { anthropicMessagesEndpoint, estimateAnthropicInputTokens } from '../src/anthropic-endpoints.js';
 import { withResponsesWebSocketDiagnosticContext } from '../src/oauth/responses-websocket.js';
 import type { LocalProvider, ModelAlias } from '../src/types.js';
+import { asMocked, restoreTestGlobals, stubTestGlobal, waitForCondition } from './test-helpers.js';
 
 vi.mock('../src/oauth/responses-websocket.js', () => {
   const importOriginal = <T>() => importActual<T>('../src/oauth/responses-websocket.js', import.meta.url);
@@ -23,7 +24,7 @@ vi.mock('../src/oauth/responses-websocket.js', () => {
   };
 });
 
-/** POST JSON to a local proxy via node:http (avoids vi.stubGlobal('fetch') interception). */
+/** POST JSON to a local proxy via node:http (avoids stubTestGlobal('fetch') interception). */
 function postToProxy(
   port: number,
   token: string,
@@ -121,7 +122,7 @@ describe('Anthropic endpoint routing', () => {
         usage: { input_tokens: 1, output_tokens: 1 },
       }), { status: 200, headers: { 'Content-Type': 'application/json' } });
     });
-    vi.stubGlobal('fetch', fetchMock);
+    stubTestGlobal('fetch', fetchMock);
     const optimizeRequest = vi.fn(async (context) => Buffer.from(JSON.stringify({
       ...context.request,
       messages: [{ role: 'user', content: 'optimized in endpoint' }],
@@ -170,7 +171,7 @@ describe('Anthropic endpoint routing', () => {
       });
     } finally {
       handle.close();
-      vi.unstubAllGlobals();
+      restoreTestGlobals();
     }
   });
 });
@@ -191,7 +192,7 @@ describe('aliasModelId', () => {
 
 describe('SDK anonymous route handling', () => {
   afterEach(() => {
-    vi.unstubAllGlobals();
+    restoreTestGlobals();
   });
 
   it('does not reject empty upstream keys before SDK routing', async () => {
@@ -242,7 +243,7 @@ describe('SDK anonymous route handling', () => {
       }),
       { status: 200, headers: { 'Content-Type': 'application/json' } },
     ));
-    vi.stubGlobal('fetch', fetchMock);
+    stubTestGlobal('fetch', fetchMock);
 
     const handle = await startProxyCatalog([route], route.aliasId, false);
     try {
@@ -261,7 +262,7 @@ describe('SDK anonymous route handling', () => {
       expect(headers.has('x-api-key')).toBe(false);
     } finally {
       handle.close();
-      vi.unstubAllGlobals();
+      restoreTestGlobals();
     }
   });
 
@@ -286,7 +287,7 @@ describe('SDK anonymous route handling', () => {
         { status: 200, headers: { 'Content-Type': 'application/json' } },
       );
     });
-    vi.stubGlobal('fetch', fetchMock);
+    stubTestGlobal('fetch', fetchMock);
 
     const handle = await startProxy(
       'https://anonymous.example',
@@ -338,14 +339,14 @@ describe('SDK anonymous route handling', () => {
       }
     } finally {
       handle.close();
-      vi.unstubAllGlobals();
+      restoreTestGlobals();
     }
   });
 });
 
 describe('catalog model aliases', () => {
   afterEach(() => {
-    vi.unstubAllGlobals();
+    restoreTestGlobals();
   });
 
   it('rejects unresolved configured model ids without using the default route', async () => {
@@ -359,7 +360,7 @@ describe('catalog model aliases', () => {
       providerId: 'test-provider',
     };
     const fetchMock = vi.fn(async () => new Response('{}', { status: 200 }));
-    vi.stubGlobal('fetch', fetchMock);
+    stubTestGlobal('fetch', fetchMock);
 
     const handle = await startProxyCatalog(
       [route],
@@ -402,7 +403,7 @@ describe('catalog model aliases', () => {
       expect(fetchMock).not.toHaveBeenCalled();
     } finally {
       handle.close();
-      vi.unstubAllGlobals();
+      restoreTestGlobals();
     }
   });
 
@@ -417,7 +418,7 @@ describe('catalog model aliases', () => {
       providerId: 'test-provider',
     };
     const fetchMock = vi.fn(async () => new Response('{}', { status: 200 }));
-    vi.stubGlobal('fetch', fetchMock);
+    stubTestGlobal('fetch', fetchMock);
     const handle = await startProxyCatalog([route], route.aliasId, false);
 
     try {
@@ -434,7 +435,7 @@ describe('catalog model aliases', () => {
       expect(fetchMock).not.toHaveBeenCalled();
     } finally {
       handle.close();
-      vi.unstubAllGlobals();
+      restoreTestGlobals();
     }
   });
 
@@ -473,7 +474,7 @@ describe('catalog model aliases', () => {
       { name: 'ORBIT', providerId: 'second', modelId: 'model-b' },
     ], (providerId, modelId) => routeByTarget.get(`${providerId}:${modelId}`));
     const fetchMock = vi.fn(async () => new Response('{}', { status: 200 }));
-    vi.stubGlobal('fetch', fetchMock);
+    stubTestGlobal('fetch', fetchMock);
     const handle = await startProxyCatalog(
       [defaultRoute, firstRoute, secondRoute],
       defaultRoute.aliasId,
@@ -500,7 +501,7 @@ describe('catalog model aliases', () => {
       expect(fetchMock).not.toHaveBeenCalled();
     } finally {
       handle.close();
-      vi.unstubAllGlobals();
+      restoreTestGlobals();
     }
   });
 
@@ -531,7 +532,7 @@ describe('catalog model aliases', () => {
       JSON.stringify({ type: 'message', model: 'alias-model' }),
       { status: 200, headers: { 'Content-Type': 'application/json' } },
     ));
-    vi.stubGlobal('fetch', fetchMock);
+    stubTestGlobal('fetch', fetchMock);
     const handle = await startProxyCatalog(
       [defaultRoute, aliasRoute],
       defaultRoute.aliasId,
@@ -564,7 +565,7 @@ describe('catalog model aliases', () => {
       expect(fetchMock).toHaveBeenCalledTimes(1);
     } finally {
       handle.close();
-      vi.unstubAllGlobals();
+      restoreTestGlobals();
     }
   });
 
@@ -611,7 +612,7 @@ describe('catalog model aliases', () => {
       JSON.stringify({ id: 'msg_1', type: 'message', role: 'assistant', model: 'solver-v1', content: [], usage: { input_tokens: 1, output_tokens: 1 } }),
       { status: 200, headers: { 'Content-Type': 'application/json' } },
     ));
-    vi.stubGlobal('fetch', fetchMock);
+    stubTestGlobal('fetch', fetchMock);
 
     const handle = await startProxyCatalog(
       [defaultRoute, aliasTarget!],
@@ -725,7 +726,7 @@ describe('token counting', () => {
       status: 200,
       headers: { 'Content-Type': 'application/json' },
     }));
-    vi.stubGlobal('fetch', fetchMock);
+    stubTestGlobal('fetch', fetchMock);
     const route: ProxyRoute = {
       aliasId: 'clodex:anthropic:sonnet',
       realModelId: 'claude-sonnet-4-6',
@@ -753,7 +754,7 @@ describe('token counting', () => {
       );
     } finally {
       handle.close();
-      vi.unstubAllGlobals();
+      restoreTestGlobals();
     }
   });
 });
@@ -818,7 +819,7 @@ describe('translated request cancellation', () => {
       await upstreamReceived;
       controller.abort();
 
-      await vi.waitFor(() => {
+      await waitForCondition(() => {
         const entries = readFileSync(inferenceLogPath, 'utf8').trim().split('\n').map(line => JSON.parse(line));
         expect(entries).toContainEqual(expect.objectContaining({
           event: 'translation_cancelled',
@@ -1598,7 +1599,7 @@ describe('SDK translated error logging', () => {
 
 describe('anthropic passthrough debug logging', () => {
   afterEach(() => {
-    vi.unstubAllGlobals();
+    restoreTestGlobals();
     vi.clearAllMocks();
   });
 
@@ -1615,7 +1616,7 @@ describe('anthropic passthrough debug logging', () => {
       providerData: {},
     };
 
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+    stubTestGlobal('fetch', vi.fn().mockResolvedValue({
       ok: false,
       status: 429,
       headers: { get: () => 'application/json' },
@@ -1653,7 +1654,7 @@ describe('anthropic passthrough debug logging', () => {
       },
     };
 
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+    stubTestGlobal('fetch', vi.fn().mockResolvedValue({
       ok: false,
       status: 429,
       headers: { get: () => 'application/json' },
@@ -1669,7 +1670,7 @@ describe('anthropic passthrough debug logging', () => {
     });
 
     handle.close();
-    const [, init] = vi.mocked(fetch).mock.calls[0]!;
+    const [, init] = asMocked(fetch).mock.calls[0]!;
     const headers = init?.headers as Record<string, string>;
     const body = JSON.parse(String(init?.body)) as { metadata?: { user_id?: string } };
     const userId = JSON.parse(body.metadata!.user_id!) as { session_id: string };
@@ -1692,7 +1693,7 @@ describe('anthropic passthrough debug logging', () => {
       },
     };
 
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+    stubTestGlobal('fetch', vi.fn().mockResolvedValue({
       ok: true,
       status: 200,
       headers: { get: () => 'application/json' },
@@ -1710,7 +1711,7 @@ describe('anthropic passthrough debug logging', () => {
     });
 
     handle.close();
-    const [, init] = vi.mocked(fetch).mock.calls[0]!;
+    const [, init] = asMocked(fetch).mock.calls[0]!;
     const body = JSON.parse(String(init?.body)) as { system?: Array<{ type: string; text: string }> };
     expect(body.system?.[0]?.text).toBe('x-anthropic-billing-header: cc_version=2.1.195.0; cc_entrypoint=cli;');
     expect(body.system?.[1]?.text).toBe('You are helpful.');
@@ -1719,7 +1720,7 @@ describe('anthropic passthrough debug logging', () => {
 
 describe('OAuth route credential resolution', () => {
   afterEach(() => {
-    vi.unstubAllGlobals();
+    restoreTestGlobals();
     vi.clearAllMocks();
   });
 
@@ -1736,7 +1737,7 @@ describe('OAuth route credential resolution', () => {
       authType: 'oauth',
       refreshToken: vi.fn(async () => 'oauth-token'),
     };
-    vi.mocked(withResponsesWebSocketDiagnosticContext).mockReturnValueOnce({
+    asMocked(withResponsesWebSocketDiagnosticContext).mockReturnValueOnce({
       id: 'msg-compact',
       type: 'message',
       role: 'assistant',
@@ -1789,7 +1790,7 @@ describe('OAuth route credential resolution', () => {
       providerData: {},
       refreshToken,
     };
-    vi.stubGlobal(
+    stubTestGlobal(
       'fetch',
       vi.fn().mockResolvedValue(
         new Response(JSON.stringify({ type: 'message', content: [] }), {
@@ -1811,7 +1812,7 @@ describe('OAuth route credential resolution', () => {
       expect(response.status).toBe(200);
       expect(refreshToken).toHaveBeenCalledTimes(1);
       expect(route.apiKey).toBe('fresh-oauth-token');
-      const [, init] = vi.mocked(fetch).mock.calls[0]!;
+      const [, init] = asMocked(fetch).mock.calls[0]!;
       expect((init?.headers as Record<string, string>).Authorization).toBe(
         'Bearer fresh-oauth-token',
       );
@@ -1864,7 +1865,7 @@ describe('OAuth route credential resolution', () => {
         );
       },
     );
-    vi.stubGlobal('fetch', fetchMock);
+    stubTestGlobal('fetch', fetchMock);
 
     const handle = await startProxyCatalog([route], route.aliasId, false);
     try {
@@ -1916,7 +1917,7 @@ describe('OAuth route credential resolution', () => {
         headers: { 'Content-Type': 'application/json' },
       },
     ));
-    vi.stubGlobal('fetch', fetchMock);
+    stubTestGlobal('fetch', fetchMock);
 
     const handle = await startProxyCatalog([route], route.aliasId, false);
     try {
@@ -1959,7 +1960,7 @@ describe('OAuth route credential resolution', () => {
         headers: { 'Content-Type': 'application/json' },
       },
     ));
-    vi.stubGlobal('fetch', fetchMock);
+    stubTestGlobal('fetch', fetchMock);
 
     const handle = await startProxyCatalog([route], route.aliasId, false);
     try {

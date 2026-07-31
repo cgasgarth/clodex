@@ -21,7 +21,6 @@ import {
   localProvidersToServerModels,
 } from '../provider-catalog.js';
 import { providersForTarget } from '../target-compatibility.js';
-import { loadRegistry } from '../registry/io.js';
 import type { ServerModelInfo, GatewayModelOptions } from './models.js';
 import {
   upstreamModelId,
@@ -59,7 +58,7 @@ import {
   normalizeModelAliases,
 } from '../model-aliases.js';
 
-export interface ServerRunConfig {
+interface ServerRunConfig {
   exposedProviders: string[] | null;
   maskGatewayIds: boolean;
   favoritesOnly: boolean;
@@ -81,7 +80,7 @@ export interface ServerCommandOptions {
   noDiscovery?: boolean;
 }
 
-export function getLocalIps(): Array<{ name: string; address: string }> {
+function getLocalIps(): Array<{ name: string; address: string }> {
   const ifaces = networkInterfaces();
   const result: Array<{ name: string; address: string }> = [];
   for (const [name, iface] of Object.entries(ifaces)) {
@@ -149,7 +148,7 @@ function printModelCatalog(models: ServerModelInfo[], gateway?: GatewayModelOpti
   }
 }
 
-export function providerOptionsFromCatalog(catalog: import('../types.js').LocalProvider[]): ServerProviderOption[] {
+function providerOptionsFromCatalog(catalog: import('../types.js').LocalProvider[]): ServerProviderOption[] {
   const options: ServerProviderOption[] = [];
   for (const provider of providersForTarget(catalog, 'server')) {
     options.push({
@@ -161,7 +160,7 @@ export function providerOptionsFromCatalog(catalog: import('../types.js').LocalP
   return options;
 }
 
-export async function loadServerModels(): Promise<ServerModelInfo[]> {
+async function loadServerModels(): Promise<ServerModelInfo[]> {
   const catalog = await fetchProviderCatalog({ agent: 'server' });
   const models: ServerModelInfo[] = [];
 
@@ -173,7 +172,7 @@ export async function loadServerModels(): Promise<ServerModelInfo[]> {
   return models.map(enrichServerModelReasoning);
 }
 
-export function enrichServerModelReasoning(model: ServerModelInfo): ServerModelInfo {
+function enrichServerModelReasoning(model: ServerModelInfo): ServerModelInfo {
   if (!model.npm || model.modelFormat !== 'openai') return model;
   const caps = getReasoningCapabilities(model.npm, upstreamModelId(model), {
     providerId: model.providerId,
@@ -348,7 +347,7 @@ async function runServerWizard(): Promise<{ runConfig: ServerRunConfig; promptFo
   };
 }
 
-export async function resolveServerUpstreamApiKey(): Promise<string | null> {
+async function resolveServerUpstreamApiKey(): Promise<string | null> {
   const catalog = await fetchProviderCatalog({ agent: 'server' });
   if (catalog.some(provider => provider.apiKey.trim() || provider.models.length > 0)) {
     return 'registry-local';

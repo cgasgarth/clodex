@@ -8,10 +8,10 @@ import {
 export type {
   ReasoningCapabilities,
   ReasoningMetadata,
-  ReasoningMode,
-  ReasoningSource,
-  ReasoningConfidence,
-  ReasoningWireFormat,
+
+
+
+
 } from './provider-factory.js';
 
 export interface ResolveReasoningInput extends ReasoningMetadata {

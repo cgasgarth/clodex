@@ -22,6 +22,7 @@ import {
   PatchApplyError,
   type PatchScriptModelConfig,
 } from '../src/patch-transforms.js';
+import { createHoisted } from './test-helpers.js';
 
 /**
  * The digest a pre-versioning clodex wrote into `patch-state.json`: the bare
@@ -39,7 +40,7 @@ function computeLegacyPatchConfigHash(config: PatchScriptModelConfig): string {
   return createHash('sha256').update(JSON.stringify(canonical)).digest('hex');
 }
 
-const tweakccMocks = vi.hoisted(() => ({
+const tweakccMocks = createHoisted(() => ({
   tryDetectInstallation: vi.fn(),
   readContent: vi.fn(),
   writeContent: vi.fn(),
@@ -436,7 +437,7 @@ describe('PATCH_TRANSFORMS_VERSION', () => {
     const digest = createHash('sha256').update(source).digest('hex');
     expect({ version: PATCH_TRANSFORMS_VERSION, digest }).toEqual({
       version: 4,
-      digest: '26bef06561f37e3eb6dfe228af2c30b3ed5728e5c4d78f96b4bbc57f2954803f',
+      digest: 'd275d9ca744913771591803b07156d8023b7ae9c6cd55b52d65f5ef1f3d73aa1',
     });
   });
 });

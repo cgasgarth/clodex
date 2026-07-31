@@ -37,19 +37,19 @@ const RESPONSES_LITE_HEADER = 'x-openai-internal-codex-responses-lite';
 const TERMINAL_EVENT_TYPES = new Set(['response.completed', 'response.failed', 'response.incomplete']);
 const FAILURE_EVENT_TYPES = new Set(['error', 'response.failed', 'response.incomplete']);
 
-export const RESPONSES_WS_HARD_TTL_MS = 55 * 60_000;
-export const RESPONSES_WS_IDLE_TTL_MS = 30 * 60_000;
-export const RESPONSES_WS_NURSERY_IDLE_TTL_MS = 5 * 60_000;
-export const RESPONSES_WS_MAX_CONNECTIONS = 32;
+const RESPONSES_WS_HARD_TTL_MS = 55 * 60_000;
+const RESPONSES_WS_IDLE_TTL_MS = 30 * 60_000;
+const RESPONSES_WS_NURSERY_IDLE_TTL_MS = 5 * 60_000;
+const RESPONSES_WS_MAX_CONNECTIONS = 32;
 // Claude dynamic workflows permit up to 16 concurrent agents. Retain one
 // unproven head per possible workflow branch so every agent can establish a
 // reusable previous_response_id lineage instead of making the upper half of a
 // full-width workflow fall back to disposable sockets.
-export const RESPONSES_WS_MAX_NURSERY_CONNECTIONS = 16;
-export const RESPONSES_WS_WARM_NURSERY_CONNECTIONS_PER_PARTITION = 2;
-export const RESPONSES_COMPACTION_RETAINED_USER_TOKENS = 64_000;
-export const RESPONSES_COMPACTION_CHECKPOINT_TTL_MS = 30 * 60_000;
-export const RESPONSES_COMPACTION_DURABLE_CHECKPOINT_TTL_MS = 7 * 24 * 60 * 60_000;
+const RESPONSES_WS_MAX_NURSERY_CONNECTIONS = 16;
+const RESPONSES_WS_WARM_NURSERY_CONNECTIONS_PER_PARTITION = 2;
+const RESPONSES_COMPACTION_RETAINED_USER_TOKENS = 64_000;
+const RESPONSES_COMPACTION_CHECKPOINT_TTL_MS = 30 * 60_000;
+const RESPONSES_COMPACTION_DURABLE_CHECKPOINT_TTL_MS = 7 * 24 * 60 * 60_000;
 
 export interface ResponsesWebSocketFetchOptions {
   providerId?: string;
@@ -105,7 +105,11 @@ type RawData = Buffer | ArrayBuffer | Buffer[];
 interface ResponsesWebSocket {
   send(data: string, callback?: (error?: Error) => void): void;
   close(code?: number, reason?: string): void;
-  on(event: string, listener: (...args: any[]) => void): this;
+  on(event: 'open', listener: () => void): this;
+  on(event: 'unexpected-response', listener: (request: unknown, response: import('node:http').IncomingMessage) => void): this;
+  on(event: 'message', listener: (data: RawData) => void): this;
+  on(event: 'error', listener: (error: Error) => void): this;
+  on(event: 'close', listener: (code: number, reason: Buffer) => void): this;
   _socket?: { unref?: () => void };
 }
 
@@ -582,7 +586,7 @@ function canonicalize(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(canonicalize);
   if (!value || typeof value !== 'object') return value;
   const out: JsonObject = {};
-  for (const key of Object.keys(value as JsonObject).sort()) {
+  for (const key of Object.keys(value).sort()) {
     const child = (value as JsonObject)[key];
     if (child !== undefined) out[key] = canonicalize(child);
   }
@@ -710,7 +714,7 @@ function normalizeToolCallJson(value: unknown): unknown {
     : record.type === 'custom_tool_call' ? 'input' : undefined;
   if (jsonField && typeof record[jsonField] === 'string') {
     try {
-      out[jsonField] = canonicalJson(JSON.parse(record[jsonField] as string));
+      out[jsonField] = canonicalJson(JSON.parse(record[jsonField]));
     } catch {
       // A malformed/non-JSON custom-tool input must still match byte-for-byte.
     }
@@ -845,7 +849,7 @@ function truncateRetainedText(text: string, maxTokens: number): string {
   return `${head}${marker}${tail}`;
 }
 
-function truncateRetainedUserMessage(value: unknown, maxTokens: number): unknown | undefined {
+function truncateRetainedUserMessage(value: unknown, maxTokens: number): unknown {
   if (!value || typeof value !== 'object' || maxTokens <= 0) return undefined;
   const record = value as JsonObject;
   if (record.role !== 'user' || !Array.isArray(record.content)) return undefined;
@@ -1741,6 +1745,7 @@ function retryTransportFailure(
   ctx: RequestContext,
   diagnosticDetails: Record<string, unknown>,
 ): boolean {
+  const contextIsClosed = () => ctx.closed;
   if (
     ctx.closed
     || entry.current !== ctx
@@ -1760,7 +1765,7 @@ function retryTransportFailure(
     ...diagnosticDetails,
   });
   deleteEntry(entry);
-  if (ctx.closed) {
+  if (contextIsClosed()) {
     ctx.transportRetryPending = false;
     entry.debug('transport retry cancelled before replacement');
     emitContextDiagnostic(entry, ctx, {
@@ -1771,7 +1776,7 @@ function retryTransportFailure(
   }
   resetContextForRetry(ctx);
   const replacement = ctx.createReplacement();
-  if (ctx.closed) {
+  if (contextIsClosed()) {
     ctx.transportRetryPending = false;
     deleteEntry(replacement);
     replacement.debug('transport retry cancelled while creating replacement');
@@ -2044,7 +2049,6 @@ function handleSocketMessage(entry: ConnectionEntry, data: RawData): void {
   const willRecoverOverflow = responseIsContextLengthError(event)
     && !ctx.emittedModelData
     && !ctx.overflowRetried
-    && !ctx.overflowRecoveryPending
     && ctx.recoverContextOverflow !== undefined;
   if (errorCode === 'websocket_connection_limit_reached' && !ctx.emittedModelData) {
     const retryAfterSeconds = clampRetryAfterSeconds(responseRetryAfterSeconds(event));
@@ -2306,7 +2310,7 @@ function createConnection(
     const ctx = entry.current;
     debug(`connection=${entry.debugId} closed code=${code} in_flight=${Boolean(ctx && !ctx.closed)}`);
     if (ctx && !ctx.closed) {
-      const reasonText = reason?.length ? reason.toString('utf8') : '';
+      const reasonText = reason.length ? reason.toString('utf8') : '';
       const suffix = reasonText ? `: ${reasonText}` : '';
       handleTransportFailure(entry, ctx, `WebSocket closed (${code})${suffix}`, {
         source: 'socket_close',
@@ -2347,7 +2351,7 @@ export function createResponsesWebSocketFetch(
 
   return (async (requestUrl, init): Promise<Response> => {
     const WebSocket = options.webSocketConstructor
-      ?? loadBunNativeWebSocket() as unknown as WebSocketConstructor;
+      ?? loadBunNativeWebSocket();
     const proxyUrl = outboundProxyUrlForTarget(wsUrl);
     const headers = toHeaderRecord(init?.headers);
     headers['OpenAI-Beta'] = CODEX_RESPONSES_WEBSOCKETS_BETA;
@@ -2429,7 +2433,7 @@ export function createResponsesWebSocketFetch(
               ? event => emitDiagnostic(options, event, diagnosticCorrelation)
               : undefined,
             createReplacement: () => createConnection(
-              WebSocket as unknown as WebSocketConstructor,
+              WebSocket,
               wsUrl,
               headers,
               Boolean(partitionKey),
@@ -2465,6 +2469,7 @@ export function createResponsesWebSocketFetch(
       });
       const compactTimeoutMs = options.compactTimeoutMs ?? RESPONSES_COMPACT_TIMEOUT_MS;
       let timedOut = false;
+      const didTimeOut = () => timedOut;
       const compactTimer = setTimeout(() => {
         timedOut = true;
         if (!ctx || ctx.closed) return;
@@ -2477,7 +2482,7 @@ export function createResponsesWebSocketFetch(
       } finally {
         clearTimeout(compactTimer);
       }
-      if (timedOut) {
+      if (didTimeOut()) {
         throw new ResponsesCompactionError(
           `Native compaction trigger exceeded ${Math.round(compactTimeoutMs / 1000)}s`,
           undefined,
@@ -2526,7 +2531,7 @@ export function createResponsesWebSocketFetch(
     if (!selected && forceCompaction) {
       const compactInstruction = inputArray(payload).at(-1);
       const agentCandidates = idleCandidates.filter(
-        entry => entry.claudeAgentId === diagnosticCorrelation?.claudeAgentId,
+        entry => entry.claudeAgentId === diagnosticCorrelation.claudeAgentId,
       );
       if (
         agentCandidates.length === 1
@@ -2556,6 +2561,7 @@ export function createResponsesWebSocketFetch(
     const compactionEnvelopeCount = claudeCompactionEnvelopeOccurrenceCount(payload);
     const anchored = selectedMatch?.mode === 'claude_compaction_summary'
       || checkpointMatch?.mode === 'claude_compaction_summary';
+    const hasCompacted = () => compacted;
     if (
       compactionEnvelopeCount > 0
       && !anchored
@@ -2850,7 +2856,7 @@ export function createResponsesWebSocketFetch(
       compactThreshold !== undefined
       && compactionReason
       && inputArray(payload).length > 0
-      && !compacted
+      && !hasCompacted()
       && !terminalOverflowReason
     ) {
       if (selected && selectedDelta) {
@@ -3037,7 +3043,7 @@ export function createResponsesWebSocketFetch(
       if (forceCompaction && compactedInputBase && checkpointKey) {
         decision = 'claude_compaction_checkpoint';
       }
-    } else if (selected && selectedDelta) {
+    } else if (selected && selectedDelta && selectedMatch) {
       sendPayload = { ...payload, input: selectedDelta, previous_response_id: selected.responseId };
       continued = true;
       compactedInputBase = selected.compactedInput
@@ -3272,6 +3278,7 @@ export function createResponsesWebSocketFetch(
       entry: ConnectionEntry,
       ctx: RequestContext,
     ): Promise<void> => {
+      const contextIsClosed = () => ctx.closed;
       if (ctx.closed || entry.current !== ctx || ctx.emittedModelData || ctx.overflowRetried) return;
       let recovered = false;
       try {
@@ -3286,7 +3293,7 @@ export function createResponsesWebSocketFetch(
           ),
         });
       }
-      if (ctx.closed || entry.current !== ctx) return;
+      if (contextIsClosed() || entry.current !== ctx) return;
       if (!recovered || !retryPayload || !compactedInputBase) {
         ctx.overflowRecoveryPending = false;
         ctx.overflowRetried = true;
@@ -3321,7 +3328,7 @@ export function createResponsesWebSocketFetch(
         contextWindow,
       });
       deleteEntry(entry);
-      if (ctx.closed) return;
+      if (contextIsClosed()) return;
       resetContextForRetry(ctx);
       const replacement = ctx.createReplacement();
       dispatchContext(replacement, ctx);
@@ -3364,7 +3371,7 @@ export function createResponsesWebSocketFetch(
             ? event => emitDiagnostic(options, event, diagnosticCorrelation)
             : undefined,
           createReplacement: () => createConnection(
-            WebSocket as unknown as WebSocketConstructor,
+            WebSocket,
             wsUrl,
             headers,
             persistent,
@@ -3379,7 +3386,7 @@ export function createResponsesWebSocketFetch(
         activeContext = ctx;
 
         const entry = selected ?? createConnection(
-          WebSocket as unknown as WebSocketConstructor,
+          WebSocket,
           wsUrl,
           headers,
           persistent,

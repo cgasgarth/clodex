@@ -49,7 +49,7 @@ export function isClaudeMachineReadableOutput(args: string[]): boolean {
   return inFmt === 'stream-json';
 }
 
-export function wantsCleanAgentStdout(agent: 'claude', childArgs: string[]): boolean {
+export function wantsCleanAgentStdout(_agent: 'claude', childArgs: string[]): boolean {
   return isClaudeMachineReadableOutput(childArgs);
 }
 

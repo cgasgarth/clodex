@@ -24,8 +24,9 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
+import { createHoisted } from './test-helpers.js';
 
-const hoisted = vi.hoisted(() => ({
+const hoisted = createHoisted(() => ({
   sentinel: '\n#__CLAUDE_BUNDLE__\n',
   /** Paths passed to readContent, so tests can pin how MANY extractions ran. */
   readContentCalls: [] as string[],

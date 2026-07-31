@@ -18,13 +18,10 @@ import type { ApiProcessingMode } from './daemon/api-pricing.js';
 const DIR_MODE = 0o700;
 const FILE_MODE = 0o600;
 
-export const CLAUDE_DEBUG_LOG = 'claude-debug.log';
-export const PROXY_DEBUG_LOG = 'proxy-debug.log';
-export const CODEX_PROXY_DEBUG_LOG = 'codex-proxy-debug.log';
-export const GEMINI_PROXY_DEBUG_LOG = 'gemini-proxy-debug.log';
-export const PROVIDER_DEBUG_LOG = 'provider-debug.log';
-export const UI_DEBUG_LOG = 'ui-debug.log';
-export const INFERENCE_REQUEST_LOG = 'inference-requests.jsonl';
+const CLAUDE_DEBUG_LOG = 'claude-debug.log';
+const PROXY_DEBUG_LOG = 'proxy-debug.log';
+const PROVIDER_DEBUG_LOG = 'provider-debug.log';
+const INFERENCE_REQUEST_LOG = 'inference-requests.jsonl';
 export const INFERENCE_PROGRESS_INTERVAL_MS = 30_000;
 const INFERENCE_SESSION_DIR = 'sessions';
 let inferenceSessionSequence = 0;
@@ -36,7 +33,7 @@ function safeClaudeSessionId(value: unknown): string | undefined {
     : undefined;
 }
 
-export function ensureLogsDir(): string {
+function ensureLogsDir(): string {
   const dir = getLogsPath();
   mkdirSync(dir, { recursive: true, mode: DIR_MODE });
   try {
@@ -47,7 +44,7 @@ export function ensureLogsDir(): string {
   return dir;
 }
 
-export function getClaudeDebugLogPath(): string {
+function getClaudeDebugLogPath(): string {
   return join(ensureLogsDir(), CLAUDE_DEBUG_LOG);
 }
 
@@ -60,20 +57,8 @@ export function getProxyDebugLogPath(): string {
   return join(ensureLogsDir(), PROXY_DEBUG_LOG);
 }
 
-export function getCodexProxyDebugLogPath(): string {
-  return join(ensureLogsDir(), CODEX_PROXY_DEBUG_LOG);
-}
-
-export function getGeminiProxyDebugLogPath(): string {
-  return join(ensureLogsDir(), GEMINI_PROXY_DEBUG_LOG);
-}
-
 export function getProviderDebugLogPath(): string {
   return join(ensureLogsDir(), PROVIDER_DEBUG_LOG);
-}
-
-export function getUiDebugLogPath(): string {
-  return join(ensureLogsDir(), UI_DEBUG_LOG);
 }
 
 export function getInferenceRequestLogPath(): string {
@@ -143,6 +128,28 @@ function inlineSystemPreview(messages: unknown): string | undefined {
   return undefined;
 }
 
+function summarizeMessageContent(
+  role: string,
+  content: unknown,
+): { preview?: string; blockSummary?: string } {
+  if (typeof content === 'string') return { preview: content };
+  if (!Array.isArray(content)) return {};
+  const blocks = content.filter(
+    (block): block is Record<string, unknown> => Boolean(block && typeof block === 'object'),
+  );
+  const text = blocks
+    .filter(block => block.type === 'text' && typeof block.text === 'string')
+    .map(block => block.text as string)
+    .join(' ');
+  if (text.trim()) return { preview: text };
+  const blockTypes = [...new Set(
+    blocks.map(block => typeof block.type === 'string' ? block.type : 'unknown'),
+  )];
+  return blockTypes.length > 0
+    ? { blockSummary: `${role}: [${blockTypes.join(', ')}]` }
+    : {};
+}
+
 export function getLatestMessagePreview(messages: unknown, system?: unknown): string | undefined {
   let blockSummary: string | undefined;
   if (Array.isArray(messages) && messages.length > 0) {
@@ -150,28 +157,11 @@ export function getLatestMessagePreview(messages: unknown, system?: unknown): st
     if (message && typeof message === 'object') {
       const record = message as Record<string, unknown>;
       const role = typeof record.role === 'string' ? record.role : 'message';
-      const content = record.content;
-      let summary: string | undefined;
-
-      if (typeof content === 'string') {
-        summary = content;
-      } else if (Array.isArray(content)) {
-        const text = content
-          .filter((block): block is Record<string, unknown> => Boolean(block && typeof block === 'object'))
-          .filter(block => block.type === 'text' && typeof block.text === 'string')
-          .map(block => block.text as string)
-          .join(' ');
-        if (text.trim()) {
-          summary = text;
-        } else {
-          const blockTypes = [...new Set(content
-            .filter((block): block is Record<string, unknown> => Boolean(block && typeof block === 'object'))
-            .map(block => typeof block.type === 'string' ? block.type : 'unknown'))];
-          if (blockTypes.length > 0) blockSummary = `${role}: [${blockTypes.join(', ')}]`;
-        }
-      }
-
-      const compact = summary ? compactLogValue(summary, REQUEST_PREVIEW_MAX) : '';
+      const summary = summarizeMessageContent(role, record.content);
+      blockSummary = summary.blockSummary;
+      const compact = summary.preview
+        ? compactLogValue(summary.preview, REQUEST_PREVIEW_MAX)
+        : '';
       if (compact) return `${role}: ${compact}`;
     }
   }
@@ -214,7 +204,7 @@ export interface InferenceResponseErrorLogEntry {
   recoveryAction?: InferenceRecoveryAction;
 }
 
-export type InferenceRecoveryAction =
+type InferenceRecoveryAction =
   | 'client_retry_request'
   | 'client_auto_retry_turn'
   | 'client_retry_turn'
@@ -226,7 +216,7 @@ export interface InferenceRouteUnavailableLogEntry {
   statusCode: number;
 }
 
-export type InferenceResponseLifecycleEvent =
+type InferenceResponseLifecycleEvent =
   | 'translation_dispatched'
   | 'translation_started'
   | 'translation_progress'
@@ -256,7 +246,7 @@ export type InferenceFailureSource =
   | 'adapter_response_aborted'
   | 'adapter_response_close';
 
-export type InferenceTerminationSource =
+type InferenceTerminationSource =
   | 'downstream_client'
   | 'local_shutdown'
   | 'upstream_failure';
@@ -300,7 +290,7 @@ export interface InferenceResponseLifecycleLogEntry {
   cancellationReason?: 'downstream_client_abort';
 }
 
-export type ProxyLifecycleEvent =
+type ProxyLifecycleEvent =
   | 'proxy_started'
   | 'proxy_stopping'
   | 'proxy_stopped'
@@ -368,19 +358,24 @@ function canonicalDiagnosticValue(value: unknown): unknown {
   );
 }
 
+function stringifyDiagnostic(value: unknown): string | undefined {
+  const serialized: unknown = JSON.stringify(value);
+  return typeof serialized === 'string' ? serialized : undefined;
+}
+
 function diagnosticHash(value: unknown): string {
   return createHash('sha256')
-    .update(JSON.stringify(canonicalDiagnosticValue(value)) ?? 'undefined')
+    .update(stringifyDiagnostic(canonicalDiagnosticValue(value)) ?? 'undefined')
     .digest('hex')
     .slice(0, 16);
 }
 
 function diagnosticBytes(value: unknown): number {
-  return Buffer.byteLength(JSON.stringify(value) ?? '');
+  return Buffer.byteLength(stringifyDiagnostic(value) ?? '');
 }
 
 /** Preserve every inbound header except credential-bearing values. */
-export function sanitizeDiagnosticHeaders(
+function sanitizeDiagnosticHeaders(
   headers: Record<string, string | string[] | undefined>,
 ): Record<string, string | string[]> {
   const out: Record<string, string | string[]> = {};
@@ -408,7 +403,7 @@ function contentKinds(content: unknown): string[] {
  * fields. Hashes make rewinds and harness requests comparable without writing
  * message, system-prompt, tool-description, schema, or tool-result content.
  */
-export function summarizeDiagnosticRequestBody(body: Record<string, unknown>): Record<string, unknown> {
+function summarizeDiagnosticRequestBody(body: Record<string, unknown>): Record<string, unknown> {
   const parameters = Object.fromEntries(
     Object.entries(body).filter(([key]) => !CONVERSATION_BODY_FIELDS.has(key)),
   );
@@ -634,12 +629,6 @@ export function writeInferenceRouteUnavailableLog(
     statusCode: entry.statusCode,
   }));
   publishInferenceTrace({ kind: 'route_unavailable', entry });
-}
-
-export function prepareProviderTraceLog(): string {
-  const path = getProviderDebugLogPath();
-  resetTraceLog(path);
-  return path;
 }
 
 /** Reset log file and return a writer that redacts secrets. */

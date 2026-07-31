@@ -95,7 +95,15 @@ export interface ServerHandle {
   close: () => Promise<void>;
 }
 
-type JsonBody = Record<string, any>;
+type JsonBody = Record<string, unknown>;
+
+function isAnthropicBody(body: JsonBody): body is JsonBody & AnthropicRequest {
+  return typeof body.model === 'string' && Array.isArray(body.messages);
+}
+
+function isOpenAiBody(body: JsonBody): body is JsonBody & OpenAiRequest {
+  return typeof body.model === 'string' && Array.isArray(body.messages);
+}
 
 type PLog = (msg: string | (() => string)) => void;
 type LanguageModelCache = Map<string, { apiKey: string; languageModel: LanguageModel }>;
@@ -173,8 +181,9 @@ function openAiEffort(body: JsonBody): string | undefined {
     return body.reasoning_effort.trim();
   }
   const reasoning = body.reasoning;
-  if (reasoning && typeof reasoning === 'object' && typeof reasoning.effort === 'string' && reasoning.effort.trim()) {
-    return reasoning.effort.trim();
+  if (reasoning && typeof reasoning === 'object') {
+    const effort = (reasoning as Record<string, unknown>).effort;
+    if (typeof effort === 'string' && effort.trim()) return effort.trim();
   }
   return undefined;
 }
@@ -282,7 +291,7 @@ async function handleAnthropicMessages(
   plog: PLog,
 ): Promise<void> {
   const body = await readJson(req);
-  if (!body) {
+  if (!body || !isAnthropicBody(body)) {
     sendJson(res, 400, { error: { message: 'Invalid JSON body' } });
     return;
   }
@@ -295,7 +304,7 @@ async function handleAnthropicMessages(
   const requestId = randomUUID();
   const claudeSessionIdHeader = req.headers.get('x-claude-code-session-id') ?? undefined;
   const claudeAgentIdHeader = req.headers.get('x-claude-code-agent-id') ?? undefined;
-  const claudeSessionId = extractClaudeSessionId(body as AnthropicRequest, claudeSessionIdHeader);
+  const claudeSessionId = extractClaudeSessionId(body, claudeSessionIdHeader);
   if (options.webSocketDiagnosticsLogPath) {
     writeWebSocketDiagnosticRequestLog(options.webSocketDiagnosticsLogPath, {
       requestId,
@@ -337,7 +346,7 @@ async function handleAnthropicMessages(
     auditInference(options, {
       requestId,
       modelId: body.model,
-      effort: anthropicEffortFromRequest(body as AnthropicRequest) ?? model.defaultEffort,
+      effort: anthropicEffortFromRequest(body) ?? model.defaultEffort,
       claudeSessionId,
       provider: inferenceProvider(model),
       route: 'passthrough',
@@ -402,7 +411,7 @@ async function handleAnthropicMessages(
     auditInference(options, {
       requestId,
       modelId: body.model,
-      effort: anthropicEffortFromRequest(body as AnthropicRequest) ?? model.defaultEffort,
+      effort: anthropicEffortFromRequest(body) ?? model.defaultEffort,
       claudeSessionId,
       provider: inferenceProvider(model),
       route: 'translated',
@@ -416,9 +425,9 @@ async function handleAnthropicMessages(
     const openAiOAuth = model.npm === '@ai-sdk/openai' && model.authType === 'oauth';
     const estimatedInputTokens = estimateAnthropicInputTokens(body);
     const forceCompaction = openAiOAuth
-      && isClaudeCodeCompactRequest(body as AnthropicRequest);
-    const params = sdkTranslateRequest(body as unknown as AnthropicRequest, model.npm!, {
-      defaultEffort: anthropicEffortFromRequest(body as AnthropicRequest) ? undefined : model.defaultEffort,
+      && isClaudeCodeCompactRequest(body);
+    const params = sdkTranslateRequest(body, model.npm!, {
+      defaultEffort: anthropicEffortFromRequest(body) ? undefined : model.defaultEffort,
       openAiOAuth,
       claudeSessionId,
       reasoningMetadata: {
@@ -437,6 +446,89 @@ async function handleAnthropicMessages(
     // human-readable names ("Grok 4.3 (xAI)") instead of the reversed gateway IDs.
     const responseModelId = getResponseModelId(body.model, model, options);
 
+    const sendSdkFailure = (
+      status: number,
+      retryAfterSeconds: number | undefined,
+      contextLengthExceeded: boolean,
+      clientMessage: string,
+    ): void => {
+      if (!res.headersSent) {
+        if (contextLengthExceeded) {
+          sendJson(res, 400, {
+            type: 'error',
+            error: { type: 'invalid_request_error', message: clientMessage },
+            request_id: requestId,
+          });
+          return;
+        }
+        if (retryAfterSeconds !== undefined) {
+          res.setHeader('retry-after', String(retryAfterSeconds));
+        }
+        sendJson(res, status === 500 ? 502 : status, { error: { message: clientMessage } });
+        return;
+      }
+      const errorType = anthropicErrorType(status);
+      res.write(`event: error\ndata: ${JSON.stringify({
+        type: 'error',
+        error: { type: errorType, message: clientMessage },
+        ...(contextLengthExceeded ? { request_id: requestId } : {}),
+      })}\n\n`);
+      res.end();
+    };
+
+    const sendSdkResponse = async (
+      languageModel: Awaited<ReturnType<typeof getOrInitLanguageModel>>,
+    ): Promise<void> => {
+      if (!clientWantsStream) {
+        const anthropicResponse = await withResponsesWebSocketDiagnosticContext(
+          {
+            requestId,
+            claudeSessionId,
+            claudeAgentId: claudeAgentIdHeader,
+            estimatedInputTokens,
+            forceCompaction,
+          },
+          () => generateAnthropicResponse(
+            languageModel,
+            params,
+            responseModelId,
+            { forceStream: openAiOAuth },
+          ),
+        );
+        sendJson(res, 200, anthropicResponse);
+        return;
+      }
+      const writeStreamChunk = (chunk: string): void => {
+        if (!res.headersSent) {
+          res.writeHead(200, {
+            'Content-Type': 'text/event-stream',
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive',
+          });
+        }
+        res.write(chunk);
+      };
+      await withResponsesWebSocketDiagnosticContext(
+        {
+          requestId,
+          claudeSessionId,
+          claudeAgentId: claudeAgentIdHeader,
+          estimatedInputTokens,
+          forceCompaction,
+        },
+        () => streamAnthropicResponse(
+          languageModel,
+          params,
+          responseModelId,
+          writeStreamChunk,
+          undefined,
+          { initialInputTokens: estimatedInputTokens },
+        ),
+      );
+      if (!res.headersSent) writeStreamChunk('');
+      res.end();
+    };
+
     plog(() => `sdk npm=${model.npm} upstream=${upstreamModelId(model)} responseModel=${responseModelId} stream=${clientWantsStream}`);
 
     let sdkAttempt = 0;
@@ -450,47 +542,7 @@ async function handleAnthropicMessages(
           apiKey,
           options.webSocketDiagnosticsLogPath,
         );
-        if (clientWantsStream) {
-          const writeStreamChunk = (chunk: string) => {
-            if (!res.headersSent) {
-              res.writeHead(200, {
-                'Content-Type': 'text/event-stream',
-                'Cache-Control': 'no-cache',
-                'Connection': 'keep-alive',
-              });
-            }
-            res.write(chunk);
-          };
-          await withResponsesWebSocketDiagnosticContext(
-            {
-              requestId,
-              claudeSessionId,
-              claudeAgentId: claudeAgentIdHeader,
-              estimatedInputTokens,
-              forceCompaction,
-            },
-            () => streamAnthropicResponse(languageModel, params, responseModelId, writeStreamChunk, undefined, {
-              initialInputTokens: estimatedInputTokens,
-            }),
-          );
-          if (!res.headersSent) writeStreamChunk('');
-          res.end();
-        } else {
-          // ChatGPT/Codex OAuth routes only ever answer as SSE (the WebSocket fetch
-          // returns text/event-stream unconditionally), so stream internally and
-          // collect the result instead of issuing a non-streaming SDK request.
-          const anthropicResponse = await withResponsesWebSocketDiagnosticContext(
-            {
-              requestId,
-              claudeSessionId,
-              claudeAgentId: claudeAgentIdHeader,
-              estimatedInputTokens,
-              forceCompaction,
-            },
-            () => generateAnthropicResponse(languageModel, params, responseModelId, { forceStream: openAiOAuth }),
-          );
-          sendJson(res, 200, anthropicResponse);
-        }
+        await sendSdkResponse(languageModel);
         break;
       } catch (err) {
         const message = formatUpstreamError(err);
@@ -520,26 +572,7 @@ async function handleAnthropicMessages(
             )
           : message;
         plog(`sdk error npm=${model.npm} upstream=${upstreamModelId(model)}: ${message}`);
-        if (!res.headersSent) {
-          if (contextLengthExceeded) {
-            sendJson(res, 400, {
-              type: 'error',
-              error: { type: 'invalid_request_error', message: clientMessage },
-              request_id: requestId,
-            });
-          } else {
-            if (retryAfterSeconds !== undefined) res.setHeader('retry-after', String(retryAfterSeconds));
-            sendJson(res, status === 500 ? 502 : status, { error: { message: clientMessage } });
-          }
-        } else {
-          const errorType = anthropicErrorType(status);
-          res.write(`event: error\ndata: ${JSON.stringify({
-            type: 'error',
-            error: { type: errorType, message: clientMessage },
-            ...(contextLengthExceeded ? { request_id: requestId } : {}),
-          })}\n\n`);
-          res.end();
-        }
+        sendSdkFailure(status, retryAfterSeconds, contextLengthExceeded, clientMessage);
         break;
       }
     }
@@ -557,7 +590,7 @@ async function handleOpenAIChatCompletions(
   plog: PLog,
 ): Promise<void> {
   const body = await readJson(req);
-  if (!body) {
+  if (!body || !isOpenAiBody(body)) {
     sendJson(res, 400, { error: { message: 'Invalid JSON body' } });
     return;
   }
@@ -645,7 +678,7 @@ async function handleOpenAIChatCompletions(
   });
   const baseURL = model.modelFormat === 'anthropic' ? model.baseUrl : model.apiBaseUrl;
   const openAiOAuth = npm === '@ai-sdk/openai' && model.authType === 'oauth';
-  const params = translateOpenAiRequest(body as unknown as OpenAiRequest, { openAiOAuth });
+  const params = translateOpenAiRequest(body, { openAiOAuth });
   const clientWantsStream = Boolean(body.stream);
   const responseModelId = getResponseModelId(body.model, model, options);
 

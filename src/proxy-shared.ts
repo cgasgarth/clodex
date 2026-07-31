@@ -48,7 +48,7 @@ const toolSignatureRegistry = new Map<string, string>();
 function rememberToolSignature(rawId: string, thoughtSignature: string): void {
   toolSignatureRegistry.set(rawId, thoughtSignature);
   if (toolSignatureRegistry.size <= MAX_STORED_TOOL_SIGNATURES) return;
-  const oldest = toolSignatureRegistry.keys().next().value as string | undefined;
+  const oldest = toolSignatureRegistry.keys().next().value;
   if (oldest) toolSignatureRegistry.delete(oldest);
 }
 
@@ -87,7 +87,7 @@ const DSML_BLOCK_RE = new RegExp(`<${DSML_NOISE}DSML${DSML_NOISE}tool_calls>([\\
 const DSML_INVOKE_RE = new RegExp(`<${DSML_NOISE}DSML${DSML_NOISE}invoke\\s+name="([^"]+)"[^>]*>([\\s\\S]*?)<\\/${DSML_NOISE}DSML${DSML_NOISE}invoke>`, 'gi');
 const DSML_PARAM_RE = new RegExp(`<${DSML_NOISE}DSML${DSML_NOISE}parameter\\s+name="([^"]+)"(?:\\s+string="(true|false)")?[^>]*>([\\s\\S]*?)<\\/${DSML_NOISE}DSML${DSML_NOISE}parameter>`, 'gi');
 
-export interface DsmlToolCall {
+interface DsmlToolCall {
   name: string;
   args: Record<string, unknown>;
 }
@@ -131,19 +131,6 @@ export function parseDsmlToolCalls(text: string): DsmlParseResult | null {
   return { leadingText: text.slice(0, outer.index).trim(), calls };
 }
 
-/** Parse one SSE line into a JSON payload string, or null if not a data line. */
-export function extractSseDataPayload(line: string): string | null {
-  const trimmed = line.trim();
-  if (!trimmed || trimmed.startsWith(':')) return null;
-  if (trimmed.startsWith('data:')) {
-    const payload = trimmed.slice(5).trimStart();
-    if (!payload || payload === '[DONE]') return null;
-    return payload;
-  }
-  if (trimmed.startsWith('{') || trimmed.startsWith('[')) return trimmed;
-  return null;
-}
-
 export function splitToolUseId(id: string): { rawId: string; thoughtSignature?: string } {
   let sep = id.lastIndexOf(TOOL_USE_SIG_SEP);
   if (sep !== -1) {
@@ -176,43 +163,6 @@ export function encodeToolUseId(rawId: string, thoughtSignature?: string, inline
   return `${rawId}${TOOL_USE_SIG_SEP}${encoded}`;
 }
 
-export function stripToolUseIdSuffix(toolUseId: string): string {
-  return splitToolUseId(toolUseId).rawId;
-}
-
 export function serializeToolResultContent(content: unknown): string {
   return typeof content === 'string' ? content : JSON.stringify(content);
-}
-
-/** Incrementally read SSE lines from an upstream stream without re-splitting the full buffer. */
-export function attachSseLineReader(
-  upstream: NodeJS.ReadableStream,
-  onLine: (line: string) => void,
-  onDone: () => void,
-): void {
-  const decoder = new TextDecoder();
-  let buffer = '';
-
-  const flushRemainder = () => {
-    const trimmed = buffer.trim();
-    if (trimmed) onLine(trimmed);
-    buffer = '';
-  };
-
-  upstream.on('data', (chunk: Buffer) => {
-    buffer += decoder.decode(chunk, { stream: true });
-    let newline = buffer.indexOf('\n');
-    while (newline !== -1) {
-      onLine(buffer.slice(0, newline));
-      buffer = buffer.slice(newline + 1);
-      newline = buffer.indexOf('\n');
-    }
-  });
-
-  upstream.on('end', () => {
-    flushRemainder();
-    onDone();
-  });
-
-  upstream.on('error', () => onDone());
 }

@@ -76,7 +76,7 @@ function isPort(value: unknown): value is number {
 }
 
 /** Validate one runtime record. Returns null for anything malformed. */
-export function parseServerRuntimeRecord(value: unknown): ServerRuntimeState | null {
+function parseServerRuntimeRecord(value: unknown): ServerRuntimeState | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   const record = value as Record<string, unknown>;
 
@@ -127,7 +127,7 @@ export function isPidAlive(
     kill(pid, 0);
     return true;
   } catch (err) {
-    return (err as NodeJS.ErrnoException)?.code === 'EPERM';
+    return (err as NodeJS.ErrnoException).code === 'EPERM';
   }
 }
 

@@ -9,7 +9,7 @@ import {
 import { dirname, isAbsolute } from 'node:path';
 import { getAppHome, getDaemonLaunchAgentPath } from '../paths.js';
 
-export const DAEMON_LAUNCH_AGENT_LABEL = 'com.clodex.daemon';
+const DAEMON_LAUNCH_AGENT_LABEL = 'com.clodex.daemon';
 const DAEMON_ENV_PASSTHROUGH = [
   'CLODEX_OPENAI_COMPACTION',
   'CLODEX_OPENAI_COMPACT_THRESHOLD',

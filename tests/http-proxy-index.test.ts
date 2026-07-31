@@ -14,6 +14,7 @@ import {
 } from '../src/http-proxy/index.js';
 import type { ProxyRoute } from '../src/proxy.js';
 import { getInferenceRequestLogPath } from '../src/trace-log.js';
+import { waitForCondition } from './test-helpers.js';
 
 describe('HTTP proxy startup model list', () => {
   it('prints the available context beside the full model name', () => {
@@ -46,7 +47,7 @@ describe('HTTP proxy startup model list', () => {
     const result = runHttpProxyServerCommand(false, false, 0, true);
 
     try {
-      await vi.waitFor(() => {
+      await waitForCondition(() => {
         expect(consoleLog).toHaveBeenCalledWith(
           expect.stringContaining('clodex proxy-mode server running'),
         );

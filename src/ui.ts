@@ -95,23 +95,19 @@ function providerTagColor(providerId: string): (text: string) => string {
   }
 }
 
-export function fmtCommand(cmd: string): string {
+function fmtCommand(cmd: string): string {
   return pc.cyan(cmd);
-}
-
-export function fmtPath(path: string): string {
-  return pc.cyan(path);
 }
 
 export function fmtUrl(url: string): string {
   return pc.cyan(url);
 }
 
-export function fmtCount(n: number, noun: string): string {
+function fmtCount(n: number, noun: string): string {
   return `${pc.bold(String(n))} ${noun}${n === 1 ? '' : 's'}`;
 }
 
-export function fmtRecentHint(): string {
+function fmtRecentHint(): string {
   return pc.yellow('recent');
 }
 
@@ -197,14 +193,6 @@ export function printOAuthStepsPanel(title: string, providerLabel: string): void
     `${pc.white('1. Open the URL below in your browser')}`,
     `${pc.white('2. Enter the code when prompted')}`,
     `${pc.white('3. Approve access for ')}${fmtProvider(providerLabel)}`,
-  ]);
-}
-
-
-export function printGatewayMaskPanel(): void {
-  printPanel(pc.cyan('Claude Desktop / Cowork'), [
-    `${pc.white('Gateway discovery filters competitor model names in ids.')}`,
-    `${pc.white('Masking keeps discovery working while display names stay readable.')}`,
   ]);
 }
 

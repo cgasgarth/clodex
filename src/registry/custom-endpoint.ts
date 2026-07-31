@@ -26,7 +26,7 @@ import {
   registerTraceSecret,
 } from '../trace-log.js';
 
-export type CustomEndpointKind = 'openai' | 'anthropic';
+type CustomEndpointKind = 'openai' | 'anthropic';
 
 const CUSTOM_PROVIDER_ALLOCATION_SLOT = 'custom-provider-allocation';
 
