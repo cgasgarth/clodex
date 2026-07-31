@@ -1,5 +1,6 @@
 [test]
 preload = ["./tests/bun-setup.ts"]
+parallel = 1
 
 [install]
 exact = true

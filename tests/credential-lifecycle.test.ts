@@ -2,14 +2,14 @@ import { importActual } from './bun-import-actual.js';
 import { beforeEach, describe, expect, it, vi } from 'bun:test';
 import type { ProviderRegistry } from '../src/registry/types.js';
 
-const registryState = vi.hoisted(() => ({
+const registryState = createHoisted(() => ({
   current: { schemaVersion: 1, providers: [] } as ProviderRegistry,
 }));
-const journalState = vi.hoisted(() => ({
+const journalState = createHoisted(() => ({
   pending: new Set<string>(),
   cancelFailures: new Set<string>(),
 }));
-const lockState = vi.hoisted(() => ({
+const lockState = createHoisted(() => ({
   registryActive: false,
   credentialActive: null as string | null,
   credentialFailures: new Set<string>(),
@@ -79,6 +79,7 @@ import { deleteProviderCredential } from '../src/env.js';
 import * as cleanupJournal from '../src/registry/credential-cleanup-journal.js';
 import { reconcilePendingCredentialDeletes } from '../src/registry/credential-lifecycle.js';
 import { loadRegistryStrict } from '../src/registry/io.js';
+import { asMocked, createHoisted } from './test-helpers.js';
 
 const TEST_HELPER_ID = 'a'.repeat(64);
 const helperRef = (account: string): string => `helper:v1:${TEST_HELPER_ID}:${account}`;
@@ -94,12 +95,12 @@ describe('credential cleanup lifecycle', () => {
     lockState.registryFailures.clear();
     lockState.events = [];
     lockState.afterRegistryUnlock = null;
-    vi.mocked(deleteProviderCredential).mockReset().mockResolvedValue(true);
-    vi.mocked(loadRegistryStrict).mockReset()
+    asMocked(deleteProviderCredential).mockReset().mockResolvedValue(true);
+    asMocked(loadRegistryStrict).mockReset()
       .mockImplementation(() => structuredClone(registryState.current));
-    vi.mocked(cleanupJournal.loadPendingCredentialDeletes).mockReset()
+    asMocked(cleanupJournal.loadPendingCredentialDeletes).mockReset()
       .mockImplementation(async () => [...journalState.pending]);
-    vi.mocked(cleanupJournal.cancelCredentialDelete).mockReset()
+    asMocked(cleanupJournal.cancelCredentialDelete).mockReset()
       .mockImplementation(async (authRef: string) => {
         if (journalState.cancelFailures.has(authRef)) {
           throw new Error('journal write failed');
@@ -113,7 +114,7 @@ describe('credential cleanup lifecycle', () => {
     const failedRef = helperRef('provider:failed');
     const thrownRef = 'keyring:provider:thrown';
     journalState.pending = new Set([deletedRef, failedRef, thrownRef]);
-    vi.mocked(deleteProviderCredential).mockImplementation(async authRef => {
+    asMocked(deleteProviderCredential).mockImplementation(async authRef => {
       expect(lockState.registryActive).toBe(false);
       expect(lockState.credentialActive).toBe(authRef);
       lockState.events.push(`delete:${authRef}`);
@@ -161,7 +162,7 @@ describe('credential cleanup lifecycle', () => {
       addedAt: '2026-01-01T00:00:00.000Z',
     });
     journalState.pending.add(authRef);
-    vi.mocked(cleanupJournal.cancelCredentialDelete).mockImplementation(
+    asMocked(cleanupJournal.cancelCredentialDelete).mockImplementation(
       async candidate => {
         lockState.events.push(`cancel:${lockState.registryActive}`);
         return journalState.pending.delete(candidate);
@@ -219,7 +220,7 @@ describe('credential cleanup lifecycle', () => {
   it('keeps cleanup queued when the provider registry cannot be read', async () => {
     const authRef = helperRef('provider:registry-unreadable');
     journalState.pending.add(authRef);
-    vi.mocked(loadRegistryStrict).mockImplementationOnce(() => {
+    asMocked(loadRegistryStrict).mockImplementationOnce(() => {
       throw new Error('provider registry is unreadable');
     });
 
@@ -231,7 +232,7 @@ describe('credential cleanup lifecycle', () => {
   });
 
   it('reports a snapshot read failure without rejecting', async () => {
-    vi.mocked(cleanupJournal.loadPendingCredentialDeletes).mockRejectedValueOnce(
+    asMocked(cleanupJournal.loadPendingCredentialDeletes).mockRejectedValueOnce(
       new Error('journal lock timed out'),
     );
 
@@ -248,8 +249,8 @@ describe('credential cleanup lifecycle', () => {
   it('retains known pending state when the final journal read fails', async () => {
     const authRef = helperRef('provider:failed');
     journalState.pending.add(authRef);
-    vi.mocked(deleteProviderCredential).mockResolvedValue(false);
-    vi.mocked(cleanupJournal.loadPendingCredentialDeletes)
+    asMocked(deleteProviderCredential).mockResolvedValue(false);
+    asMocked(cleanupJournal.loadPendingCredentialDeletes)
       .mockResolvedValueOnce([authRef])
       .mockRejectedValueOnce(new Error('final journal read failed'));
 

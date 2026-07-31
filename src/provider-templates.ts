@@ -1,6 +1,6 @@
 // src/provider-templates.ts — builtin provider templates for clodex providers add
 
-export type ProviderAuthType = 'api' | 'oauth' | 'none';
+type ProviderAuthType = 'api' | 'oauth' | 'none';
 export type ProviderModelSource = 'api-list' | 'static-seed' | 'manual-only';
 
 export interface ProviderTemplate {
@@ -26,7 +26,7 @@ export interface ProviderTemplate {
 }
 
 /** clodex ships exactly two provider templates: OpenAI (API key) and OpenAI OAuth (ChatGPT plan). */
-export const PROVIDER_TEMPLATES: ProviderTemplate[] = [
+const PROVIDER_TEMPLATES: ProviderTemplate[] = [
   {
     id: 'openai',
     name: 'OpenAI',

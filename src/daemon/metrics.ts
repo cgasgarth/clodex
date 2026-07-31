@@ -99,6 +99,13 @@ export interface SecondwindSavingsEvent {
   estimatedOutputSavingsUsd: number;
 }
 
+type SecondwindSavingsInput = Pick<SecondwindSavingsEvent,
+  'requests' | 'blocksRewritten' | 'inputTokensConsidered' | 'tokensReduced'
+  | 'estimatedTokenRequests' | 'estimatedSavingsUsd'>
+  & Partial<Omit<SecondwindSavingsEvent,
+    'requests' | 'blocksRewritten' | 'inputTokensConsidered' | 'tokensReduced'
+    | 'estimatedTokenRequests' | 'estimatedSavingsUsd'>>;
+
 interface MetricRow {
   timestamp_ms: number;
   timestamp: string;
@@ -302,17 +309,53 @@ function aggregateMetricEvents(events: DaemonMetricEvent[]): PersistedMetricAggr
 
 function parseMetricBatch(payload: string): PersistedMetricAggregate[] {
   try {
-    const values = JSON.parse(payload);
+    const values: unknown = JSON.parse(payload);
     if (!Array.isArray(values)) return [];
-    return values.filter((value): value is PersistedMetricAggregate =>
-      value !== null
-      && typeof value === 'object'
-      && Number.isFinite((value as PersistedMetricAggregate).timestampMs)
-      && typeof (value as PersistedMetricAggregate).modelId === 'string'
-      && typeof (value as PersistedMetricAggregate).provider === 'string');
+    return values.flatMap(value => normalizePersistedMetricAggregate(value));
   } catch {
     return [];
   }
+}
+
+function normalizePersistedMetricAggregate(value: unknown): PersistedMetricAggregate[] {
+  if (!value || typeof value !== 'object') return [];
+  const row = value as Record<string, unknown>;
+  if (!Number.isFinite(row.timestampMs)
+    || typeof row.modelId !== 'string'
+    || typeof row.provider !== 'string') return [];
+  const timestampMs = Number(row.timestampMs);
+  const bucket = emptyBucket(timestampMs);
+  return [{
+    ...bucket,
+    timestamp: typeof row.timestamp === 'string' ? row.timestamp : bucket.timestamp,
+    timestampMs,
+    ...(typeof row.accountId === 'string' ? { accountId: row.accountId } : {}),
+    processingMode: normalizeApiProcessingMode(row.processingMode),
+    modelId: row.modelId,
+    provider: row.provider,
+    inputTokens: safeInteger(row.inputTokens),
+    cachedInputTokens: safeInteger(row.cachedInputTokens),
+    cacheWriteTokens: safeInteger(row.cacheWriteTokens),
+    outputTokens: safeInteger(row.outputTokens),
+    requests: safeInteger(row.requests),
+    errors: safeInteger(row.errors),
+    cancellations: safeInteger(row.cancellations),
+    durationMs: safeInteger(row.durationMs),
+    inputCost: safeAmount(row.inputCost),
+    cacheCost: safeAmount(row.cacheCost),
+    outputCost: safeAmount(row.outputCost),
+    totalCost: safeAmount(row.totalCost),
+    pricedRequests: safeInteger(row.pricedRequests),
+    unpricedRequests: safeInteger(row.unpricedRequests),
+    standardRequests: safeInteger(row.standardRequests),
+    fastRequests: safeInteger(row.fastRequests),
+    standardCost: safeAmount(row.standardCost),
+    fastCost: safeAmount(row.fastCost),
+  }];
+}
+
+function safeAmount(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) ? Math.max(0, value) : 0;
 }
 
 function addAggregate(
@@ -327,20 +370,20 @@ function addAggregate(
   bucket.errors += safeInteger(aggregate.errors);
   bucket.cancellations += safeInteger(aggregate.cancellations);
   bucket.durationMs += safeInteger(aggregate.durationMs);
-  bucket.inputCost += Math.max(0, aggregate.inputCost ?? 0);
-  bucket.cacheCost += Math.max(0, aggregate.cacheCost ?? 0);
-  bucket.outputCost += Math.max(0, aggregate.outputCost ?? 0);
-  bucket.totalCost += Math.max(0, aggregate.totalCost ?? 0);
+  bucket.inputCost += Math.max(0, aggregate.inputCost);
+  bucket.cacheCost += Math.max(0, aggregate.cacheCost);
+  bucket.outputCost += Math.max(0, aggregate.outputCost);
+  bucket.totalCost += Math.max(0, aggregate.totalCost);
   bucket.pricedRequests += safeInteger(aggregate.pricedRequests);
   bucket.unpricedRequests += safeInteger(aggregate.unpricedRequests);
   bucket.standardRequests += safeInteger(aggregate.standardRequests);
   bucket.fastRequests += safeInteger(aggregate.fastRequests);
-  bucket.standardCost += Math.max(0, aggregate.standardCost ?? 0);
-  bucket.fastCost += Math.max(0, aggregate.fastCost ?? 0);
+  bucket.standardCost += Math.max(0, aggregate.standardCost);
+  bucket.fastCost += Math.max(0, aggregate.fastCost);
 }
 
 function sumSecondwindSavings(
-  events: SecondwindSavingsEvent[],
+  events: SecondwindSavingsInput[],
 ): SecondwindSavingsEvent {
   return events.reduce<SecondwindSavingsEvent>(
     (sum, event) => ({
@@ -392,7 +435,7 @@ export class DaemonMetricsStore {
   private readonly db: Database;
   private readonly now: () => number;
   private readonly pendingEvents: DaemonMetricEvent[] = [];
-  private readonly pendingSecondwind: SecondwindSavingsEvent[] = [];
+  private readonly pendingSecondwind: SecondwindSavingsInput[] = [];
   private flushTimer: ReturnType<typeof setTimeout> | undefined;
   private lastPrunedAt = 0;
 
@@ -702,7 +745,7 @@ export class DaemonMetricsStore {
     };
   }
 
-  appendSecondwindSavings(event: SecondwindSavingsEvent): void {
+  appendSecondwindSavings(event: SecondwindSavingsInput): void {
     try {
       this.pendingSecondwind.push(event);
       this.scheduleFlush();
@@ -788,9 +831,9 @@ export class DaemonMetricsStore {
       safeInteger(event.savedInputTokens),
       safeInteger(event.savedCachedInputTokens),
       safeInteger(event.savedCacheWriteTokens),
-      Math.max(0, event.estimatedInputSavingsUsd ?? 0),
-      Math.max(0, event.estimatedCacheSavingsUsd ?? 0),
-      Math.max(0, event.estimatedOutputSavingsUsd ?? 0),
+      Math.max(0, event.estimatedInputSavingsUsd),
+      Math.max(0, event.estimatedCacheSavingsUsd),
+      Math.max(0, event.estimatedOutputSavingsUsd),
     );
   }
 

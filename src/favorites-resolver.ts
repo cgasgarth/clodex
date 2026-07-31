@@ -35,7 +35,7 @@ export interface LocalModelLookupResult {
   model: LocalProviderModel;
 }
 
-export type LocalModelLookup =
+type LocalModelLookup =
   (providerId: string, modelId: string) => LocalModelLookupResult | undefined;
 
 export async function resolveFavorite(

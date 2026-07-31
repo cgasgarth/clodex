@@ -176,8 +176,9 @@ function loadLifetimeMetrics(
   }
 }
 
-export function normalizeSecondwindMode(value: unknown): SecondwindMode {
-  return value === 'on' || value === 'shadow' ? value : 'off';
+function normalizeSecondwindMode(value: unknown): SecondwindMode {
+  if (value === 'off' || value === 'shadow') return value;
+  return 'on';
 }
 
 function percentile(samples: number[], fraction: number): number {
@@ -278,7 +279,9 @@ function distributeTokens(total: number, weights: number[]): number[] {
     .map((value, index) => ({ index, fraction: value - Math.floor(value) }))
     .sort((left, right) => right.fraction - left.fraction || left.index - right.index);
   for (let index = 0; index < remainder; index += 1) {
-    distributed[order[index % order.length]!.index] += 1;
+    const slot = order[index % order.length];
+    if (!slot) break;
+    distributed[slot.index] = (distributed[slot.index] ?? 0) + 1;
   }
   return distributed;
 }
@@ -372,6 +375,14 @@ export class SecondwindService {
   #loaded = false;
   #errors = 0;
   #lastError: string | undefined;
+
+  #rememberPendingSavings(requestId: string, pending: PendingSecondwindSavings): void {
+    if (this.#pendingSavings.size >= MAX_PENDING_SAVINGS) {
+      const oldest = this.#pendingSavings.keys().next().value;
+      if (oldest) this.#pendingSavings.delete(oldest);
+    }
+    this.#pendingSavings.set(requestId, pending);
+  }
 
   constructor(options: SecondwindServiceOptions = {}) {
     this.#mode = normalizeSecondwindMode(options.initialMode);
@@ -472,10 +483,15 @@ export class SecondwindService {
         ? await this.#sessionFor(`${input.modelId}:${input.sessionId}`)
         : (ephemeral = await this.#createSession());
       this.#loaded = true;
-      const result = session.rewrite(input.request);
-      if (!result?.request || typeof result.request !== 'object') {
+      const rawResult: unknown = session.rewrite(input.request);
+      if (!rawResult || typeof rawResult !== 'object') {
         throw new Error('Secondwind returned an invalid rewritten request');
       }
+      const result = rawResult as { request?: unknown; stats?: SecondwindRewriteStats };
+      if (!result.request || typeof result.request !== 'object') {
+        throw new Error('Secondwind returned an invalid rewritten request');
+      }
+      const rewrittenRequest = result.request as Record<string, unknown>;
 
       const blocksRewritten = Math.max(
         0,
@@ -484,13 +500,13 @@ export class SecondwindService {
       // Preserve the exact inbound bytes when Secondwind made no change. Besides
       // avoiding needless serialization, this keeps prompt-cache prefixes stable.
       const optimizedBody = blocksRewritten > 0
-        ? Buffer.from(JSON.stringify(result.request))
+        ? Buffer.from(JSON.stringify(rewrittenRequest))
         : input.body;
       if (input.recordMetrics !== false) {
         const accounting = tokenAccounting(
           result.stats,
           input.request,
-          result.request,
+          rewrittenRequest,
           blocksRewritten,
         );
         const metrics = mode === 'on' ? this.#applied : this.#shadow;
@@ -522,11 +538,7 @@ export class SecondwindService {
         };
         let immediateSavingsUsd: number | undefined;
         if (input.requestId) {
-          if (this.#pendingSavings.size >= MAX_PENDING_SAVINGS) {
-            const oldest = this.#pendingSavings.keys().next().value as string | undefined;
-            if (oldest) this.#pendingSavings.delete(oldest);
-          }
-          this.#pendingSavings.set(input.requestId, pending);
+          this.#rememberPendingSavings(input.requestId, pending);
         } else {
           immediateSavingsUsd = estimatedInputSavings(
             input.modelId,
@@ -668,7 +680,7 @@ export class SecondwindService {
     }
     this.#sessions.set(key, created);
     if (this.#sessions.size > MAX_SESSIONS) {
-      const oldestKey = this.#sessions.keys().next().value as string | undefined;
+      const oldestKey = this.#sessions.keys().next().value;
       if (oldestKey) {
         const oldest = this.#sessions.get(oldestKey);
         this.#sessions.delete(oldestKey);

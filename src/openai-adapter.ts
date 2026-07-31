@@ -5,9 +5,9 @@ import type { SdkCallParams } from './sdk-adapter.js';
 
 // ── OpenAI request shapes ───────────────────────────────────────────────────
 
-export interface OpenAiMessage {
+interface OpenAiMessage {
   role: 'system' | 'user' | 'assistant' | 'tool';
-  content?: string | null | Array<any>;
+  content?: string | null | Array<Record<string, unknown>>;
   name?: string;
   tool_calls?: Array<{
     id: string;
@@ -58,11 +58,11 @@ export function translateOpenAiRequest(
         break;
 
       case 'user':
-        messages.push({ role: 'user', content: msg.content as any } as ModelMessage);
+        messages.push({ role: 'user', content: msg.content ?? '' } as unknown as ModelMessage);
         break;
 
       case 'assistant': {
-        const parts: any[] = [];
+        const parts: Array<Record<string, unknown>> = [];
         if (typeof msg.content === 'string' && msg.content) {
           parts.push({ type: 'text', text: msg.content });
         }
@@ -74,23 +74,23 @@ export function translateOpenAiRequest(
             input: parseToolArguments(tc.function.arguments),
           });
         }
-        messages.push({ role: 'assistant', content: parts.length > 0 ? parts : '' } as ModelMessage);
+        messages.push({ role: 'assistant', content: parts.length > 0 ? parts : '' } as unknown as ModelMessage);
         break;
       }
 
       case 'tool': {
         const resultPart = {
-          type: 'tool-result',
+          type: 'tool-result' as const,
           toolCallId: msg.tool_call_id ?? '',
           toolName: toolNameById.get(msg.tool_call_id ?? '') ?? 'unknown',
           output: {
-            type: 'text',
+            type: 'text' as const,
             value: typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content ?? ''),
           },
         };
         const lastMsg = messages[messages.length - 1];
         if (lastMsg?.role === 'tool' && Array.isArray(lastMsg.content)) {
-          lastMsg.content.push(resultPart as any);
+          lastMsg.content.push(resultPart);
         } else {
           messages.push({ role: 'tool', content: [resultPart] } as unknown as ModelMessage);
         }
@@ -102,21 +102,19 @@ export function translateOpenAiRequest(
   let sdkToolChoice: SdkCallParams['toolChoice'];
   if (body.tool_choice === 'auto' || body.tool_choice === 'required') {
     sdkToolChoice = body.tool_choice;
-  } else if (typeof body.tool_choice === 'object' && body.tool_choice?.type === 'function') {
+  } else if (typeof body.tool_choice === 'object') {
     sdkToolChoice = { type: 'tool', toolName: body.tool_choice.function.name };
   }
 
   let tools: SdkCallParams['tools'];
   if (body.tools?.length) {
-    tools = {} as any;
+    tools = {};
     for (const t of body.tools) {
-      if (t.type === 'function' && t.function.name) {
-        const schema = t.function.parameters ? jsonSchema(t.function.parameters) : undefined;
-        (tools as any)[t.function.name] = tool({
-          description: t.function.description ?? '',
-          inputSchema: (schema ?? jsonSchema({ type: 'object', properties: {} })) as any,
-        });
-      }
+      const schema = t.function.parameters ? jsonSchema(t.function.parameters) : undefined;
+      tools[t.function.name] = tool({
+        description: t.function.description ?? '',
+        inputSchema: schema ?? jsonSchema({ type: 'object', properties: {} }),
+      });
     }
   }
 
@@ -165,24 +163,30 @@ export interface CollectedOpenAiStream {
 export async function collectOpenAiStream(stream: AsyncIterable<unknown>): Promise<CollectedOpenAiStream> {
   const collected: CollectedOpenAiStream = { text: '', toolCalls: [], finishReason: undefined, usage: undefined };
   for await (const part of stream) {
-    const p = part as any;
+    if (!part || typeof part !== 'object') continue;
+    const p = part as Record<string, unknown>;
     switch (p.type) {
       case 'text-delta':
-        collected.text += p.textDelta ?? p.text ?? '';
+        collected.text += typeof p.textDelta === 'string'
+          ? p.textDelta
+          : typeof p.text === 'string' ? p.text : '';
         break;
       case 'tool-call':
         collected.toolCalls.push({
-          toolCallId: p.toolCallId ?? '',
-          toolName: p.toolName ?? '',
+          toolCallId: typeof p.toolCallId === 'string' ? p.toolCallId : '',
+          toolName: typeof p.toolName === 'string' ? p.toolName : '',
           input: p.input,
         });
         break;
       case 'finish':
-        collected.finishReason = p.finishReason ?? collected.finishReason;
-        collected.usage = p.totalUsage ?? p.usage ?? collected.usage;
+        if (typeof p.finishReason === 'string') collected.finishReason = p.finishReason;
+        const usage = p.totalUsage ?? p.usage;
+        if (usage && typeof usage === 'object') {
+          collected.usage = usage;
+        }
         break;
       case 'error':
-        throw p.error instanceof Error || (p.error && typeof p.error === 'object')
+        throw p.error instanceof Error || (p.error !== null && typeof p.error === 'object')
           ? p.error
           : new Error(typeof p.error === 'string' ? p.error : 'Upstream stream failed');
     }
@@ -201,15 +205,15 @@ export async function generateOpenAiResponse(
     // Some upstreams (e.g. ChatGPT's Codex OAuth backend) only ever answer as a
     // stream. Request a real stream from the SDK and collect it into one
     // response instead of issuing a non-streaming request upstream.
-    const { stream } = streamText({ model, ...(params as any), onError: () => {} });
+    const { stream } = streamText(toStreamTextOptions(model, params, { onError: () => {} }));
     result = await collectOpenAiStream(stream);
   } else {
-    result = (await generateText({ model, ...(params as any) })) as any;
+    result = await generateText(toGenerateTextOptions(model, params));
   }
-  const message: Record<string, any> = { role: 'assistant', content: result.text || null };
+  const message: Record<string, unknown> = { role: 'assistant', content: result.text || null };
 
   if (result.toolCalls?.length) {
-    message.tool_calls = result.toolCalls.map((tc: any) => ({
+    message.tool_calls = result.toolCalls.map(tc => ({
       id: tc.toolCallId,
       type: 'function',
       function: { name: tc.toolName, arguments: JSON.stringify(tc.input ?? {}) },
@@ -236,7 +240,7 @@ export async function streamOpenAiResponse(
   responseModelId: string,
   onChunk: (chunk: string) => void,
 ): Promise<void> {
-  const { stream } = streamText({ model, ...(params as any) });
+  const { stream } = streamText(toStreamTextOptions(model, params));
   const baseData = {
     id: `chatcmpl-${Date.now()}`,
     object: 'chat.completion.chunk',
@@ -244,11 +248,11 @@ export async function streamOpenAiResponse(
     model: responseModelId,
   };
 
-  const send = (delta: Record<string, any>, finish_reason: string | null = null) =>
+  const send = (delta: Record<string, unknown>, finish_reason: string | null = null) =>
     onChunk(`data: ${JSON.stringify({ ...baseData, choices: [{ index: 0, delta, finish_reason }] })}\n\n`);
 
   for await (const part of stream) {
-    const p = part as any;
+    const p = part as unknown as Record<string, unknown>;
     switch (p.type) {
       case 'text-delta':
         send({ role: 'assistant', content: p.textDelta ?? p.text ?? '' });
@@ -260,14 +264,29 @@ export async function streamOpenAiResponse(
         send({ tool_calls: [{ index: 0, function: { arguments: p.delta ?? p.text ?? p.argsTextDelta ?? '' } }] });
         break;
       case 'finish':
-        send({}, p.finishReason || 'stop');
+        send({}, typeof p.finishReason === 'string' ? p.finishReason : 'stop');
         break;
       case 'error':
-        throw p.error instanceof Error || (p.error && typeof p.error === 'object')
+        throw p.error instanceof Error || (p.error !== null && typeof p.error === 'object')
           ? p.error
           : new Error(typeof p.error === 'string' ? p.error : 'Upstream stream failed');
     }
   }
 
   onChunk('data: [DONE]\n\n');
+}
+
+function toStreamTextOptions(
+  model: LanguageModel,
+  params: SdkCallParams,
+  extra: Record<string, unknown> = {},
+): Parameters<typeof streamText>[0] {
+  return { model, ...params, ...extra } as unknown as Parameters<typeof streamText>[0];
+}
+
+function toGenerateTextOptions(
+  model: LanguageModel,
+  params: SdkCallParams,
+): Parameters<typeof generateText>[0] {
+  return { model, ...params } as unknown as Parameters<typeof generateText>[0];
 }

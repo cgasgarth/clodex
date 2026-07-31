@@ -52,7 +52,7 @@ describe('test sandbox floor', () => {
       getCredentialCleanupPath(),
     ];
 
-    expect(realUserHome).not.toBe(userInfo().homedir);
+    expect(realUserHome).toBe(userInfo().homedir);
     for (const path of coordinationPaths) {
       expectInsideBunSandbox(path);
       expectOutsideDirectory(path, realUserHome);

@@ -2,10 +2,10 @@ import { importActual } from './bun-import-actual.js';
 import { beforeEach, describe, expect, it, vi } from 'bun:test';
 import type { ProviderRegistry } from '../src/registry/types.js';
 
-const registryState = vi.hoisted(() => ({
+const registryState = createHoisted(() => ({
   current: { schemaVersion: 1, providers: [] } as ProviderRegistry,
 }));
-const lockState = vi.hoisted(() => ({
+const lockState = createHoisted(() => ({
   active: false,
   registryTail: Promise.resolve(),
   credentialActive: false,
@@ -13,7 +13,7 @@ const lockState = vi.hoisted(() => ({
   credentialTails: new Map<string, Promise<void>>(),
   providerTails: new Map<string, Promise<void>>(),
 }));
-const journalState = vi.hoisted(() => ({
+const journalState = createHoisted(() => ({
   pending: new Set<string>(),
 }));
 
@@ -114,6 +114,7 @@ import {
   withProviderMutationLock,
   withRegistryWriteLock,
 } from '../src/registry/lock.js';
+import { asMocked, createHoisted } from './test-helpers.js';
 
 describe('registry provider removal', () => {
   beforeEach(() => {
@@ -139,7 +140,7 @@ describe('registry provider removal', () => {
         },
       ],
     };
-    vi.mocked(deleteProviderCredential).mockReset().mockImplementation(
+    asMocked(deleteProviderCredential).mockReset().mockImplementation(
       async () => {
         expect(lockState.active).toBe(false);
         expect(lockState.credentialActive).toBe(true);
@@ -164,7 +165,7 @@ describe('registry provider removal', () => {
   });
 
   it('keeps a failed credential deletion queued for retry', async () => {
-    vi.mocked(deleteProviderCredential).mockImplementation(async () => {
+    asMocked(deleteProviderCredential).mockImplementation(async () => {
       expect(lockState.active).toBe(false);
       expect(lockState.credentialActive).toBe(true);
       expect(lockState.providerActive).toBe(true);
@@ -200,7 +201,7 @@ describe('registry provider removal', () => {
       finishDelete = resolve;
     });
     let credentialValue: string | null = 'old-key';
-    vi.mocked(deleteProviderCredential).mockImplementation(async () => {
+    asMocked(deleteProviderCredential).mockImplementation(async () => {
       startDelete();
       await deleteGate;
       credentialValue = null;
@@ -251,7 +252,7 @@ describe('registry provider removal', () => {
     const deleteGate = new Promise<void>(resolve => {
       finishDelete = resolve;
     });
-    vi.mocked(deleteProviderCredential).mockImplementation(async () => {
+    asMocked(deleteProviderCredential).mockImplementation(async () => {
       startDelete();
       await deleteGate;
       return true;

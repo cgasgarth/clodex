@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path';
 import type { PathLike } from 'node:fs';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'bun:test';
 
-const fsState = vi.hoisted(() => ({
+const fsState = createHoisted(() => ({
   registryPath: '',
   openPaths: new Map<number, string>(),
   events: [] as string[],
@@ -90,6 +90,7 @@ import {
   RegistryLockLostError,
   withRegistryWriteLockSync,
 } from '../src/registry/lock.js';
+import { createHoisted } from './test-helpers.js';
 
 describe('registry publication durability', () => {
   const previousHome = process.env.CLODEX_HOME;

@@ -65,7 +65,7 @@ export class RegistryLockLostError extends Error {
   }
 }
 
-export function getRegistryLockPath(): string {
+function getRegistryLockPath(): string {
   return `${getProvidersPath()}.lock`;
 }
 
@@ -452,7 +452,7 @@ export function withCredentialMutationLock<T>(
   });
 }
 
-export function getProviderMutationLockPath(providerSlot: string): string {
+function getProviderMutationLockPath(providerSlot: string): string {
   const digest = createHash('sha256')
     .update('clodex-provider-mutation\0')
     .update(providerSlot)

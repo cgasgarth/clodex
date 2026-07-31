@@ -249,7 +249,7 @@ function formatStatus(status: DaemonStatusResponse): string {
   ].join('\n');
 }
 
-export async function runDaemonProcess(): Promise<number> {
+async function runDaemonProcess(): Promise<number> {
   const previous = readDaemonRuntimeState();
   if (previous && isPidAlive(previous.pid) && previous.pid !== process.pid) {
     console.error(`Clodex daemon is already running (pid ${previous.pid})`);
@@ -274,6 +274,7 @@ export async function runDaemonProcess(): Promise<number> {
   let control: Awaited<ReturnType<typeof startDaemonControlApi>> | undefined;
   let runtime: ReturnType<typeof createDaemonRuntimeState> | undefined;
   let restartRequested = false;
+  const shouldRestart = () => restartRequested;
   let shutdownResolve: (() => void) | undefined;
   const shutdown = new Promise<void>(resolve => {
     shutdownResolve = resolve;
@@ -382,10 +383,10 @@ export async function runDaemonProcess(): Promise<number> {
       pid: process.pid,
       parentPid: process.ppid,
       port: endpoint?.port,
-      reason: restartRequested ? 'daemon restart requested' : 'daemon shutdown',
+      reason: shouldRestart() ? 'daemon restart requested' : 'daemon shutdown',
     });
   }
-  return restartRequested ? 75 : 0;
+  return shouldRestart() ? 75 : 0;
 }
 
 export async function runDaemonCommand(args: string[], cliPath: string): Promise<number> {

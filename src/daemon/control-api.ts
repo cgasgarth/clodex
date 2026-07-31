@@ -34,12 +34,12 @@ export interface DaemonAccountController {
   } | null;
 }
 
-export interface DaemonSecondwindController {
+interface DaemonSecondwindController {
   snapshot(): SecondwindSnapshot;
   setMode(mode: SecondwindMode): void;
 }
 
-export interface DaemonClaudeModelController {
+interface DaemonClaudeModelController {
   snapshot(): DaemonClaudeModelSnapshot;
   setEnabled(modelId: string, enabled: boolean): Promise<DaemonClaudeModelSnapshot>;
 }

@@ -25,16 +25,17 @@ import {
 import { providerAuthHelpText } from '../src/registry/provider-auth.js';
 import type { RegistryProvider } from '../src/registry/types.js';
 import * as env from '../src/env.js';
+import { createHoisted } from './test-helpers.js';
 
-const selectMock = vi.hoisted(() => vi.fn());
-const passwordMock = vi.hoisted(() => vi.fn());
-const spinnerStartMock = vi.hoisted(() => vi.fn());
-const spinnerStopMock = vi.hoisted(() => vi.fn());
-const addTemplateMock = vi.hoisted(() => vi.fn());
-const authenticateProviderMock = vi.hoisted(() => vi.fn());
-const logErrorMock = vi.hoisted(() => vi.fn());
-const logSuccessMock = vi.hoisted(() => vi.fn());
-const warnMock = vi.hoisted(() => vi.fn());
+const selectMock = createHoisted(() => vi.fn());
+const passwordMock = createHoisted(() => vi.fn());
+const spinnerStartMock = createHoisted(() => vi.fn());
+const spinnerStopMock = createHoisted(() => vi.fn());
+const addTemplateMock = createHoisted(() => vi.fn());
+const authenticateProviderMock = createHoisted(() => vi.fn());
+const logErrorMock = createHoisted(() => vi.fn());
+const logSuccessMock = createHoisted(() => vi.fn());
+const warnMock = createHoisted(() => vi.fn());
 const TEST_HELPER_ID = 'a'.repeat(64);
 const helperRef = (account: string): string => `helper:v1:${TEST_HELPER_ID}:${account}`;
 

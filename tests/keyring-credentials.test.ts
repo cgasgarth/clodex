@@ -13,7 +13,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'bun:test';
 
-const keyring = vi.hoisted(() => ({
+const keyring = createHoisted(() => ({
   values: new Map<string, string>(),
   failSetSuffix: '' as string,
   failSetKey: '' as string,
@@ -131,6 +131,7 @@ import {
   resolveProviderCredential,
   saveProviderCredential as replaceProviderCredential,
 } from '../src/env.js';
+import { createHoisted } from './test-helpers.js';
 
 const credentialInstance = `v1:${'1'.repeat(32)}`;
 const account = `oauth:provider:test::credential::${credentialInstance}`;
@@ -141,6 +142,7 @@ const deletedKey = `clodex-deleted:${account}`;
 const managedStateKey = `clodex-state-key:${account}`;
 const journalPrefix = '__clodex_chunk_journal__:v1:';
 const previousHome = process.env.CLODEX_HOME;
+const previousCredentialHome = process.env.CLODEX_CREDENTIAL_HOME;
 const previousRuntimeDir = process.env.XDG_RUNTIME_DIR;
 let tempDir = '';
 
@@ -259,6 +261,7 @@ describe('keyring credential chunks', () => {
   beforeEach(() => {
     tempDir = mkdtempSync(join(tmpdir(), 'clodex-keyring-'));
     process.env.CLODEX_HOME = tempDir;
+    process.env.CLODEX_CREDENTIAL_HOME = tempDir;
     process.env.XDG_RUNTIME_DIR = tempDir;
     keyring.lockHome = tempDir;
     keyring.values.clear();
@@ -280,6 +283,8 @@ describe('keyring credential chunks', () => {
   afterEach(() => {
     if (previousHome === undefined) delete process.env.CLODEX_HOME;
     else process.env.CLODEX_HOME = previousHome;
+    if (previousCredentialHome === undefined) delete process.env.CLODEX_CREDENTIAL_HOME;
+    else process.env.CLODEX_CREDENTIAL_HOME = previousCredentialHome;
     if (previousRuntimeDir === undefined) delete process.env.XDG_RUNTIME_DIR;
     else process.env.XDG_RUNTIME_DIR = previousRuntimeDir;
     rmSync(tempDir, { recursive: true, force: true });
@@ -418,6 +423,7 @@ describe('keyring credential chunks', () => {
     const defaultHome = mkdtempSync(join(tmpdir(), 'clodex-default-home-'));
     const alternateRuntime = mkdtempSync(join(tmpdir(), 'clodex-runtime-'));
     keyring.lockHome = defaultHome;
+    process.env.CLODEX_CREDENTIAL_HOME = defaultHome;
     process.env.XDG_RUNTIME_DIR = alternateRuntime;
     try {
       await expect(saveProviderCredential(authRef, 'short-secret')).resolves.toBe(true);

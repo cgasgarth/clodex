@@ -41,16 +41,3 @@ export async function loadRegistryProviders(
       providerData: oauthProviderData.get(provider.id),
     }));
 }
-
-/** Sync variant when credentials are already resolved (tests). */
-export function loadRegistryProvidersSync(
-  resolveKey: (providerId: string, authRef: string) => string | null,
-  opts?: { agent?: CompatibilityAgent },
-): LocalProvider[] {
-  const registry = loadRegistry();
-  return materializeRegistry(
-    registry,
-    provider => isAnonymousProvider(provider) ? null : resolveKey(provider.id, provider.authRef),
-    opts,
-  );
-}

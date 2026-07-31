@@ -11,8 +11,8 @@ export interface GatewayModelOptions {
   maskGatewayIds?: boolean;
 }
 
-export type ServerModelFormat = 'anthropic' | 'openai' | 'cloud-code' | 'unsupported';
-export type ServerModelSource = string;
+type ServerModelFormat = 'anthropic' | 'openai' | 'cloud-code' | 'unsupported';
+type ServerModelSource = string;
 
 export interface ServerModelInfo {
   id: string;
@@ -127,7 +127,7 @@ export function gatewayAliasId(model: ServerModelInfo): string {
   return aliasModelId(model.id, gatewayProviderId(model));
 }
 
-export function exposedGatewayAliasId(model: ServerModelInfo, opts?: GatewayModelOptions): string {
+function exposedGatewayAliasId(model: ServerModelInfo, opts?: GatewayModelOptions): string {
   const alias = gatewayAliasId(model);
   return opts?.maskGatewayIds ? maskGatewayModelId(alias) : alias;
 }

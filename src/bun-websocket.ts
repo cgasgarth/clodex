@@ -122,7 +122,7 @@ async function classifyRejectedUpgrade(
       },
       redirect: 'manual',
       ...(options.proxy ? { proxy: options.proxy } : {}),
-    } as RequestInit);
+    });
   } catch {
     return undefined;
   }

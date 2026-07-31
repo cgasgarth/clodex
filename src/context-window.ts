@@ -12,7 +12,7 @@ export const DEFAULT_CONTEXT_WINDOW = 200_000;
 /** OpenCode cache file provider keys (metadata enrichment only, not clodex registry ids). */
 const CACHE_PROVIDER_PRIORITY = new Set(['opencode', 'opencode-go']);
 
-export interface OpencodeCacheModel {
+interface OpencodeCacheModel {
   id?: string;
   name?: string;
   family?: string;
@@ -62,7 +62,7 @@ let cacheIndex: Map<string, number> | undefined;
 const heuristicCache = new Map<string, number>();
 
 /** Shared parse of ~/.cache/opencode/models.json — used by model list and context lookup. */
-export function loadOpencodeCache(): OpencodeCacheFile | null {
+function loadOpencodeCache(): OpencodeCacheFile | null {
   if (parsedCache === undefined) {
     try {
       parsedCache = JSON.parse(readFileSync(OPENCODE_CACHE_PATH, 'utf8')) as OpencodeCacheFile;
@@ -79,7 +79,7 @@ export function buildContextWindowIndex(cache: OpencodeCacheFile): Map<string, n
   const allLimits = new Map<string, number[]>();
 
   for (const [providerKey, providerData] of Object.entries(cache)) {
-    const models = providerData?.models;
+    const models = providerData.models;
     if (!models) continue;
     for (const [modelId, entry] of Object.entries(models)) {
       const ctx = entry.limit?.context;
@@ -125,7 +125,7 @@ export function contextWindowFromHeuristics(modelId: string): number {
   return DEFAULT_CONTEXT_WINDOW;
 }
 
-export function lookupContextWindow(modelId: string): number {
+function lookupContextWindow(modelId: string): number {
   return getCacheIndex().get(modelId) ?? contextWindowFromHeuristics(modelId);
 }
 

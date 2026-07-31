@@ -12,6 +12,7 @@ import { generateAnthropicResponse, streamAnthropicResponse } from '../src/sdk-a
 import { generateOpenAiResponse, streamOpenAiResponse } from '../src/openai-adapter.js';
 import { resolveProviderCredential } from '../src/env.js';
 import { withResponsesWebSocketDiagnosticContext } from '../src/oauth/responses-websocket.js';
+import { asMocked, waitForCondition } from './test-helpers.js';
 
 const TEST_HELPER_REF = `helper:v1:${'a'.repeat(64)}:oauth:provider:oauth-provider`;
 const ORIGINAL_COMPACTION_FLAG = process.env.CLODEX_OPENAI_COMPACTION;
@@ -210,13 +211,13 @@ async function closeHandle(handle: ServerHandle | { close: () => Promise<void> }
 }
 
 afterEach(async () => {
-  vi.mocked(createLanguageModel).mockClear();
-  vi.mocked(resolveProviderCredential).mockReset();
-  vi.mocked(generateAnthropicResponse).mockClear();
-  vi.mocked(streamAnthropicResponse).mockClear();
-  vi.mocked(generateOpenAiResponse).mockClear();
-  vi.mocked(streamOpenAiResponse).mockClear();
-  vi.mocked(withResponsesWebSocketDiagnosticContext).mockClear();
+  asMocked(createLanguageModel).mockClear();
+  asMocked(resolveProviderCredential).mockReset();
+  asMocked(generateAnthropicResponse).mockClear();
+  asMocked(streamAnthropicResponse).mockClear();
+  asMocked(generateOpenAiResponse).mockClear();
+  asMocked(streamOpenAiResponse).mockClear();
+  asMocked(withResponsesWebSocketDiagnosticContext).mockClear();
   if (ORIGINAL_COMPACTION_FLAG === undefined) delete process.env.CLODEX_OPENAI_COMPACTION;
   else process.env.CLODEX_OPENAI_COMPACTION = ORIGINAL_COMPACTION_FLAG;
   if (ORIGINAL_COMPACTION_THRESHOLD === undefined) {
@@ -477,7 +478,7 @@ describe('server router', () => {
       content: [{ type: 'text', text: 'native oauth ok' }],
     });
     handles.push(upstream);
-    vi.mocked(resolveProviderCredential).mockResolvedValue('current-oauth-token');
+    asMocked(resolveProviderCredential).mockResolvedValue('current-oauth-token');
     const server = await startTestServer({
       catalog: createGatewayModelCatalog([{
         ...model('claude-oauth', 'anthropic', 'oauth-provider', {
@@ -521,7 +522,7 @@ describe('server router', () => {
       },
     ]);
     handles.push(upstream);
-    vi.mocked(resolveProviderCredential)
+    asMocked(resolveProviderCredential)
       .mockResolvedValueOnce('rejected-token')
       .mockResolvedValueOnce('replacement-token');
     const server = await startTestServer({
@@ -586,7 +587,7 @@ describe('server router', () => {
   it('injects the opt-in native-compaction threshold in endpoint mode', async () => {
     process.env.CLODEX_OPENAI_COMPACTION = '1';
     delete process.env.CLODEX_OPENAI_COMPACT_THRESHOLD;
-    vi.mocked(resolveProviderCredential).mockResolvedValue('oauth-token');
+    asMocked(resolveProviderCredential).mockResolvedValue('oauth-token');
     const catalog = createGatewayModelCatalog([{
       id: 'gpt-5.6-sol',
       name: 'GPT-5.6 Sol',
@@ -619,7 +620,7 @@ describe('server router', () => {
   });
 
   it('passes Claude compact requests through to the Responses transport context', async () => {
-    vi.mocked(resolveProviderCredential).mockResolvedValue('oauth-token');
+    asMocked(resolveProviderCredential).mockResolvedValue('oauth-token');
     const catalog = createGatewayModelCatalog([{
       id: 'gpt-5.6-sol',
       name: 'GPT-5.6 Sol',
@@ -674,7 +675,7 @@ describe('server router', () => {
       apiKey: 'provider-key',
       contextWindow: 10,
     }]);
-    vi.mocked(generateAnthropicResponse).mockRejectedValueOnce({
+    asMocked(generateAnthropicResponse).mockRejectedValueOnce({
       statusCode: 400,
       data: {
         error: {
@@ -729,7 +730,7 @@ describe('server router', () => {
     const server = await startTestServer({ catalog: sdkCatalog });
 
     // Anthropic-format endpoint: an oversized upstream hint comes out clamped.
-    vi.mocked(generateAnthropicResponse).mockRejectedValueOnce(rateLimitError('3600'));
+    asMocked(generateAnthropicResponse).mockRejectedValueOnce(rateLimitError('3600'));
     const anthropicResponse = await fetch(`${server.url}/anthropic/v1/messages`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -742,7 +743,7 @@ describe('server router', () => {
     expect(anthropicResponse.headers.get('retry-after')).toBe('60');
 
     // OpenAI-format endpoint: an in-range hint is forwarded as-is.
-    vi.mocked(generateOpenAiResponse).mockRejectedValueOnce(rateLimitError('7'));
+    asMocked(generateOpenAiResponse).mockRejectedValueOnce(rateLimitError('7'));
     const openAiResponse = await fetch(`${server.url}/openai/v1/chat/completions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -766,7 +767,7 @@ describe('server router', () => {
     }]);
     // Even with a retry-after header present upstream, a non-429 stays terminal
     // with no backoff hint.
-    vi.mocked(generateAnthropicResponse).mockRejectedValueOnce(new APICallError({
+    asMocked(generateAnthropicResponse).mockRejectedValueOnce(new APICallError({
       message: 'forbidden',
       url: 'https://upstream/v1/responses',
       requestBodyValues: {},
@@ -812,7 +813,7 @@ describe('server router', () => {
       }),
     });
     expect(messagesResponse.status).toBe(200);
-    expect(vi.mocked(generateAnthropicResponse)).toHaveBeenLastCalledWith(
+    expect(asMocked(generateAnthropicResponse)).toHaveBeenLastCalledWith(
       expect.anything(),
       expect.anything(),
       expect.any(String),
@@ -828,7 +829,7 @@ describe('server router', () => {
       }),
     });
     expect(chatResponse.status).toBe(200);
-    expect(vi.mocked(generateOpenAiResponse)).toHaveBeenLastCalledWith(
+    expect(asMocked(generateOpenAiResponse)).toHaveBeenLastCalledWith(
       expect.anything(),
       expect.anything(),
       expect.any(String),
@@ -837,7 +838,7 @@ describe('server router', () => {
   });
 
   it('uses the exact OAuth reference and rebuilds the cached model when the token changes', async () => {
-    vi.mocked(resolveProviderCredential)
+    asMocked(resolveProviderCredential)
       .mockResolvedValueOnce('oauth-token-a')
       .mockResolvedValueOnce('oauth-token-b');
     const oauthCatalog = createGatewayModelCatalog([
@@ -889,12 +890,12 @@ describe('server router', () => {
     );
     expect(createLanguageModel).toHaveBeenCalledTimes(2);
     expect(
-      vi.mocked(createLanguageModel).mock.calls.map(call => (call[0] as any).apiKey),
+      asMocked(createLanguageModel).mock.calls.map(call => (call[0] as any).apiKey),
     ).toEqual(['oauth-token-a', 'oauth-token-b']);
   });
 
   it('does not expose credential-state paths when token resolution fails', async () => {
-    vi.mocked(resolveProviderCredential).mockRejectedValue(
+    asMocked(resolveProviderCredential).mockRejectedValue(
       new Error('Timed out waiting for provider registry lock: /private/state/providers.json.lock'),
     );
     const oauthCatalog = createGatewayModelCatalog([{
@@ -928,11 +929,11 @@ describe('server router', () => {
   });
 
   it('refreshes once after a translated Anthropic-facing OAuth 401', async () => {
-    vi.mocked(generateAnthropicResponse).mockClear();
-    vi.mocked(generateAnthropicResponse).mockRejectedValueOnce(
+    asMocked(generateAnthropicResponse).mockClear();
+    asMocked(generateAnthropicResponse).mockRejectedValueOnce(
       Object.assign(new Error('rejected token'), { statusCode: 401 }),
     );
-    vi.mocked(resolveProviderCredential)
+    asMocked(resolveProviderCredential)
       .mockResolvedValueOnce('rejected-token')
       .mockResolvedValueOnce('refreshed-token');
     const oauthCatalog = createGatewayModelCatalog([
@@ -976,16 +977,16 @@ describe('server router', () => {
       { rejectedAccessToken: 'rejected-token' },
     );
     expect(
-      vi.mocked(createLanguageModel).mock.calls.map(call => (call[0] as any).apiKey),
+      asMocked(createLanguageModel).mock.calls.map(call => (call[0] as any).apiKey),
     ).toEqual(['rejected-token', 'refreshed-token']);
   });
 
   it('surfaces a second translated Anthropic-facing OAuth 401 without another retry', async () => {
-    vi.mocked(generateAnthropicResponse).mockClear();
-    vi.mocked(generateAnthropicResponse)
+    asMocked(generateAnthropicResponse).mockClear();
+    asMocked(generateAnthropicResponse)
       .mockRejectedValueOnce(Object.assign(new Error('rejected token'), { statusCode: 401 }))
       .mockRejectedValueOnce(Object.assign(new Error('rejected token'), { statusCode: 401 }));
-    vi.mocked(resolveProviderCredential)
+    asMocked(resolveProviderCredential)
       .mockResolvedValueOnce('rejected-token')
       .mockResolvedValueOnce('refreshed-token');
     const oauthCatalog = createGatewayModelCatalog([{
@@ -1018,13 +1019,13 @@ describe('server router', () => {
   });
 
   it('does not retry a translated OAuth stream after output has started', async () => {
-    vi.mocked(streamAnthropicResponse).mockImplementationOnce(
+    asMocked(streamAnthropicResponse).mockImplementationOnce(
       async (_model, _params, _modelId, write) => {
         write('event: message_start\ndata: {"type":"message_start"}\n\n');
         throw Object.assign(new Error('rejected token'), { statusCode: 401 });
       },
     );
-    vi.mocked(resolveProviderCredential).mockResolvedValue('rejected-token');
+    asMocked(resolveProviderCredential).mockResolvedValue('rejected-token');
     const oauthCatalog = createGatewayModelCatalog([{
       id: 'oauth-stream-rejected',
       name: 'OAuth Stream Rejected',
@@ -1059,11 +1060,11 @@ describe('server router', () => {
   });
 
   it('refreshes once after a translated OpenAI-facing OAuth 401', async () => {
-    vi.mocked(generateOpenAiResponse).mockClear();
-    vi.mocked(generateOpenAiResponse).mockRejectedValueOnce(
+    asMocked(generateOpenAiResponse).mockClear();
+    asMocked(generateOpenAiResponse).mockRejectedValueOnce(
       Object.assign(new Error('rejected token'), { statusCode: 401 }),
     );
-    vi.mocked(resolveProviderCredential)
+    asMocked(resolveProviderCredential)
       .mockResolvedValueOnce('rejected-token')
       .mockResolvedValueOnce('refreshed-token');
     const oauthCatalog = createGatewayModelCatalog([
@@ -1107,16 +1108,16 @@ describe('server router', () => {
       { rejectedAccessToken: 'rejected-token' },
     );
     expect(
-      vi.mocked(createLanguageModel).mock.calls.map(call => (call[0] as any).apiKey),
+      asMocked(createLanguageModel).mock.calls.map(call => (call[0] as any).apiKey),
     ).toEqual(['rejected-token', 'refreshed-token']);
   });
 
   it('surfaces a second translated OpenAI-facing OAuth 401 without another retry', async () => {
-    vi.mocked(generateOpenAiResponse).mockClear();
-    vi.mocked(generateOpenAiResponse)
+    asMocked(generateOpenAiResponse).mockClear();
+    asMocked(generateOpenAiResponse)
       .mockRejectedValueOnce(Object.assign(new Error('rejected token'), { statusCode: 401 }))
       .mockRejectedValueOnce(Object.assign(new Error('rejected token'), { statusCode: 401 }));
-    vi.mocked(resolveProviderCredential)
+    asMocked(resolveProviderCredential)
       .mockResolvedValueOnce('rejected-token')
       .mockResolvedValueOnce('refreshed-token');
     const oauthCatalog = createGatewayModelCatalog([{
@@ -1172,7 +1173,7 @@ describe('server router', () => {
       }),
     });
     expect(messagesResponse.status).toBe(200);
-    expect(vi.mocked(generateAnthropicResponse)).toHaveBeenLastCalledWith(
+    expect(asMocked(generateAnthropicResponse)).toHaveBeenLastCalledWith(
       expect.anything(),
       expect.anything(),
       expect.any(String),
@@ -1188,7 +1189,7 @@ describe('server router', () => {
       }),
     });
     expect(chatResponse.status).toBe(200);
-    expect(vi.mocked(generateOpenAiResponse)).toHaveBeenLastCalledWith(
+    expect(asMocked(generateOpenAiResponse)).toHaveBeenLastCalledWith(
       expect.anything(),
       expect.anything(),
       expect.any(String),
@@ -1263,8 +1264,8 @@ describe('server router', () => {
       expect(response.status).toBe(200);
     }
 
-    expect(vi.mocked(createLanguageModel)).toHaveBeenCalledTimes(2);
-    expect(vi.mocked(createLanguageModel).mock.calls.map(call => (call[0] as any).providerId)).toEqual([
+    expect(asMocked(createLanguageModel)).toHaveBeenCalledTimes(2);
+    expect(asMocked(createLanguageModel).mock.calls.map(call => (call[0] as any).providerId)).toEqual([
       'openai',
       'openrouter',
     ]);
@@ -1418,7 +1419,7 @@ describe('server router', () => {
         gateway,
         aliasNames: new Set(),
       });
-      await vi.waitFor(async () => {
+      await waitForCondition(async () => {
         const health = await fetch(`${server.url}/health`);
         expect(health.status).toBe(200);
       });

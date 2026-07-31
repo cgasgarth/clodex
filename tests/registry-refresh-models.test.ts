@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'bun:test';
 import { refreshProviderModels } from '../src/registry/refresh-models.js';
 import * as io from '../src/registry/io.js';
 import type { ProviderRegistry } from '../src/registry/types.js';
+import { asMocked } from './test-helpers.js';
 
 vi.mock('../src/registry/io.js', () => ({
   loadRegistry: vi.fn(),
@@ -44,10 +45,10 @@ describe('registry/refresh-models', () => {
           api: {},
         }],
       };
-      vi.mocked(io.loadRegistryStrict).mockReturnValue(mockRegistry);
+      asMocked(io.loadRegistryStrict).mockReturnValue(mockRegistry);
 
       // Codex endpoint returns valid models
-      vi.mocked(global.fetch).mockResolvedValueOnce({
+      asMocked(global.fetch).mockResolvedValueOnce({
         ok: true,
         json: async () => ({
           models: [{ slug: 'gpt-4', title: 'GPT-4' }]
@@ -62,7 +63,7 @@ describe('registry/refresh-models', () => {
       expect(result.ok).toBe(true);
       expect(result.modelCount).toBe(1);
       
-      const savedRegistry = vi.mocked(io.saveRegistry).mock.calls[0]?.[0] as ProviderRegistry;
+      const savedRegistry = asMocked(io.saveRegistry).mock.calls[0]?.[0] as ProviderRegistry;
       const models = savedRegistry.providers[0]?.modelsCache?.models;
       expect(models?.[0]?.id).toBe('gpt-4');
     });
@@ -80,16 +81,16 @@ describe('registry/refresh-models', () => {
           api: {},
         }],
       };
-      vi.mocked(io.loadRegistryStrict).mockReturnValue(mockRegistry);
+      asMocked(io.loadRegistryStrict).mockReturnValue(mockRegistry);
 
       // 1. Codex endpoint 404s
-      vi.mocked(global.fetch).mockResolvedValueOnce({
+      asMocked(global.fetch).mockResolvedValueOnce({
         ok: false,
         status: 404,
       } as Response);
 
       // 2. General endpoint returns models, including unsupported ones
-      vi.mocked(global.fetch).mockResolvedValueOnce({
+      asMocked(global.fetch).mockResolvedValueOnce({
         ok: true,
         json: async () => ({
           models: [
@@ -103,7 +104,7 @@ describe('registry/refresh-models', () => {
 
       expect(global.fetch).toHaveBeenCalledTimes(2);
       expect(global.fetch).toHaveBeenNthCalledWith(2, 'https://chatgpt.com/backend-api/models', expect.anything());
-      const savedRegistry = vi.mocked(io.saveRegistry).mock.calls[0]?.[0] as ProviderRegistry;
+      const savedRegistry = asMocked(io.saveRegistry).mock.calls[0]?.[0] as ProviderRegistry;
       const models = savedRegistry.providers[0]?.modelsCache?.models;
       console.log('MODELS RETURNED:', models);
       
@@ -126,10 +127,10 @@ describe('registry/refresh-models', () => {
           api: {},
         }],
       };
-      vi.mocked(io.loadRegistryStrict).mockReturnValue(mockRegistry);
+      asMocked(io.loadRegistryStrict).mockReturnValue(mockRegistry);
 
       // Both endpoints fail
-      vi.mocked(global.fetch).mockResolvedValue({
+      asMocked(global.fetch).mockResolvedValue({
         ok: false,
         status: 500,
       } as Response);
@@ -168,10 +169,10 @@ describe('registry/refresh-models', () => {
           },
         }],
       };
-      vi.mocked(io.loadRegistryStrict).mockReturnValue(mockRegistry);
+      asMocked(io.loadRegistryStrict).mockReturnValue(mockRegistry);
 
       // Both live endpoints fail — would normally fall back to the static seed.
-      vi.mocked(global.fetch).mockResolvedValue({
+      asMocked(global.fetch).mockResolvedValue({
         ok: false,
         status: 500,
       } as Response);
@@ -200,9 +201,9 @@ describe('registry/refresh-models', () => {
           api: {},
         }],
       };
-      vi.mocked(io.loadRegistryStrict).mockReturnValue(mockRegistry);
+      asMocked(io.loadRegistryStrict).mockReturnValue(mockRegistry);
 
-      vi.mocked(global.fetch).mockResolvedValueOnce({
+      asMocked(global.fetch).mockResolvedValueOnce({
         ok: true,
         json: async () => ({
           models: [
@@ -215,7 +216,7 @@ describe('registry/refresh-models', () => {
 
       await refreshProviderModels('openai-oauth', 'mock_token', mockRegistry);
 
-      const savedRegistry = vi.mocked(io.saveRegistry).mock.calls[0]?.[0] as ProviderRegistry;
+      const savedRegistry = asMocked(io.saveRegistry).mock.calls[0]?.[0] as ProviderRegistry;
       const models = savedRegistry.providers[0]?.modelsCache?.models ?? [];
       const luna = models.find(m => m.id === 'gpt-5.6-luna');
       const sol = models.find(m => m.id === 'gpt-5.6-sol');
@@ -243,14 +244,14 @@ describe('registry/refresh-models', () => {
           api: {},
         }],
       };
-      vi.mocked(io.loadRegistryStrict).mockReturnValue(mockRegistry);
+      asMocked(io.loadRegistryStrict).mockReturnValue(mockRegistry);
 
       // Both live endpoints fail → static seed.
-      vi.mocked(global.fetch).mockResolvedValue({ ok: false, status: 500 } as Response);
+      asMocked(global.fetch).mockResolvedValue({ ok: false, status: 500 } as Response);
 
       await refreshProviderModels('openai-oauth', 'mock_token', mockRegistry);
 
-      const savedRegistry = vi.mocked(io.saveRegistry).mock.calls[0]?.[0] as ProviderRegistry;
+      const savedRegistry = asMocked(io.saveRegistry).mock.calls[0]?.[0] as ProviderRegistry;
       const luna = savedRegistry.providers[0]?.modelsCache?.models.find(m => m.id === 'gpt-5.6-luna');
       const spark = savedRegistry.providers[0]?.modelsCache?.models.find(
         m => m.id === 'gpt-5.3-codex-spark',

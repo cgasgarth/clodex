@@ -19,12 +19,13 @@ vi.mock('../src/registry/lock.js', () => ({
 
 import { fetchTemplateModels } from '../src/registry/fetch-template-models.js';
 import { loadRegistryStrict, saveRegistry } from '../src/registry/io.js';
+import { asMocked } from './test-helpers.js';
 
 describe('refreshProviderModels', () => {
   beforeEach(() => {
-    vi.mocked(fetchTemplateModels).mockReset();
-    vi.mocked(loadRegistryStrict).mockReset();
-    vi.mocked(saveRegistry).mockClear();
+    asMocked(fetchTemplateModels).mockReset();
+    asMocked(loadRegistryStrict).mockReset();
+    asMocked(saveRegistry).mockClear();
   });
 
   it('reloads persisted state before saving discovery results', async () => {
@@ -48,8 +49,8 @@ describe('refreshProviderModels', () => {
         name: 'Renamed while discovery was running',
       }],
     };
-    vi.mocked(loadRegistryStrict).mockReturnValue(persistedRegistry);
-    vi.mocked(fetchTemplateModels).mockResolvedValue({
+    asMocked(loadRegistryStrict).mockReturnValue(persistedRegistry);
+    asMocked(fetchTemplateModels).mockResolvedValue({
       baseUrl: 'https://api.groq.com/openai/v1',
       models: [{
         id: 'live-a',
@@ -82,14 +83,14 @@ describe('refreshProviderModels', () => {
         addedAt: '2026-01-01T00:00:00.000Z',
       }],
     };
-    vi.mocked(loadRegistryStrict).mockReturnValue({
+    asMocked(loadRegistryStrict).mockReturnValue({
       schemaVersion: 1,
       providers: [{
         ...initialRegistry.providers[0]!,
         authRef: 'keyring:provider:groq-replacement',
       }],
     });
-    vi.mocked(fetchTemplateModels).mockResolvedValue({
+    asMocked(fetchTemplateModels).mockResolvedValue({
       baseUrl: 'https://api.groq.com/openai/v1',
       models: [{
         id: 'live-a',
@@ -122,14 +123,14 @@ describe('refreshProviderModels', () => {
         addedAt: '2026-01-01T00:00:00.000Z',
       }],
     };
-    vi.mocked(loadRegistryStrict).mockReturnValue({
+    asMocked(loadRegistryStrict).mockReturnValue({
       schemaVersion: 1,
       providers: [{
         ...initialRegistry.providers[0]!,
         api: { npm: '@ai-sdk/groq', url: 'https://replacement.example/v1' },
       }],
     });
-    vi.mocked(fetchTemplateModels).mockResolvedValue({
+    asMocked(fetchTemplateModels).mockResolvedValue({
       baseUrl: 'https://api.groq.com/openai/v1',
       models: [{
         id: 'live-a',
@@ -194,7 +195,7 @@ describe('refreshProviderModels', () => {
         },
       }],
     };
-    vi.mocked(fetchTemplateModels).mockResolvedValue({
+    asMocked(fetchTemplateModels).mockResolvedValue({
       baseUrl: 'https://api.groq.com/openai/v1',
       models: [{
         id: 'live-a',
@@ -208,7 +209,7 @@ describe('refreshProviderModels', () => {
         modelFormat: 'openai',
       }],
     });
-    vi.mocked(loadRegistryStrict).mockReturnValue(registry);
+    asMocked(loadRegistryStrict).mockReturnValue(registry);
 
     const first = await refreshProviderModels('groq', 'gsk-real-key', registry);
     const second = await refreshProviderModels('groq', 'gsk-real-key', registry);

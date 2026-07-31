@@ -67,15 +67,18 @@ export function tokensToStoredCredential(
 export function parseStoredOAuthCredential(raw: string | null): StoredOAuthCredential | null {
   if (!raw?.trim().startsWith('{')) return null;
   try {
-    const parsed = JSON.parse(raw) as StoredOAuthCredential;
-    if (parsed.type === 'oauth'
-      && typeof parsed.access === 'string'
-      && parsed.access.trim().length > 0
-      && typeof parsed.refresh === 'string'
-      && typeof parsed.expires === 'number'
-      && Number.isFinite(parsed.expires)
-      && (parsed.accessRejected === undefined || parsed.accessRejected === true)) {
-      return parsed;
+    const parsed: unknown = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object') {
+      const credential = parsed as Record<string, unknown>;
+      if (credential.type === 'oauth'
+        && typeof credential.access === 'string'
+        && credential.access.trim().length > 0
+        && typeof credential.refresh === 'string'
+        && typeof credential.expires === 'number'
+        && Number.isFinite(credential.expires)
+        && (credential.accessRejected === undefined || credential.accessRejected === true)) {
+        return credential as unknown as StoredOAuthCredential;
+      }
     }
   } catch {
     // ignore
@@ -83,7 +86,7 @@ export function parseStoredOAuthCredential(raw: string | null): StoredOAuthCrede
   return null;
 }
 
-export const OAUTH_REFRESH_SKEW_MS = 120_000;
+const OAUTH_REFRESH_SKEW_MS = 120_000;
 
 export function oauthCredentialNeedsRefresh(
   cred: Pick<StoredOAuthCredential, 'expires'>,

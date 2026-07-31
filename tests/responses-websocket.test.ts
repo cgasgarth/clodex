@@ -16,7 +16,7 @@ import { createOpenAI } from '@ai-sdk/openai';
 import { streamText } from 'ai';
 
 // Fake `ws` WebSocket that records constructor args and lets tests drive events.
-const { fakeSockets } = vi.hoisted(() => ({ fakeSockets: [] as FakeWebSocket[] }));
+const { fakeSockets } = createHoisted(() => ({ fakeSockets: [] as FakeWebSocket[] }));
 
 class FakeWebSocket extends EventEmitter {
   url: string;
@@ -43,6 +43,7 @@ import {
 } from '../src/oauth/responses-websocket.js';
 import { saveStoredResponsesCheckpoint } from '../src/oauth/responses-checkpoint-store.js';
 import { sdkUpstreamErrorDetails } from '../src/upstream-error.js';
+import { createHoisted, waitForCondition } from './test-helpers.js';
 
 const WS_URL = 'wss://chatgpt.com/backend-api/codex/responses';
 
@@ -996,12 +997,12 @@ describe('createResponsesWebSocketFetch', () => {
       return out;
     })();
 
-    await vi.waitFor(() => expect(fakeSockets).toHaveLength(1));
+    await waitForCondition(() => expect(fakeSockets).toHaveLength(1));
     rejectUpgrade(lastSocket(), 403);
 
     // The SDK backs off (no retry-after header on the synthetic SSE response,
     // so its default ~2s exponential delay) and opens a SECOND upgrade.
-    await vi.waitFor(() => expect(fakeSockets).toHaveLength(2), { timeout: 10_000 });
+    await waitForCondition(() => expect(fakeSockets).toHaveLength(2), { timeout: 10_000 });
     const replacement = lastSocket();
     replacement.emit('open');
     emitTextResponse(replacement, 'resp_retry_recovered', 'recovered');
@@ -1698,7 +1699,7 @@ describe('createResponsesWebSocketFetch', () => {
       body: JSON.stringify(sessionPayload(secondInput)),
     });
 
-    await vi.waitFor(() => expect(originalSocket.send).toHaveBeenCalledTimes(2));
+    await waitForCondition(() => expect(originalSocket.send).toHaveBeenCalledTimes(2));
     const trigger = JSON.parse(originalSocket.send.mock.calls[1]![0] as string);
     expect(trigger.previous_response_id).toBe('resp_before_compact');
     expect(trigger.input).toEqual([secondUser, { type: 'compaction_trigger' }]);
@@ -1816,7 +1817,7 @@ describe('createResponsesWebSocketFetch', () => {
       headers: {},
       body: JSON.stringify(sessionPayload(secondInput)),
     });
-    await vi.waitFor(() => expect(originalSocket.send).toHaveBeenCalledTimes(2));
+    await waitForCondition(() => expect(originalSocket.send).toHaveBeenCalledTimes(2));
     emitCompactionResponse(originalSocket, 'resp_anchor_trigger', 'opaque-anchor');
     const second = await secondPromise;
     const compactedSocket = lastSocket();
@@ -1857,7 +1858,7 @@ describe('createResponsesWebSocketFetch', () => {
       }),
     );
 
-    await vi.waitFor(() => expect(compactedSocket.send).toHaveBeenCalledTimes(2));
+    await waitForCondition(() => expect(compactedSocket.send).toHaveBeenCalledTimes(2));
     expect(JSON.parse(compactedSocket.send.mock.calls[1]![0] as string)).toMatchObject({
       previous_response_id: 'resp_anchor_compacted',
       input: [compactInstruction, { type: 'compaction_trigger' }],
@@ -2037,7 +2038,7 @@ describe('createResponsesWebSocketFetch', () => {
       headers: {},
       body: JSON.stringify(sessionPayload(secondInput)),
     });
-    await vi.waitFor(() => expect(originalSocket.send).toHaveBeenCalledTimes(2));
+    await waitForCondition(() => expect(originalSocket.send).toHaveBeenCalledTimes(2));
     emitCompactionResponse(originalSocket, 'resp_short_summary_trigger', 'short-anchor');
     const second = await secondPromise;
     const compactedSocket = lastSocket();
@@ -2061,7 +2062,7 @@ describe('createResponsesWebSocketFetch', () => {
         ])),
       }),
     );
-    await vi.waitFor(() => expect(compactedSocket.send).toHaveBeenCalledTimes(2));
+    await waitForCondition(() => expect(compactedSocket.send).toHaveBeenCalledTimes(2));
     expect(JSON.parse(compactedSocket.send.mock.calls[1]![0] as string).input)
       .toEqual([compactInstruction, { type: 'compaction_trigger' }]);
     emitCompactionResponse(
@@ -2269,7 +2270,7 @@ describe('createResponsesWebSocketFetch', () => {
     const secondPromise = wsFetch('https://example.test/responses', {
       method: 'POST', headers: {}, body: JSON.stringify(sessionPayload(fullInput)),
     });
-    await vi.waitFor(() => expect(originalSocket.send).toHaveBeenCalledTimes(2));
+    await waitForCondition(() => expect(originalSocket.send).toHaveBeenCalledTimes(2));
     emitCompactionResponse(originalSocket, 'resp_retention_trigger', 'bounded-summary');
     const second = await secondPromise;
 
@@ -2334,7 +2335,7 @@ describe('createResponsesWebSocketFetch', () => {
       headers: {},
       body: JSON.stringify(sessionPayload(fullInput)),
     });
-    await vi.waitFor(() => expect(originalSocket.send).toHaveBeenCalledTimes(2));
+    await waitForCondition(() => expect(originalSocket.send).toHaveBeenCalledTimes(2));
     emitCompactionResponse(originalSocket, 'resp_image_budget_trigger', 'image-summary');
     const second = await secondPromise;
     const rebasedSocket = lastSocket();
@@ -2384,7 +2385,7 @@ describe('createResponsesWebSocketFetch', () => {
       method: 'POST', headers: {}, body: JSON.stringify(sessionPayload(fullInput)),
     });
 
-    await vi.waitFor(() => expect(socket.send).toHaveBeenCalledTimes(2));
+    await waitForCondition(() => expect(socket.send).toHaveBeenCalledTimes(2));
     expect(JSON.parse(socket.send.mock.calls[1]![0] as string)).toMatchObject({
       previous_response_id: 'resp_fallback_base',
       input: [nextUser, { type: 'compaction_trigger' }],
@@ -2528,7 +2529,7 @@ describe('createResponsesWebSocketFetch', () => {
     const secondPromise = wsFetch('https://example.test/responses', {
       method: 'POST', headers: {}, body: JSON.stringify(sessionPayload(fullInput)),
     });
-    await vi.waitFor(() => expect(originalSocket.send).toHaveBeenCalledTimes(2));
+    await waitForCondition(() => expect(originalSocket.send).toHaveBeenCalledTimes(2));
     originalSocket.emit('message', Buffer.from(JSON.stringify({
       type: 'response.created',
       response: { id: `resp_endpoint_fallback_${terminalType}` },
@@ -2629,7 +2630,7 @@ describe('createResponsesWebSocketFetch', () => {
     const secondPromise = wsFetch('https://example.test/responses', {
       method: 'POST', headers: {}, body: JSON.stringify(sessionPayload(secondInput)),
     });
-    await vi.waitFor(() => expect(originalSocket.send).toHaveBeenCalledTimes(2));
+    await waitForCondition(() => expect(originalSocket.send).toHaveBeenCalledTimes(2));
     emitCompactionResponse(originalSocket, 'resp_recompact_first_trigger', 'first-opaque-state');
     const second = await secondPromise;
     const compactedSocket = lastSocket();
@@ -2650,7 +2651,7 @@ describe('createResponsesWebSocketFetch', () => {
       headers: {},
       body: JSON.stringify(sessionPayload([...secondInput, secondAssistant, thirdUser])),
     });
-    await vi.waitFor(() => expect(compactedSocket.send).toHaveBeenCalledTimes(2));
+    await waitForCondition(() => expect(compactedSocket.send).toHaveBeenCalledTimes(2));
     compactedSocket.emit('message', Buffer.from(JSON.stringify({
       type: 'error',
       error: { code: 'compaction_trigger_unavailable', message: 'trigger unavailable' },
@@ -2697,7 +2698,7 @@ describe('createResponsesWebSocketFetch', () => {
     const secondPromise = wsFetch('https://example.test/responses', {
       method: 'POST', headers: {}, body: JSON.stringify(sessionPayload(fullInput)),
     });
-    await vi.waitFor(() => expect(originalSocket.send).toHaveBeenCalledTimes(2));
+    await waitForCondition(() => expect(originalSocket.send).toHaveBeenCalledTimes(2));
     emitCompactionResponse(originalSocket, 'resp_retry_trigger', 'retry-summary');
     const second = await secondPromise;
     const compactedSocket = lastSocket();
@@ -2765,7 +2766,7 @@ describe('createResponsesWebSocketFetch', () => {
       { role: 'user', content: [{ type: 'input_text', text: 'next' }] },
     ];
     const secondPromise = fetchWithEstimate(fullInput, 150);
-    await vi.waitFor(() => expect(originalSocket.send).toHaveBeenCalledTimes(2));
+    await waitForCondition(() => expect(originalSocket.send).toHaveBeenCalledTimes(2));
     emitCompactionResponse(originalSocket, 'resp_failure_loop_trigger', 'loop-summary');
     const second = await secondPromise;
     const compactedSocket = lastSocket();
@@ -2842,7 +2843,7 @@ describe('createResponsesWebSocketFetch', () => {
     const secondPromise = wsFetch('https://example.test/responses', {
       method: 'POST', headers: {}, body: JSON.stringify(sessionPayload(secondInput)),
     });
-    await vi.waitFor(() => expect(originalSocket.send).toHaveBeenCalledTimes(2));
+    await waitForCondition(() => expect(originalSocket.send).toHaveBeenCalledTimes(2));
     emitCompactionResponse(originalSocket, 'resp_checkpoint_trigger', 'checkpoint-summary');
     const second = await secondPromise;
     const compactedSocket = lastSocket();
@@ -3077,7 +3078,7 @@ describe('createResponsesWebSocketFetch', () => {
         throw new Error('AI SDK stream ended without a finish part');
       },
     );
-    await vi.waitFor(() => expect(fakeSockets).toHaveLength(1));
+    await waitForCondition(() => expect(fakeSockets).toHaveLength(1));
     const socket = lastSocket();
     socket.emit('open');
     emitTextResponse(socket, 'resp_sdk_compaction_usage', 'done', {
@@ -3295,7 +3296,7 @@ describe('createResponsesWebSocketFetch', () => {
         ])),
       }),
     );
-    await vi.waitFor(() => expect(recycledSocket.send).toHaveBeenCalledTimes(3));
+    await waitForCondition(() => expect(recycledSocket.send).toHaveBeenCalledTimes(3));
     emitCompactionResponse(recycledSocket, 'resp_agent_b_trigger', 'agent-b-opaque-state');
     const agentBCompaction = await agentBCompactionPromise;
     const agentBCompactedSocket = lastSocket();
@@ -3808,7 +3809,7 @@ describe('createResponsesWebSocketFetch', () => {
         body: JSON.stringify(sessionPayload(root)),
       }),
     ));
-    await vi.waitFor(() => expect(compactFetch).toHaveBeenCalledTimes(2));
+    await waitForCondition(() => expect(compactFetch).toHaveBeenCalledTimes(2));
     releaseCompactions();
     const responses = await Promise.all(pending);
 
@@ -5443,7 +5444,7 @@ describe('createResponsesWebSocketFetch', () => {
         body: JSON.stringify(sessionPayload([...root, echoedCall, toolOutput])),
       }),
     );
-    await vi.waitFor(() => expect(original.send).toHaveBeenCalledTimes(2));
+    await waitForCondition(() => expect(original.send).toHaveBeenCalledTimes(2));
     original.emit('message', Buffer.from(JSON.stringify({
       type: 'error',
       error: {
@@ -5522,7 +5523,7 @@ describe('createResponsesWebSocketFetch', () => {
         message: 'maximum context length exceeded',
       },
     })));
-    await vi.waitFor(() => expect(fakeSockets.length).toBe(2));
+    await waitForCondition(() => expect(fakeSockets.length).toBe(2));
     const replacement = lastSocket();
     replacement.emit('open');
     emitTextResponse(replacement, 'resp_response_overflow_recovered', 'done');

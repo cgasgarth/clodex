@@ -1,7 +1,7 @@
 // src/registry/validate.ts
 
 /** Stable provider slug: lowercase alphanumeric + internal hyphens. */
-export const PROVIDER_ID_PATTERN = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
+const PROVIDER_ID_PATTERN = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
 
 export function isValidProviderId(id: string): boolean {
   return PROVIDER_ID_PATTERN.test(id);

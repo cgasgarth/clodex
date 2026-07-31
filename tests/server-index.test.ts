@@ -1,13 +1,13 @@
-import { importActual } from './bun-import-actual.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'bun:test';
 import * as p from '@clack/prompts';
 import type { ModelInfo } from '../src/types.js';
 import type { ServerModelInfo } from '../src/server/models.js';
+import { createHoisted, waitForCondition } from './test-helpers.js';
 
 const originalStdinIsTTY = Object.getOwnPropertyDescriptor(process.stdin, 'isTTY');
 const originalSetRawMode = Object.getOwnPropertyDescriptor(process.stdin, 'setRawMode');
 
-const state = vi.hoisted(() => ({
+const state = createHoisted(() => ({
   apiKey: 'real-key',
   savedPassword: null as string | null,
   listenMode: 'local' as 'local' | 'network' | null,
@@ -39,10 +39,6 @@ const models: ModelInfo[] = [{
   modelFormat: 'anthropic',
 }];
 
-vi.mock('../src/env.js', () => ({
-  resolveApiKey: () => state.apiKey,
-}));
-
 vi.mock('../src/config.js', () => ({
   getSavedServerPassword: () => state.savedPassword,
   getServerExposedProviders: () => null,
@@ -64,10 +60,6 @@ vi.mock('../src/config.js', () => ({
   setServerListenMode: vi.fn((mode: 'local' | 'network') => {
     state.savedListenMode = mode;
   }),
-}));
-
-vi.mock('../src/models.js', () => ({
-  getModels: vi.fn(async () => ({ models, fromCache: false })),
 }));
 
 vi.mock('../src/registry/load.js', () => ({
@@ -92,10 +84,6 @@ vi.mock('../src/registry/load.js', () => ({
   ]),
 }));
 
-vi.mock('../src/registry/io.js', () => ({
-  loadRegistry: vi.fn(() => ({ schemaVersion: 1, providers: [] })),
-}));
-
 vi.mock('../src/server/prompts.js', () => ({
   askServerStartMode: state.askServerStartMode,
   askFavoritesOnly: state.askFavoritesOnly,
@@ -113,16 +101,15 @@ vi.mock('../src/server/provider-select.js', () => ({
 
 // Keep runServerCommand's discovery registration away from the real
 // ~/.clodex/server-runtime.json (a live server may be advertised there).
-const discovery = vi.hoisted(() => ({
+const discovery = createHoisted(() => ({
   register: vi.fn(),
   unregister: vi.fn(),
 }));
 
 vi.mock('../src/server-runtime.js', () => {
-  const importOriginal = <T>() => importActual<T>('../src/server-runtime.js', import.meta.url);
-  const actual = importOriginal<typeof import('../src/server-runtime.js')>();
   return {
-    ...actual,
+    isDiscoveryDisabled: (flag: boolean | undefined) => flag
+      ?? ['1', 'true'].includes((process.env.CLODEX_NO_DISCOVERY ?? '').trim().toLowerCase()),
     registerServerRuntimeState: discovery.register,
     unregisterServerRuntimeState: discovery.unregister,
   };
@@ -193,7 +180,7 @@ describe('runServerCommand', () => {
   it('starts local mode on 127.0.0.1 without server password auth', async () => {
     const { runServerCommand } = await import('../src/server/index.js');
     const result = runServerCommand();
-    await vi.waitFor(() => expect(state.startServerOptions).not.toBeNull());
+    await waitForCondition(() => expect(state.startServerOptions).not.toBeNull());
     process.emit('SIGINT');
 
     await expect(result).resolves.toBe(0);
@@ -227,7 +214,7 @@ describe('runServerCommand', () => {
     try {
       const { runServerCommand } = await import('../src/server/index.js');
       const result = runServerCommand({ quick: true, noDiscovery: true });
-      await vi.waitFor(() => expect(state.startServerOptions).not.toBeNull());
+      await waitForCondition(() => expect(state.startServerOptions).not.toBeNull());
       process.emit('SIGINT');
 
       await expect(result).resolves.toBe(0);
@@ -255,7 +242,7 @@ describe('runServerCommand', () => {
   it('--no-discovery starts the server without registering it for wrapper discovery', async () => {
     const { runServerCommand } = await import('../src/server/index.js');
     const result = runServerCommand({ noDiscovery: true });
-    await vi.waitFor(() => expect(state.startServerOptions).not.toBeNull());
+    await waitForCondition(() => expect(state.startServerOptions).not.toBeNull());
     process.emit('SIGINT');
 
     await expect(result).resolves.toBe(0);
@@ -267,7 +254,7 @@ describe('runServerCommand', () => {
     process.env['CLODEX_NO_DISCOVERY'] = '1';
     const { runServerCommand } = await import('../src/server/index.js');
     const result = runServerCommand();
-    await vi.waitFor(() => expect(state.startServerOptions).not.toBeNull());
+    await waitForCondition(() => expect(state.startServerOptions).not.toBeNull());
     process.emit('SIGINT');
 
     await expect(result).resolves.toBe(0);
@@ -280,7 +267,7 @@ describe('runServerCommand', () => {
 
     const { runServerCommand } = await import('../src/server/index.js');
     const result = runServerCommand();
-    await vi.waitFor(() => expect(state.startServerOptions).not.toBeNull());
+    await waitForCondition(() => expect(state.startServerOptions).not.toBeNull());
     process.emit('SIGTERM');
 
     await expect(result).resolves.toBe(0);
@@ -298,7 +285,7 @@ describe('runServerCommand', () => {
 
     const { runServerCommand } = await import('../src/server/index.js');
     const result = runServerCommand();
-    await vi.waitFor(() => expect(state.startServerOptions).not.toBeNull());
+    await waitForCondition(() => expect(state.startServerOptions).not.toBeNull());
     process.emit('SIGINT');
 
     await expect(result).resolves.toBe(0);
@@ -314,7 +301,7 @@ describe('runServerCommand', () => {
 
     const { runServerCommand } = await import('../src/server/index.js');
     const result = runServerCommand({ quick: true } as any);
-    await vi.waitFor(() => expect(state.startServerOptions).not.toBeNull());
+    await waitForCondition(() => expect(state.startServerOptions).not.toBeNull());
     process.emit('SIGINT');
 
     await expect(result).resolves.toBe(0);
@@ -329,7 +316,7 @@ describe('runServerCommand', () => {
   it('quick network launch can use a one-run password flag without password prompts', async () => {
     const { runServerCommand } = await import('../src/server/index.js');
     const result = runServerCommand({ quick: true, listenMode: 'network', password: 'one-run-secret' } as any);
-    await vi.waitFor(() => expect(state.startServerOptions).not.toBeNull());
+    await waitForCondition(() => expect(state.startServerOptions).not.toBeNull());
     process.emit('SIGINT');
 
     await expect(result).resolves.toBe(0);

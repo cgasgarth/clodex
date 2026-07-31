@@ -94,7 +94,7 @@ function parseProvider(raw: unknown): RegistryProvider | null {
     name: p.name,
     enabled: p.enabled,
     authRef: p.authRef,
-    api: api as RegistryProvider['api'],
+    api: api,
     addedAt: p.addedAt,
   };
 

@@ -57,7 +57,7 @@ async function refreshOAuthProvider(
   provider: RegistryProvider,
   accessToken: string,
 ): Promise<{ models: CachedModel[]; baseUrl?: string; source: 'live' | 'seed'; failureReason?: string }> {
-  const tpl = provider.templateId ?? provider.id;
+  const tpl = provider.templateId;
   if (tpl === 'openai' || tpl === 'openai-oauth') return refreshOpenAiOAuthModels(accessToken);
   throw new Error(`refreshOAuthProvider: unsupported template "${tpl}"`);
 }
@@ -85,14 +85,22 @@ function readCapabilityFlags(m: Record<string, unknown>): Pick<OpenAiModelEntry,
 function parseOpenAiModelEntries(body: unknown): OpenAiModelEntry[] {
   if (!body || typeof body !== 'object') return [];
   const b = body as Record<string, unknown>;
+  const stringField = (record: Record<string, unknown>, key: string): string | undefined => {
+    const value = record[key];
+    return typeof value === 'string' ? value : undefined;
+  };
+  const numberField = (record: Record<string, unknown>, key: string): number | undefined => {
+    const value = record[key];
+    return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+  };
 
   // ChatGPT backend format: { models: [{ slug, title }] }
   if (Array.isArray(b.models)) {
     return (b.models as Array<Record<string, unknown>>)
       .map(m => ({
-        id: (m.slug as string) ?? '',
-        name: (m.title as string) ?? (m.name as string) ?? (m.slug as string) ?? '',
-        context_window: m.context_window as number | undefined,
+        id: stringField(m, 'slug') ?? '',
+        name: stringField(m, 'title') ?? stringField(m, 'name') ?? stringField(m, 'slug') ?? '',
+        context_window: numberField(m, 'context_window'),
         ...readCapabilityFlags(m),
       }))
       .filter(m => m.id.length > 0);
@@ -101,9 +109,9 @@ function parseOpenAiModelEntries(body: unknown): OpenAiModelEntry[] {
   if (Array.isArray(b.data)) {
     return (b.data as Array<Record<string, unknown>>)
       .map(m => ({
-        id: (m.id as string) ?? '',
-        name: (m.name as string) ?? (m.id as string) ?? '',
-        context_window: m.context_window as number | undefined,
+        id: stringField(m, 'id') ?? '',
+        name: stringField(m, 'name') ?? stringField(m, 'id') ?? '',
+        context_window: numberField(m, 'context_window'),
         ...readCapabilityFlags(m),
       }))
       .filter(m => m.id.length > 0);
@@ -153,7 +161,7 @@ async function fetchJsonWithAuth(
   url: string,
   accessToken: string,
   timeoutMs: number,
-): Promise<{ body: unknown | null; error?: string }> {
+): Promise<{ body: unknown; error?: string }> {
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -349,7 +357,7 @@ export async function refreshProviderModels(
     let baseUrl: string | undefined;
     let oauthFallbackReason: string | undefined;
 
-    if (provider.authType === 'oauth' && ((provider.templateId ?? provider.id) === 'openai' || provider.id === 'openai-oauth')) {
+    if (provider.authType === 'oauth' && (provider.templateId === 'openai' || provider.id === 'openai-oauth')) {
       // OAuth tokens are not valid API keys for the developer endpoints.
       // OpenAI: ChatGPT JWT rejected by api.openai.com; no /v1/models on ChatGPT backend.
       if (!apiKey) {

@@ -22,13 +22,13 @@ export interface SdkUpstreamErrorDetails {
 }
 
 /** Default downstream backoff hint when the upstream throttle gives none. */
-export const DEFAULT_RETRY_AFTER_SECONDS = 5;
+const DEFAULT_RETRY_AFTER_SECONDS = 5;
 /**
  * Upper bound for any retry-after hint clodex produces or forwards. Keeps the
  * AI SDK's bounded backoff (default maxRetries=2) and downstream clients well
  * clear of clodex's 120s no-event stream abort.
  */
-export const MAX_RETRY_AFTER_SECONDS = 60;
+const MAX_RETRY_AFTER_SECONDS = 60;
 
 /** Clamp a retry-after hint to [0, 60]s; missing/invalid values become the 5s default. */
 export function clampRetryAfterSeconds(value?: number): number {
@@ -188,7 +188,7 @@ function frameIsRetryable(frame: Pick<ProviderErrorFrame, 'statusCode' | 'transp
 }
 
 /** Parse an AI SDK stream error part into the provider payload it wraps. */
-export function providerErrorFrame(err: unknown): ProviderErrorFrame | undefined {
+function providerErrorFrame(err: unknown): ProviderErrorFrame | undefined {
   const outer = asRecord(err);
   if (!outer) return undefined;
 
@@ -249,7 +249,8 @@ export function providerErrorFrame(err: unknown): ProviderErrorFrame | undefined
 
   let serialized: string;
   try {
-    serialized = JSON.stringify(payload) ?? message;
+    const candidate: unknown = JSON.stringify(payload);
+    serialized = typeof candidate === 'string' ? candidate : message;
   } catch {
     // Circular or unserializable payload — the message is still worth keeping.
     serialized = message;

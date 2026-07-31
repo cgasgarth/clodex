@@ -1,4 +1,4 @@
-import type { UserPreferences } from './types.js';
+import type { BridgeMode, UserPreferences } from './types.js';
 import { randomUUID } from 'node:crypto';
 import { readFileSync, renameSync, unlinkSync } from 'node:fs';
 import { getConfigPath } from './paths.js';
@@ -127,9 +127,9 @@ export function setAppPathOverride(appId: string, path: string | null): Record<s
  */
 export function resolveBridgeMode(
   command: 'claude' | 'server',
-  explicit: import('./types.js').BridgeMode | undefined,
+  explicit: BridgeMode | undefined,
   opts: { persist?: boolean } = {},
-): import('./types.js').BridgeMode {
+): BridgeMode {
   const key = command === 'claude' ? 'claudeBridgeMode' : 'serverBridgeMode';
   if (explicit) {
     if (opts.persist === true) savePreferences({ [key]: explicit });
@@ -170,7 +170,7 @@ export function recordLaunchSelection(
 const SERVER_PASSWORD_SERVICE = 'clodex-server-password';
 const SERVER_PASSWORD_ACCOUNT = 'server-password';
 
-async function getServerPasswordKeyring(): Promise<any | null> {
+async function getServerPasswordKeyring(): Promise<import('@napi-rs/keyring').Entry | null> {
   try {
     const { Entry } = await import('@napi-rs/keyring');
     return new Entry(SERVER_PASSWORD_SERVICE, SERVER_PASSWORD_ACCOUNT);

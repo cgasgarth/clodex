@@ -3,11 +3,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'bun:test';
 import type { ProviderRegistry } from '../src/registry/types.js';
 import { credentialInstanceAuthRef } from '../src/credential-helper.js';
 
-const registryState = vi.hoisted(() => ({
+const registryState = createHoisted(() => ({
   current: { schemaVersion: 1, providers: [] } as ProviderRegistry,
   persisted: [] as ProviderRegistry[],
 }));
-const lockState = vi.hoisted(() => ({
+const lockState = createHoisted(() => ({
   active: false,
   credentialActive: false,
   providerActive: false,
@@ -15,7 +15,7 @@ const lockState = vi.hoisted(() => ({
   entries: 0,
   afterRegistryUnlock: null as null | (() => void),
 }));
-const journalState = vi.hoisted(() => ({
+const journalState = createHoisted(() => ({
   pending: new Set<string>(),
 }));
 
@@ -118,6 +118,7 @@ import { fetchTemplateModels } from '../src/registry/fetch-template-models.js';
 import * as cleanupJournal from '../src/registry/credential-cleanup-journal.js';
 import { saveRegistry } from '../src/registry/io.js';
 import { validateCustomEndpointUrl } from '../src/registry/url-security.js';
+import { asMocked, createHoisted, restoreTestGlobals, stubTestGlobal } from './test-helpers.js';
 
 const endpointInput = {
   displayName: 'Test Endpoint',
@@ -158,19 +159,19 @@ describe('custom endpoint credential lifecycle', () => {
     lockState.afterRegistryUnlock = null;
     journalState.pending.clear();
 
-    vi.mocked(deleteProviderCredential).mockReset().mockResolvedValue(true);
-    vi.mocked(provisionProviderCredential).mockReset().mockResolvedValue(true);
-    vi.mocked(saveProviderCredential).mockReset().mockResolvedValue(true);
-    vi.mocked(cleanupJournal.loadPendingCredentialDeletes).mockReset()
+    asMocked(deleteProviderCredential).mockReset().mockResolvedValue(true);
+    asMocked(provisionProviderCredential).mockReset().mockResolvedValue(true);
+    asMocked(saveProviderCredential).mockReset().mockResolvedValue(true);
+    asMocked(cleanupJournal.loadPendingCredentialDeletes).mockReset()
       .mockImplementation(async () => [...journalState.pending]);
-    vi.mocked(cleanupJournal.queueCredentialDelete).mockClear();
-    vi.mocked(cleanupJournal.cancelCredentialDelete).mockClear();
-    vi.mocked(fetchTemplateModels).mockReset().mockResolvedValue(successfulDiscovery());
-    vi.mocked(validateCustomEndpointUrl).mockReset().mockResolvedValue({
+    asMocked(cleanupJournal.queueCredentialDelete).mockClear();
+    asMocked(cleanupJournal.cancelCredentialDelete).mockClear();
+    asMocked(fetchTemplateModels).mockReset().mockResolvedValue(successfulDiscovery());
+    asMocked(validateCustomEndpointUrl).mockReset().mockResolvedValue({
       ok: true,
       normalizedUrl: endpointInput.baseUrl,
     });
-    vi.mocked(saveRegistry)
+    asMocked(saveRegistry)
       .mockReset()
       .mockImplementation((registry) => {
         if (!lockState.active) throw new Error('registry write escaped its lock');
@@ -181,18 +182,18 @@ describe('custom endpoint credential lifecycle', () => {
 
   afterEach(() => {
     delete process.env[clodexKeyEnvVar('custom-test-endpoint')];
-    vi.unstubAllGlobals();
+    restoreTestGlobals();
     if (previousHelper === undefined) delete process.env.CLODEX_CREDENTIAL_HELPER;
     else process.env.CLODEX_CREDENTIAL_HELPER = previousHelper;
   });
 
   it('discovers models before entering the registry write lock', async () => {
     const observedLockStates: boolean[] = [];
-    vi.mocked(fetchTemplateModels).mockImplementation(async () => {
+    asMocked(fetchTemplateModels).mockImplementation(async () => {
       observedLockStates.push(lockState.active);
       return successfulDiscovery();
     });
-    vi.mocked(provisionProviderCredential).mockImplementation(async () => {
+    asMocked(provisionProviderCredential).mockImplementation(async () => {
       observedLockStates.push(lockState.active);
       expect(lockState.credentialActive).toBe(true);
       expect(lockState.providerActive).toBe(true);
@@ -245,7 +246,7 @@ describe('custom endpoint credential lifecycle', () => {
         { status: 200 },
       ),
     );
-    vi.stubGlobal('fetch', fetchMock);
+    stubTestGlobal('fetch', fetchMock);
 
     const result = await fetchAnthropicModels('https://local.example/v1', '');
 
@@ -255,7 +256,7 @@ describe('custom endpoint credential lifecycle', () => {
   });
 
   it('allocates the provider id from state reloaded after discovery', async () => {
-    vi.mocked(fetchTemplateModels).mockImplementation(async () => {
+    asMocked(fetchTemplateModels).mockImplementation(async () => {
       registryState.current.providers.push({
         id: 'custom-test-endpoint',
         templateId: 'custom-openai',
@@ -286,7 +287,7 @@ describe('custom endpoint credential lifecycle', () => {
   });
 
   it('does not persist registry or credential state when model discovery fails', async () => {
-    vi.mocked(fetchTemplateModels).mockResolvedValue({
+    asMocked(fetchTemplateModels).mockResolvedValue({
       models: [],
       error: 'Network discovery failed.',
       hint: 'Check the endpoint.',
@@ -309,11 +310,11 @@ describe('custom endpoint credential lifecycle', () => {
   });
 
   it('cleans the journal without activating a provider when credential writing fails', async () => {
-    vi.mocked(provisionProviderCredential).mockResolvedValue(false);
+    asMocked(provisionProviderCredential).mockResolvedValue(false);
 
     const result = await addCustomEndpointProvider(endpointInput);
 
-    const authRef = vi.mocked(provisionProviderCredential).mock.calls[0]?.[0];
+    const authRef = asMocked(provisionProviderCredential).mock.calls[0]?.[0];
     expect(authRef).toBe(firstCredentialRef);
     expect(result).toMatchObject({
       added: false,
@@ -327,13 +328,13 @@ describe('custom endpoint credential lifecycle', () => {
   });
 
   it('leaves the written credential journaled when provider activation cannot be saved', async () => {
-    vi.mocked(saveRegistry).mockImplementationOnce(() => {
+    asMocked(saveRegistry).mockImplementationOnce(() => {
       throw new Error('activation failed');
     });
 
     await expect(addCustomEndpointProvider(endpointInput)).rejects.toThrow('activation failed');
 
-    const authRef = vi.mocked(provisionProviderCredential).mock.calls[0]?.[0];
+    const authRef = asMocked(provisionProviderCredential).mock.calls[0]?.[0];
     expect(authRef).toBe(firstCredentialRef);
     expect(provisionProviderCredential).toHaveBeenCalledWith(authRef!, endpointInput.apiKey);
     expect(registryState.current.providers).toEqual([]);
@@ -344,7 +345,7 @@ describe('custom endpoint credential lifecycle', () => {
   it('retries pending cleanup on the next successful custom endpoint addition', async () => {
     const staleAuthRef = 'keyring:provider:stale-endpoint';
     journalState.pending.add(staleAuthRef);
-    vi.mocked(deleteProviderCredential).mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+    asMocked(deleteProviderCredential).mockResolvedValueOnce(false).mockResolvedValueOnce(true);
 
     const first = await addCustomEndpointProvider(endpointInput);
 
@@ -367,14 +368,14 @@ describe('custom endpoint credential lifecycle', () => {
 
   it('retains a removal marker queued immediately after endpoint commit', async () => {
     const cancellationLockStates: boolean[] = [];
-    vi.mocked(cleanupJournal.cancelCredentialDelete).mockImplementationOnce(
+    asMocked(cleanupJournal.cancelCredentialDelete).mockImplementationOnce(
       async authRef => {
         cancellationLockStates.push(lockState.active);
         return journalState.pending.delete(authRef);
       },
     );
-    vi.mocked(deleteProviderCredential).mockResolvedValue(false);
-    vi.mocked(saveRegistry).mockImplementationOnce(registry => {
+    asMocked(deleteProviderCredential).mockResolvedValue(false);
+    asMocked(saveRegistry).mockImplementationOnce(registry => {
       if (!lockState.active) throw new Error('registry write escaped its lock');
       registryState.current = structuredClone(registry);
       registryState.persisted.push(structuredClone(registry));
@@ -395,7 +396,7 @@ describe('custom endpoint credential lifecycle', () => {
   });
 
   it('reports cleanup pending instead of rejecting after endpoint commit', async () => {
-    vi.mocked(cleanupJournal.loadPendingCredentialDeletes).mockRejectedValue(
+    asMocked(cleanupJournal.loadPendingCredentialDeletes).mockRejectedValue(
       new Error('cleanup journal lock timed out'),
     );
 
@@ -407,14 +408,14 @@ describe('custom endpoint credential lifecycle', () => {
   });
 
   it('reuses the same provider slot after a failed credential verification', async () => {
-    vi.mocked(provisionProviderCredential).mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+    asMocked(provisionProviderCredential).mockResolvedValueOnce(false).mockResolvedValueOnce(true);
 
     const first = await addCustomEndpointProvider(endpointInput);
     const second = await addCustomEndpointProvider(endpointInput);
 
     expect(first.added).toBe(false);
     expect(second.added).toBe(true);
-    expect(vi.mocked(provisionProviderCredential).mock.calls.map(call => call[0])).toEqual([
+    expect(asMocked(provisionProviderCredential).mock.calls.map(call => call[0])).toEqual([
       firstCredentialRef,
       firstCredentialRef,
     ]);

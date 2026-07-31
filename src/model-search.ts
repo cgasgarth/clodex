@@ -3,17 +3,13 @@ export interface ModelSearchField {
   weight: number;
 }
 
-export function normalizeModelSearchText(value: string): string {
+function normalizeModelSearchText(value: string): string {
   return value
     .toLowerCase()
     .replace(/([a-z])([0-9])/g, '$1 $2')
     .replace(/([0-9])([a-z])/g, '$1 $2')
     .replace(/[\s\-._/:]+/g, ' ')
     .trim();
-}
-
-export function compactModelSearchText(value: string): string {
-  return normalizeModelSearchText(value).replace(/\s+/g, '');
 }
 
 export function scoreModelSearch(query: string, fields: ModelSearchField[]): number {

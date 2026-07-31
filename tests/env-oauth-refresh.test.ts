@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'bun:test';
 
-const lockState = vi.hoisted(() => ({ active: false }));
-const mocks = vi.hoisted(() => ({
+const lockState = createHoisted(() => ({ active: false }));
+const mocks = createHoisted(() => ({
   readCredential: vi.fn(),
   refreshCredential: vi.fn(),
   writeCredential: vi.fn(),
@@ -36,6 +36,7 @@ vi.mock('../src/registry/lock.js', () => ({
 }));
 
 import { resolveProviderCredential } from '../src/env.js';
+import { createHoisted } from './test-helpers.js';
 
 const HELPER_ID = 'a'.repeat(64);
 const AUTH_REF = `helper:v1:${HELPER_ID}:oauth:provider:openai-oauth`;

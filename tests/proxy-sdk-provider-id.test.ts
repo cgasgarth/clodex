@@ -4,6 +4,7 @@ import http from 'node:http';
 import { createLanguageModel } from '../src/provider-factory.js';
 import { generateAnthropicResponse } from '../src/sdk-adapter.js';
 import { startProxyCatalog, type ProxyRoute } from '../src/proxy.js';
+import { asMocked } from './test-helpers.js';
 
 const ORIGINAL_COMPACTION_FLAG = process.env.CLODEX_OPENAI_COMPACTION;
 const ORIGINAL_COMPACTION_THRESHOLD = process.env.CLODEX_OPENAI_COMPACT_THRESHOLD;
@@ -64,8 +65,8 @@ function postToProxy(port: number, token: string, body: unknown): Promise<{ stat
 
 describe('SDK proxy provider identity', () => {
   afterEach(() => {
-    vi.mocked(createLanguageModel).mockClear();
-    vi.mocked(generateAnthropicResponse).mockClear();
+    asMocked(createLanguageModel).mockClear();
+    asMocked(generateAnthropicResponse).mockClear();
     if (ORIGINAL_COMPACTION_FLAG === undefined) delete process.env.CLODEX_OPENAI_COMPACTION;
     else process.env.CLODEX_OPENAI_COMPACTION = ORIGINAL_COMPACTION_FLAG;
     if (ORIGINAL_COMPACTION_THRESHOLD === undefined) delete process.env.CLODEX_OPENAI_COMPACT_THRESHOLD;

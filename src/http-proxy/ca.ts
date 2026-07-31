@@ -21,7 +21,7 @@ const CERT_VERSION = '1\n';
 
 function serialNumber(): string {
   const bytes = randomBytes(16);
-  bytes[0] &= 0x7f;
+  bytes[0] = (bytes[0] ?? 0) & 0x7f;
   return bytes.toString('hex');
 }
 

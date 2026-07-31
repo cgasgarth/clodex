@@ -8,8 +8,6 @@ import {
   modelSelectOption,
   navOption,
   printEnvConflictPanel,
-  providerSelectOption,
-  relayIntro,
   relayOutro,
   formatModelLabel,
 } from './ui.js';
@@ -328,7 +326,7 @@ export async function pickLocalModel(
       const picked = await p.select({
         message: 'Which model?',
         options,
-        initialValue: recentModels[0].id,
+        initialValue: recentModels[0]!.id,
       });
 
       if (p.isCancel(picked) || String(picked) === '__back__') {

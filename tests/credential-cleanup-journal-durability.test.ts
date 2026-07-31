@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'bun:test';
 
-const fsState = vi.hoisted(() => ({
+const fsState = createHoisted(() => ({
   journalPath: '',
   openPaths: new Map<number, string>(),
   tempOpenFlags: [] as Array<string | number>,
@@ -69,6 +69,7 @@ import {
 } from 'node:fs';
 import { queueCredentialDelete } from '../src/registry/credential-cleanup-journal.js';
 import { getCredentialCleanupPath } from '../src/paths.js';
+import { createHoisted } from './test-helpers.js';
 
 describe('credential cleanup journal durability', () => {
   const previousHome = process.env.CLODEX_HOME;

@@ -31,7 +31,7 @@ function appendError(errors: string[], context: string, error: unknown): void {
   errors.push(`${context}: ${errorMessage(error)}`);
 }
 
-export function credentialIsReferenced(
+function credentialIsReferenced(
   registry: ProviderRegistry,
   authRef: string,
 ): boolean {

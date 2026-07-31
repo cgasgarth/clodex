@@ -84,7 +84,7 @@ export async function validateCustomEndpointUrl(
       error: 'Only HTTPS URLs are allowed.',
       hint: 'For local or LAN servers (Ollama, LM Studio, vLLM), allow insecure HTTP when prompted.',
     };
-  } else if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+  } if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
     return { ok: false, error: 'URL must use https:// or user-approved http:// for local/LAN servers.' };
   }
   

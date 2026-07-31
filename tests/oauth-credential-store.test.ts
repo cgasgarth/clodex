@@ -28,6 +28,7 @@ import {
 import { oauthCredentialToKeychainJson } from '../src/oauth/types.js';
 import { refreshStoredOAuthCredential } from '../src/oauth/refresh.js';
 import { withRegistryWriteLock } from '../src/registry/lock.js';
+import { asMocked, waitForCondition } from './test-helpers.js';
 
 const helperPath = fileURLToPath(new URL('./fixtures/credential-helper.mjs', import.meta.url));
 let account = '';
@@ -69,7 +70,7 @@ describe('OAuth credential-store refresh', () => {
     process.env.CLODEX_TEST_CREDENTIAL_HELPER_STORE = join(tempDir, 'credentials.json');
     delete process.env.CLODEX_TEST_CREDENTIAL_HELPER_MODE;
     delete process.env.CLODEX_KEY_OPENAI_OAUTH;
-    vi.mocked(refreshStoredOAuthCredential).mockReset().mockResolvedValue({
+    asMocked(refreshStoredOAuthCredential).mockReset().mockResolvedValue({
       type: 'oauth',
       access: 'new-access',
       refresh: 'new-refresh',
@@ -235,7 +236,7 @@ describe('OAuth credential-store refresh', () => {
   it('rereads a credential replaced between refresh and compare-and-set readback', async () => {
     process.env.CLODEX_TEST_CREDENTIAL_HELPER_MODE = 'interleave-readback';
     const storePath = process.env.CLODEX_TEST_CREDENTIAL_HELPER_STORE!;
-    vi.mocked(refreshStoredOAuthCredential).mockImplementationOnce(async () => {
+    asMocked(refreshStoredOAuthCredential).mockImplementationOnce(async () => {
       await waitForPath(`${storePath}.first-get`);
       await writeCredentialHelperAccount(account, unexpiredCredential('external-access'));
       writeFileSync(`${storePath}.second-set`, '', { encoding: 'utf8', mode: 0o600 });
@@ -261,7 +262,7 @@ describe('OAuth credential-store refresh', () => {
     process.env.CLODEX_TEST_CREDENTIAL_HELPER_MODE = 'interleave-readback';
     const storePath = process.env.CLODEX_TEST_CREDENTIAL_HELPER_STORE!;
     let generation = 0;
-    vi.mocked(refreshStoredOAuthCredential).mockImplementation(async () => {
+    asMocked(refreshStoredOAuthCredential).mockImplementation(async () => {
       generation += 1;
       await writeCredentialHelperAccount(account, oauthCredentialToKeychainJson({
         type: 'oauth',
@@ -368,7 +369,7 @@ describe('OAuth credential-store refresh', () => {
 
   it('retains a rotated refresh token without reusing a rejected access token', async () => {
     await writeCredentialHelperAccount(account, unexpiredCredential('revoked-access'));
-    vi.mocked(refreshStoredOAuthCredential).mockResolvedValue({
+    asMocked(refreshStoredOAuthCredential).mockResolvedValue({
       type: 'oauth',
       access: 'revoked-access',
       refresh: 'rotated-refresh',
@@ -397,7 +398,7 @@ describe('OAuth credential-store refresh', () => {
       expires: Date.now() + 3_600_000,
       accessRejected: true,
     }));
-    vi.mocked(refreshStoredOAuthCredential).mockResolvedValue({
+    asMocked(refreshStoredOAuthCredential).mockResolvedValue({
       type: 'oauth',
       access: 'request-rejected-access',
       refresh: 'rotated-refresh',
@@ -422,7 +423,7 @@ describe('OAuth credential-store refresh', () => {
     await expect(resolveProviderCredential('openai-oauth', authRef)).resolves.toBe('revoked-access');
     let releaseRefresh!: () => void;
     const refreshGate = new Promise<void>(resolve => { releaseRefresh = resolve; });
-    vi.mocked(refreshStoredOAuthCredential).mockImplementation(async () => {
+    asMocked(refreshStoredOAuthCredential).mockImplementation(async () => {
       await refreshGate;
       return {
         type: 'oauth',
@@ -444,7 +445,7 @@ describe('OAuth credential-store refresh', () => {
       undefined,
       { rejectedAccessToken: 'revoked-access' },
     );
-    await vi.waitFor(() => expect(refreshStoredOAuthCredential).toHaveBeenCalledTimes(1));
+    await waitForCondition(() => expect(refreshStoredOAuthCredential).toHaveBeenCalledTimes(1));
     releaseRefresh();
 
     await expect(Promise.all([first, second])).resolves.toEqual(['new-access', 'new-access']);
@@ -456,7 +457,7 @@ describe('OAuth credential-store refresh', () => {
     await expect(resolveProviderCredential('openai-oauth', authRef)).resolves.toBe('revoked-access');
     let releaseRefresh!: () => void;
     const refreshGate = new Promise<void>(resolve => { releaseRefresh = resolve; });
-    vi.mocked(refreshStoredOAuthCredential).mockImplementation(async () => {
+    asMocked(refreshStoredOAuthCredential).mockImplementation(async () => {
       await refreshGate;
       return {
         type: 'oauth',
@@ -472,7 +473,7 @@ describe('OAuth credential-store refresh', () => {
       undefined,
       { rejectedAccessToken: 'revoked-access' },
     );
-    await vi.waitFor(() => expect(refreshStoredOAuthCredential).toHaveBeenCalledTimes(1));
+    await waitForCondition(() => expect(refreshStoredOAuthCredential).toHaveBeenCalledTimes(1));
     const freshCaller = resolveProviderCredential('openai-oauth', authRef);
     releaseRefresh();
 
@@ -488,7 +489,7 @@ describe('OAuth credential-store refresh', () => {
     const storePath = process.env.CLODEX_TEST_CREDENTIAL_HELPER_STORE!;
     let releaseRefresh!: () => void;
     const refreshGate = new Promise<void>(resolve => { releaseRefresh = resolve; });
-    vi.mocked(refreshStoredOAuthCredential)
+    asMocked(refreshStoredOAuthCredential)
       .mockImplementationOnce(async () => {
         await refreshGate;
         writeFileSync(`${storePath}.second-set`, '', { encoding: 'utf8', mode: 0o600 });
@@ -508,7 +509,7 @@ describe('OAuth credential-store refresh', () => {
 
     const first = resolveProviderCredential('openai-oauth', authRef);
     await waitForPath(`${storePath}.first-get`);
-    await vi.waitFor(() => expect(refreshStoredOAuthCredential).toHaveBeenCalledTimes(1));
+    await waitForCondition(() => expect(refreshStoredOAuthCredential).toHaveBeenCalledTimes(1));
     const rejectedCaller = resolveProviderCredential(
       'openai-oauth',
       authRef,
@@ -525,7 +526,7 @@ describe('OAuth credential-store refresh', () => {
   it('does not hold the provider registry lock while OAuth refresh awaits the network', async () => {
     let releaseRefresh!: () => void;
     const refreshGate = new Promise<void>(resolve => { releaseRefresh = resolve; });
-    vi.mocked(refreshStoredOAuthCredential).mockImplementation(async () => {
+    asMocked(refreshStoredOAuthCredential).mockImplementation(async () => {
       await refreshGate;
       return {
         type: 'oauth',
@@ -536,7 +537,7 @@ describe('OAuth credential-store refresh', () => {
     });
 
     const resolving = resolveProviderCredential('openai-oauth', authRef);
-    await vi.waitFor(() => expect(refreshStoredOAuthCredential).toHaveBeenCalledTimes(1));
+    await waitForCondition(() => expect(refreshStoredOAuthCredential).toHaveBeenCalledTimes(1));
     await expect(withRegistryWriteLock(
       () => 'registry-write-completed',
       { waitMs: 100, retryMs: 5 },
@@ -548,7 +549,7 @@ describe('OAuth credential-store refresh', () => {
   it('never falls back to a rejected token after forced refresh failure', async () => {
     await writeCredentialHelperAccount(account, unexpiredCredential('revoked-access'));
     await expect(resolveProviderCredential('openai-oauth', authRef)).resolves.toBe('revoked-access');
-    vi.mocked(refreshStoredOAuthCredential).mockRejectedValueOnce(new Error('refresh rejected'));
+    asMocked(refreshStoredOAuthCredential).mockRejectedValueOnce(new Error('refresh rejected'));
 
     await expect(resolveProviderCredential(
       'openai-oauth',

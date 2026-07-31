@@ -66,11 +66,6 @@ export function outboundProxyUrlForTarget(
 
 let dispatcherInstalled = false;
 
-/** Reset the install-once latch (tests only). */
-export function resetOutboundProxyDispatcherForTests(): void {
-  dispatcherInstalled = false;
-}
-
 /**
  * Install undici's EnvHttpProxyAgent as the global fetch dispatcher when any
  * proxy env var is set. Idempotent. A failure warns and falls back to direct

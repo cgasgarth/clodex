@@ -10,8 +10,9 @@ import * as cleanupJournal from '../src/registry/credential-cleanup-journal.js';
 import * as pricing from '../src/registry/pricing.js';
 import type { ProviderTemplate } from '../src/provider-templates.js';
 import type { ProviderRegistry } from '../src/registry/types.js';
+import { asMocked, createHoisted } from './test-helpers.js';
 
-const lockState = vi.hoisted(() => ({
+const lockState = createHoisted(() => ({
   active: false,
   registryTail: Promise.resolve(),
   credentialActive: false,
@@ -20,7 +21,7 @@ const lockState = vi.hoisted(() => ({
   afterRegistryUnlock: null as null | (() => void),
   providerTails: new Map<string, Promise<void>>(),
 }));
-const journalState = vi.hoisted(() => ({
+const journalState = createHoisted(() => ({
   pending: new Set<string>(),
 }));
 let registryState: ProviderRegistry;
@@ -143,28 +144,28 @@ describe('registry/add-template', () => {
     journalState.pending.clear();
     lockState.providerTails.clear();
 
-    vi.mocked(providerFactory.isSdkMigratedNpm).mockReturnValue(true);
-    vi.mocked(env.deleteProviderCredential).mockResolvedValue(true);
-    vi.mocked(env.provisionProviderCredential).mockResolvedValue(true);
-    vi.mocked(env.saveProviderCredential).mockResolvedValue(true);
-    vi.mocked(cleanupJournal.loadPendingCredentialDeletes).mockReset()
+    asMocked(providerFactory.isSdkMigratedNpm).mockReturnValue(true);
+    asMocked(env.deleteProviderCredential).mockResolvedValue(true);
+    asMocked(env.provisionProviderCredential).mockResolvedValue(true);
+    asMocked(env.saveProviderCredential).mockResolvedValue(true);
+    asMocked(cleanupJournal.loadPendingCredentialDeletes).mockReset()
       .mockImplementation(async () => [...journalState.pending]);
-    vi.mocked(cleanupJournal.queueCredentialDelete).mockClear();
-    vi.mocked(cleanupJournal.cancelCredentialDelete).mockClear();
+    asMocked(cleanupJournal.queueCredentialDelete).mockClear();
+    asMocked(cleanupJournal.cancelCredentialDelete).mockClear();
     registryState = {
       schemaVersion: 1,
       providers: [],
     };
-    vi.mocked(io.loadRegistry).mockReset().mockImplementation(() =>
+    asMocked(io.loadRegistry).mockReset().mockImplementation(() =>
       structuredClone(registryState));
-    vi.mocked(io.loadRegistryStrict).mockReset().mockImplementation(() =>
+    asMocked(io.loadRegistryStrict).mockReset().mockImplementation(() =>
       structuredClone(registryState));
-    vi.mocked(io.saveRegistry).mockReset().mockImplementation((registry) => {
+    asMocked(io.saveRegistry).mockReset().mockImplementation((registry) => {
       if (!lockState.active) throw new Error('registry write escaped its lock');
       registryState = structuredClone(registry);
     });
     
-    vi.mocked(fetchTemplate.fetchTemplateModels).mockResolvedValue({
+    asMocked(fetchTemplate.fetchTemplateModels).mockResolvedValue({
       models: [
         {
           id: 'model-1',
@@ -178,7 +179,7 @@ describe('registry/add-template', () => {
       baseUrl: 'https://api.example.com',
     });
 
-    vi.mocked(pricing.enrichModelsWithPricing).mockImplementation(models => models);
+    asMocked(pricing.enrichModelsWithPricing).mockImplementation(models => models);
   });
 
   afterEach(() => {
@@ -197,7 +198,7 @@ describe('registry/add-template', () => {
   });
 
   it('fails if npm is not available', async () => {
-    vi.mocked(providerFactory.isSdkMigratedNpm).mockReturnValue(false);
+    asMocked(providerFactory.isSdkMigratedNpm).mockReturnValue(false);
     const res = await addProviderFromTemplate(dummyTemplate, 'key');
     expect(res.added).toBe(false);
     expect(res.error).toContain('is not available in clodex');
@@ -230,7 +231,7 @@ describe('registry/add-template', () => {
   });
 
   it('fails if fetching models returns an error', async () => {
-    vi.mocked(fetchTemplate.fetchTemplateModels).mockResolvedValue({
+    asMocked(fetchTemplate.fetchTemplateModels).mockResolvedValue({
       models: [],
       error: 'Network failure',
     });
@@ -241,7 +242,7 @@ describe('registry/add-template', () => {
   });
 
   it('keeps model discovery and background pricing outside the registry lock', async () => {
-    vi.mocked(fetchTemplate.fetchTemplateModels).mockImplementation(async () => {
+    asMocked(fetchTemplate.fetchTemplateModels).mockImplementation(async () => {
       expect(lockState.active).toBe(false);
       return {
         models: [
@@ -257,10 +258,10 @@ describe('registry/add-template', () => {
         baseUrl: 'https://api.example.com',
       };
     });
-    vi.mocked(pricing.enrichPricingAsync).mockImplementation(() => {
+    asMocked(pricing.enrichPricingAsync).mockImplementation(() => {
       expect(lockState.active).toBe(false);
     });
-    vi.mocked(env.provisionProviderCredential).mockImplementation(async () => {
+    asMocked(env.provisionProviderCredential).mockImplementation(async () => {
       expect(lockState.active).toBe(false);
       expect(lockState.credentialActive).toBe(true);
       expect(lockState.providerActive).toBe(true);
@@ -276,9 +277,9 @@ describe('registry/add-template', () => {
 
   it('serializes concurrent writes to the same provider credential', async () => {
     let registry: ProviderRegistry = { schemaVersion: 1, providers: [] };
-    vi.mocked(io.loadRegistryStrict).mockImplementation(() =>
+    asMocked(io.loadRegistryStrict).mockImplementation(() =>
       structuredClone(registry));
-    vi.mocked(io.saveRegistry).mockImplementation((next) => {
+    asMocked(io.saveRegistry).mockImplementation((next) => {
       registry = structuredClone(next);
     });
 
@@ -290,14 +291,14 @@ describe('registry/add-template', () => {
     expect(results.filter(result => result.added)).toHaveLength(1);
     expect(results.filter(result => !result.added)).toHaveLength(1);
     expect(env.provisionProviderCredential).toHaveBeenCalledOnce();
-    const [savedAuthRef, savedKey] = vi.mocked(env.provisionProviderCredential).mock.calls[0]!;
+    const [savedAuthRef, savedKey] = asMocked(env.provisionProviderCredential).mock.calls[0]!;
     expect(savedAuthRef).toBe(credentialRef);
     expect(['first-key', 'second-key']).toContain(savedKey);
     expect(registry.providers).toHaveLength(1);
   });
 
   it('revalidates provider existence after model discovery', async () => {
-    vi.mocked(io.loadRegistryStrict)
+    asMocked(io.loadRegistryStrict)
       .mockReturnValueOnce({ schemaVersion: 1, providers: [] })
       .mockReturnValueOnce({
         schemaVersion: 1,
@@ -325,7 +326,7 @@ describe('registry/add-template', () => {
   });
 
   it('fails if credential cannot be saved', async () => {
-    vi.mocked(env.provisionProviderCredential).mockResolvedValue(false);
+    asMocked(env.provisionProviderCredential).mockResolvedValue(false);
 
     const res = await addProviderFromTemplate(dummyTemplate, 'key');
     expect(res.added).toBe(false);
@@ -365,7 +366,7 @@ describe('registry/add-template', () => {
     });
     expect(env.provisionProviderCredential).not.toHaveBeenCalled();
     expect(env.saveProviderCredential).not.toHaveBeenCalled();
-    const savedRegistry = vi.mocked(io.saveRegistry).mock.calls.at(-1)?.[0] as ProviderRegistry;
+    const savedRegistry = asMocked(io.saveRegistry).mock.calls.at(-1)?.[0] as ProviderRegistry;
     expect(savedRegistry.providers[0]?.authRef).toBe('none:anonymous');
   });
 
@@ -385,7 +386,7 @@ describe('registry/add-template', () => {
       apiKeyOptional: true,
       anonymousFreeModels: true,
     };
-    vi.mocked(fetchTemplate.fetchTemplateModels).mockResolvedValue({
+    asMocked(fetchTemplate.fetchTemplateModels).mockResolvedValue({
       models: [{
         id: 'free-model',
         name: 'Free Model',
@@ -436,7 +437,7 @@ describe('registry/add-template', () => {
     );
     expect(env.saveProviderCredential).not.toHaveBeenCalled();
     
-    const savedRegistry = vi.mocked(io.saveRegistry).mock.calls.at(-1)?.[0] as ProviderRegistry;
+    const savedRegistry = asMocked(io.saveRegistry).mock.calls.at(-1)?.[0] as ProviderRegistry;
     expect(savedRegistry.providers).toHaveLength(1); // Replaced, not duplicated
     expect(savedRegistry.providers[0]?.name).toBe('Test Provider');
     expect(savedRegistry.providers[0]?.authRef).toBe(credentialRef);
@@ -458,14 +459,14 @@ describe('registry/add-template', () => {
       }],
     };
     const cancellationLockStates: boolean[] = [];
-    vi.mocked(cleanupJournal.cancelCredentialDelete).mockImplementationOnce(
+    asMocked(cleanupJournal.cancelCredentialDelete).mockImplementationOnce(
       async authRef => {
         cancellationLockStates.push(lockState.active);
         return journalState.pending.delete(authRef);
       },
     );
-    vi.mocked(env.deleteProviderCredential).mockResolvedValue(false);
-    vi.mocked(io.saveRegistry).mockImplementationOnce(registry => {
+    asMocked(env.deleteProviderCredential).mockResolvedValue(false);
+    asMocked(io.saveRegistry).mockImplementationOnce(registry => {
       if (!lockState.active) throw new Error('registry write escaped its lock');
       registryState = structuredClone(registry);
       const replacementRef = registry.providers[0]?.authRef;
@@ -500,7 +501,7 @@ describe('registry/add-template', () => {
         addedAt: '2026-01-01T00:00:00.000Z',
       }],
     };
-    vi.mocked(io.saveRegistry).mockImplementationOnce(() => {
+    asMocked(io.saveRegistry).mockImplementationOnce(() => {
       throw new Error('activation failed');
     });
 
@@ -519,7 +520,7 @@ describe('registry/add-template', () => {
   });
 
   it('reports cleanup pending instead of failing after provider commit', async () => {
-    vi.mocked(cleanupJournal.loadPendingCredentialDeletes).mockRejectedValue(
+    asMocked(cleanupJournal.loadPendingCredentialDeletes).mockRejectedValue(
       new Error('cleanup journal lock timed out'),
     );
 
@@ -573,8 +574,8 @@ describe('registry/add-template', () => {
         },
       ],
     };
-    vi.mocked(io.loadRegistryStrict).mockImplementation(() => structuredClone(registry));
-    vi.mocked(io.saveRegistry).mockImplementation(next => {
+    asMocked(io.loadRegistryStrict).mockImplementation(() => structuredClone(registry));
+    asMocked(io.saveRegistry).mockImplementation(next => {
       registry = structuredClone(next);
     });
 

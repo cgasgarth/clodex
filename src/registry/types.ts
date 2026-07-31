@@ -4,12 +4,13 @@ import type { FreeStatus } from '../free-models.js';
 
 export const REGISTRY_SCHEMA_VERSION = 1;
 
-export type RegistrySubscriptionFilter = 'free';
+type RegistrySubscriptionFilter = 'free';
 
 export interface CachedModel {
   id: string;
   name: string;
-  upstreamModelId: string;
+  /** Optional only for legacy caches written before upstream ids were persisted. */
+  upstreamModelId?: string;
   family?: string;
   brand?: string;
   contextWindow?: number;

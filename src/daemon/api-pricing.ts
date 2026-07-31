@@ -1,6 +1,6 @@
 export const API_PRICING_SOURCE = 'OpenAI Standard and Fast API pricing';
 export const API_PRICING_AS_OF = '2026-07-30';
-export const LONG_CONTEXT_INPUT_TOKENS = 272_000;
+const LONG_CONTEXT_INPUT_TOKENS = 272_000;
 
 const TOKENS_PER_MILLION = 1_000_000;
 const LONG_CONTEXT_INPUT_MULTIPLIER = 2;

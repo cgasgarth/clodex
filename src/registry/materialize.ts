@@ -13,7 +13,7 @@ import { classifyFreeStatus, isFreeStatus } from '../free-models.js';
 export type CredentialResolver = (provider: RegistryProvider) => string | null;
 
 /** Map an AI SDK npm package + API URL to the endpoint shape clodex should use. */
-export function resolveEndpoint(
+function resolveEndpoint(
   npm: string,
   apiUrl: string,
 ): { format: 'anthropic' | 'openai'; baseUrl?: string; completionsUrl?: string } | null {
@@ -55,7 +55,7 @@ export function cachedModelToLocal(
   if (endpoint === null) return null;
 
   const modelsDev = findModelsDevModel(provider.id, cached.id);
-  const { id, upstreamModelId } = normalizeGoogleModelId(cached.id, npm);
+  const { id } = normalizeGoogleModelId(cached.id, npm);
   const normalizedUpstream = normalizeGoogleModelId(cached.upstreamModelId ?? cached.id, npm).upstreamModelId;
   const family = npm === '@ai-sdk/google' ? (id.split(/[-/:]/)[0] ?? id) : (cached.family ?? '');
 

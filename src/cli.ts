@@ -363,7 +363,7 @@ export function parseArgs(args: string[]): ParsedArgs {
   if (first !== 'claude') {
     return {
       ...emptyParsed('root'),
-      error: first.startsWith('-') ? `Unknown root option: ${first}` : `Unknown command: ${first}`,
+      error: first?.startsWith('-') ? `Unknown root option: ${first}` : `Unknown command: ${first}`,
     };
   }
 
@@ -733,6 +733,132 @@ interface FavoritesCommandOptions {
   unalias?: string;
 }
 
+interface FavoriteAddition {
+  provider: LocalProvider;
+  models: LocalProviderModel[];
+}
+
+async function browseProviderFavoriteModels(
+  providers: LocalProvider[],
+  favorites: FavoriteModel[],
+): Promise<FavoriteAddition | null> {
+  let currentProviderId: string | undefined;
+  for (;;) {
+    const pickedProviderId = await p.select<string>({
+      message: 'Which provider?',
+      options: providers.map(provider => providerSelectOption(provider)),
+      initialValue: currentProviderId,
+    });
+    if (p.isCancel(pickedProviderId)) return null;
+    const provider = providers.find(candidate => candidate.id === pickedProviderId);
+    if (!provider) return null;
+    const pickedModelIds = await p.multiselect({
+      message: `Select models to add from ${provider.name} ${pc.dim('(Space to select, Enter to confirm)')}`,
+      options: provider.models.map(model => ({
+        value: model.id,
+        label: fmtModel(formatModelLabel(model), model.id),
+        hint: isFavorite(favorites, { providerId: provider.id, modelId: model.id })
+          ? pc.yellow('★ already favorite')
+          : '',
+      })),
+      required: false,
+    });
+    if (p.isCancel(pickedModelIds) || pickedModelIds.length === 0) {
+      currentProviderId = provider.id;
+      continue;
+    }
+    return {
+      provider,
+      models: provider.models.filter(model => pickedModelIds.includes(model.id)),
+    };
+  }
+}
+
+async function selectFavoriteAddition(
+  providers: LocalProvider[],
+  favorites: FavoriteModel[],
+): Promise<FavoriteAddition | null> {
+  const globalCount = buildGlobalFavoriteIndex(providers).length;
+  const addPath = await p.select<string>({
+    message: 'Add a favorite',
+    options: [
+      {
+        value: 'global',
+        label: pc.cyan('Search all providers'),
+        hint: `${globalCount} models · ${providers.length} provider${providers.length !== 1 ? 's' : ''}`,
+      },
+      {
+        value: 'provider',
+        label: pc.cyan('Browse by provider →'),
+        hint: 'Pick one provider first',
+      },
+    ],
+  });
+  if (p.isCancel(addPath)) return null;
+  if (addPath !== 'global') return browseProviderFavoriteModels(providers, favorites);
+  const globalPick = await pickGlobalFavoriteModel(providers, favorites);
+  if (globalPick === null) return null;
+  if (globalPick === browseByProviderChoice) {
+    return browseProviderFavoriteModels(providers, favorites);
+  }
+  const provider = providers.find(candidate => candidate.id === globalPick.providerId);
+  return provider ? { provider, models: [globalPick.model] } : null;
+}
+
+function applyFavoriteAddition(
+  favorites: FavoriteModel[],
+  addition: FavoriteAddition,
+  maxFavorites: number,
+): {
+  favorites: FavoriteModel[];
+  addedModels: LocalProviderModel[];
+  duplicateCount: number;
+  limitReached: boolean;
+} {
+  let nextFavorites = favorites;
+  const addedModels: LocalProviderModel[] = [];
+  let duplicateCount = 0;
+  let limitReached = false;
+  for (const model of addition.models) {
+    const result = addFavorite(
+      nextFavorites,
+      { providerId: addition.provider.id, modelId: model.id },
+      maxFavorites,
+    );
+    if (result.ok) {
+      nextFavorites = result.list;
+      addedModels.push(model);
+      continue;
+    }
+    if (result.reason === 'duplicate') {
+      duplicateCount += 1;
+      continue;
+    }
+    limitReached = true;
+    break;
+  }
+  return { favorites: nextFavorites, addedModels, duplicateCount, limitReached };
+}
+
+function reportFavoriteAddition(
+  addition: FavoriteAddition,
+  result: ReturnType<typeof applyFavoriteAddition>,
+  maxFavorites: number,
+): void {
+  if (result.addedModels.length === 1) {
+    const model = result.addedModels[0]!;
+    p.log.success(`Added ${model.name || model.id} (${addition.provider.name}) to favorites.`);
+  } else if (result.addedModels.length > 1) {
+    p.log.success(`Added ${result.addedModels.length} models from ${addition.provider.name} to favorites.`);
+  }
+  if (result.duplicateCount > 0) {
+    p.log.warn(`${result.duplicateCount} selected model(s) were already in your favorites.`);
+  }
+  if (result.limitReached) {
+    p.log.warn(`Limit of ${maxFavorites} favorites reached — some selected models could not be added.`);
+  }
+}
+
 export async function runModelsCommand(opts: FavoritesCommandOptions = {}): Promise<number> {
   const changesAlias = opts.alias !== undefined || opts.unalias !== undefined;
   if (changesAlias && (opts.list || (opts.alias !== undefined && opts.unalias !== undefined))) {
@@ -834,7 +960,7 @@ export async function runModelsCommand(opts: FavoritesCommandOptions = {}): Prom
   let favorites = prefs.favoriteModels ?? [];
   let favoritesDirty = false;
 
-  // eslint-disable-next-line no-constant-condition
+
   while (true) {
     type MenuChoice = string;
     const options: Array<{ value: MenuChoice; label: string; hint: string }> = [];
@@ -877,118 +1003,14 @@ export async function runModelsCommand(opts: FavoritesCommandOptions = {}): Prom
         continue;
       }
 
-      const globalCount = buildGlobalFavoriteIndex(favoriteProviders).length;
-      const addPath = await p.select<string>({
-        message: 'Add a favorite',
-        options: [
-          {
-            value: 'global',
-            label: pc.cyan('Search all providers'),
-                hint: `${globalCount} models · ${favoriteProviders.length} provider${favoriteProviders.length !== 1 ? 's' : ''}`,
-          },
-          {
-            value: 'provider',
-            label: pc.cyan('Browse by provider →'),
-            hint: 'Pick one provider first',
-          },
-        ],
-      });
-      if (p.isCancel(addPath)) continue;
-
-      let provider: LocalProvider | undefined;
-      let browsedMultiple: LocalProviderModel[] = [];
-
-      if (addPath === 'global') {
-        const globalPick = await pickGlobalFavoriteModel(favoriteProviders, favorites);
-        if (globalPick === null) continue;
-        if (globalPick !== browseByProviderChoice) {
-          provider = favoriteProviders.find(ap => ap.id === globalPick.providerId);
-          browsedMultiple = [globalPick.model];
-        }
-      }
-
-      if (browsedMultiple.length === 0) {
-        let currentInitialProvider: string | undefined = undefined;
-        while (true) {
-          const providerOptions = favoriteProviders.map(ap => providerSelectOption(ap));
-          const pickedProviderId: string | symbol = await p.select({
-            message: 'Which provider?',
-            options: providerOptions,
-            initialValue: currentInitialProvider,
-          });
-          if (p.isCancel(pickedProviderId)) break;
-
-          provider = favoriteProviders.find(ap => ap.id === pickedProviderId)!;
-
-          const options = provider.models.map(m => {
-            const favorited = isFavorite(favorites, { providerId: provider!.id, modelId: m.id });
-            const label = formatModelLabel(m);
-            return {
-              value: m.id,
-              label: fmtModel(label, m.id),
-              hint: favorited ? pc.yellow('★ already favorite') : '',
-            };
-          });
-
-          const pickedModelIds = await p.multiselect({
-            message: `Select models to add from ${provider.name} ${pc.dim('(Space to select, Enter to confirm)')}`,
-            options,
-            required: false,
-          });
-
-          if (p.isCancel(pickedModelIds)) {
-            currentInitialProvider = provider.id;
-            continue;
-          }
-
-          if (pickedModelIds.length === 0) {
-            currentInitialProvider = provider.id;
-            continue;
-          }
-
-          browsedMultiple = provider.models.filter(m => (pickedModelIds as string[]).includes(m.id));
-          break;
-        }
-        if (browsedMultiple.length === 0) continue;
-      }
-
-      const addedModels: LocalProviderModel[] = [];
-      let duplicateCount = 0;
-      let limitReached = false;
-
-      for (const model of browsedMultiple) {
-        const fav: FavoriteModel = { providerId: provider!.id, modelId: model.id };
-        const result = addFavorite(favorites, fav, maxFavorites);
-        if (!result.ok) {
-          if (result.reason === 'duplicate') {
-            duplicateCount++;
-          } else {
-            limitReached = true;
-            break;
-          }
-        } else {
-          favorites = result.list;
-          favoritesDirty = true;
-          addedModels.push(model);
-        }
-      }
-
-      if (addedModels.length > 0) {
-        if (addedModels.length === 1) {
-          const modelName = addedModels[0].name || addedModels[0].id;
-          p.log.success(`Added ${modelName} (${provider!.name}) to favorites.`);
-        } else {
-          p.log.success(`Added ${addedModels.length} models from ${provider!.name} to favorites.`);
-        }
-      }
-      if (duplicateCount > 0) {
-        p.log.warn(`${duplicateCount} selected model(s) were already in your favorites.`);
-      }
-      if (limitReached) {
-        p.log.warn(`Limit of ${maxFavorites} favorites reached — some selected models could not be added.`);
-      }
-    } else if ((choice as string).startsWith('fav-')) {
-      const idx = parseInt((choice as string).slice(4), 10);
+      const addition = await selectFavoriteAddition(favoriteProviders, favorites);
+      if (!addition) continue;
+      const result = applyFavoriteAddition(favorites, addition, maxFavorites);
+      favorites = result.favorites;
+      favoritesDirty ||= result.addedModels.length > 0;
+      reportFavoriteAddition(addition, result, maxFavorites);
+    } else if ((choice).startsWith('fav-')) {
+      const idx = parseInt((choice).slice(4), 10);
       const fav = favorites[idx]!;
       const entry = modelLookup.get(`${fav.providerId}:${fav.modelId}`);
       const label = entry ? `${entry.modelName} (${entry.providerName})` : fav.modelId;
@@ -1026,6 +1048,35 @@ function requestedClaudeModel(args: string[]): string | undefined {
   return stripOneMContextSuffix(
     flag.includes('=') ? flag.slice(flag.indexOf('=') + 1) : (args[index + 1] ?? ''),
   ).trim() || undefined;
+}
+
+async function selectSavedFavorite(
+  favorites: FavoriteModel[],
+  providers: LocalProvider[],
+): Promise<{ provider: LocalProvider; model: LocalProviderModel } | null> {
+  const available = favorites.flatMap(favorite => {
+    const provider = providers.find(candidate => candidate.id === favorite.providerId);
+    const model = provider?.models.find(candidate => candidate.id === favorite.modelId);
+    return provider && model ? [{ provider, model }] : [];
+  });
+  if (available.length === 0) {
+    p.log.warn('No saved favorites are currently available.');
+    return null;
+  }
+  const pickedIndex = await p.select<string>({
+    message: 'Starting model?',
+    options: available.map((favorite, index) => ({
+      value: String(index),
+      label: `${favorite.model.name || favorite.model.id} — ${favorite.provider.name}`,
+      hint: favorite.model.id,
+    })),
+    initialValue: '0',
+  });
+  if (p.isCancel(pickedIndex)) {
+    p.cancel('Cancelled.');
+    return null;
+  }
+  return available[Number(pickedIndex)] ?? null;
 }
 
 async function runClaudeDaemonEndpointCommand(
@@ -1156,7 +1207,7 @@ export async function runClaudeCommand(parsed: ParsedArgs): Promise<number> {
   }
   // Without a TTY the interactive wizard cannot run — fall back to the last-used
   // provider/model (like print mode) instead of crashing on a clack prompt.
-  if (!launchPlan.skip && process.stdin.isTTY !== true) {
+  if (!launchPlan.skip && !process.stdin.isTTY) {
     const savedPrefs = dryRun ? loadPreferences() : prefs;
     if (savedPrefs.lastProvider && savedPrefs.lastModel) {
       launchPlan.skip = true;
@@ -1249,48 +1300,27 @@ export async function runClaudeCommand(parsed: ParsedArgs): Promise<number> {
         return 0;
       }
 
-      const providerChoice = chosen as string;
+      const providerChoice = chosen;
 
       if (providerChoice === '__favorites__') {
-        const available: Array<{ provider: LocalProvider; model: LocalProviderModel }> = [];
-        for (const fav of favorites) {
-          const prov = allProviders.find(lp => lp.id === fav.providerId);
-          const mod = prov?.models.find(m => m.id === fav.modelId);
-          if (prov && mod) available.push({ provider: prov, model: mod });
-        }
-        if (available.length === 0) {
-          p.log.warn('No saved favorites are currently available.');
-          return 0;
-        }
-        const favOptions = available.map((f, i) => ({
-          value: String(i),
-          label: `${f.model.name || f.model.id} — ${f.provider.name}`,
-          hint: f.model.id,
-        }));
-        const pickedIdx = await p.select<string>({
-          message: 'Starting model?',
-          options: favOptions,
-          initialValue: '0',
-        });
-        if (p.isCancel(pickedIdx)) { p.cancel('Cancelled.'); return 0; }
-        const sel = available[Number(pickedIdx)]!;
-        activeProvider = sel.provider;
-        selectedModel = sel.model;
-        if (!dryRun) recordLaunchSelection('claude', activeProvider.id, selectedModel.id, prefs);
-        break;
-      } else {
-        activeProvider = allProviders.find(lp => lp.id === providerChoice)!;
-        const pickedModelResult = await pickLocalModel(activeProvider, conflicts, prefs);
-        if (pickedModelResult === 'back') {
-          currentInitialProvider = activeProvider.id;
-          continue;
-        }
-        if (!pickedModelResult) return 0;
-        selectedModel = pickedModelResult;
-
+        const favorite = await selectSavedFavorite(favorites, allProviders);
+        if (!favorite) return 0;
+        activeProvider = favorite.provider;
+        selectedModel = favorite.model;
         if (!dryRun) recordLaunchSelection('claude', activeProvider.id, selectedModel.id, prefs);
         break;
       }
+      activeProvider = allProviders.find(lp => lp.id === providerChoice)!;
+      const pickedModelResult = await pickLocalModel(activeProvider, conflicts, prefs);
+      if (pickedModelResult === 'back') {
+        currentInitialProvider = activeProvider.id;
+        continue;
+      }
+      if (!pickedModelResult) return 0;
+      selectedModel = pickedModelResult;
+
+      if (!dryRun) recordLaunchSelection('claude', activeProvider.id, selectedModel.id, prefs);
+      break;
     }
   }
 

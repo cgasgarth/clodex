@@ -150,7 +150,7 @@ export function applyClodexPatches(source: string, config: PatchScriptModelConfi
   };
 
   for (const [id, value] of Object.entries(MODEL_CONFIG)) {
-    const spec: PatchScriptModelEntry = value && typeof value === 'object' ? value : { alias: value as unknown as string };
+    const spec: PatchScriptModelEntry = value;
     if (spec.alias !== undefined) {
       const rawAlias = String(spec.alias).trim();
       const a = rawAlias.toLowerCase();
@@ -283,7 +283,7 @@ export function applyClodexPatches(source: string, config: PatchScriptModelConfi
   applyOnce(
     'PATCH 1: Agent tool model enum',
     /\.enum\((\["sonnet","opus","haiku"(?:,"[^"]+")*\])\)\.optional\(\)\.describe\(/,
-    (_m, arr) => '.enum(' + extendAliasArray(arr!) + ').optional().describe(',
+    (_m, arr) => '.enum(' + extendAliasArray(arr) + ').optional().describe(',
     { required: true, noopIsSkip: true }
   );
 
@@ -385,9 +385,9 @@ export function applyClodexPatches(source: string, config: PatchScriptModelConfi
       'PATCH 4: Agent tool model description',
       /(describe\(`Optional model override for this agent[^`]*?)(`\))/,
       (_m, body, close) =>
-        body!.includes('Additional custom models')
-          ? body! + close!
-          : body! + ' Additional custom models: ' + listing + '.' + close!,
+        body.includes('Additional custom models')
+          ? body + close
+          : body + ' Additional custom models: ' + listing + '.' + close,
       { required: false, noopIsSkip: true }
     );
   }
@@ -424,7 +424,7 @@ export function applyClodexPatches(source: string, config: PatchScriptModelConfi
       applyOnce(
         'PATCH 7: per-model context window',
         /(function [\w$]+\(e,t\)\{)(let [\w$]+=[\w$]+\(\);if\([\w$]+!==void 0\)return [\w$]+;if\([\w$]+\(e,t\)\)return [\w$]+;return [\w$]+\(e,t\)\})/,
-        (_m, head, body) => head! + SNIPPET + body!,
+        (_m, head, body) => head + SNIPPET + body,
         { required: true }
       );
     }
@@ -470,7 +470,7 @@ export function applyClodexPatches(source: string, config: PatchScriptModelConfi
     applyOnce(
       'PATCH X3: native precompute owner',
       /function ([\w$]+)\(e,t,r,n\)\{let ([\w$]+)=Uds\(t,r,n\),([\w$]+)=\2\.enabled\?r:void 0,([\w$]+)=CSe\(t,\3\);if\(!JGe\(t,r\)\)return e>=Hds\(\4,\2\);/,
-      (_m, fn, options, enabledWindow, context, settings) =>
+      (_m, fn, options, enabledWindow, context, _settings) =>
         'function ' + fn + '(e,t,r,n){' + MARKER
         + 'if(process.env.CLODEX_NATIVE_CONTEXT_OWNER==="1")return!1;'
         + 'let ' + options + '=Uds(t,r,n),' + enabledWindow + '=' + options + '.enabled?r:void 0,'
@@ -603,7 +603,7 @@ export function applyClodexPatches(source: string, config: PatchScriptModelConfi
           : 'anchor matched ' + matches.length + ' times (expected 1)');
       } else {
         const match = matches[0]!;
-        const index = match.index!;
+        const index = match.index;
         const [whole, lastMessage, message, messages, tokens, countUsage, model] = match;
         const progressSlice = js.slice(index, index + 3000);
         const progressRe = new RegExp(
@@ -690,7 +690,7 @@ export function applyClodexPatches(source: string, config: PatchScriptModelConfi
           + '\\[String\\(([\\w$]+)\\|\\|""\\)\\.trim\\(\\)\\.toLowerCase\\(\\)\\];'
           + 'if\\(_ccv!==void 0\\)return _ccv;',
         ),
-        (_m, arg) => snippet(arg!),
+        (_m, arg) => snippet(arg),
         { required: false, noopIsSkip: true },
       );
       return;
@@ -699,7 +699,7 @@ export function applyClodexPatches(source: string, config: PatchScriptModelConfi
     applyOnce(
       name,
       anchor,
-      (_m, head, arg, body) => head! + snippet(arg!) + body!,
+      (_m, head, arg, body) => head + snippet(arg) + body,
       { required: false },
     );
   }
@@ -741,14 +741,14 @@ export function applyClodexPatches(source: string, config: PatchScriptModelConfi
       applyOnce(
         'PATCH 9: default effort (refresh)',
         /\/\*ccpatch:default-effort\*\/var _cce=Object\.assign\(Object\.create\(null\),\{[^{}]*\}\)\[String\(([\w$]+)\|\|""\)\.trim\(\)\.toLowerCase\(\)\];if\(_cce!==void 0\)return _cce;/,
-        (_m, arg) => snippet(arg!),
+        (_m, arg) => snippet(arg),
         { required: false, noopIsSkip: true },
       );
     } else {
       applyOnce(
         'PATCH 9: default effort',
         /(function [\w$]+\(([\w$]+)\)\{)(return [\w$]+\([\w$]+\(\2\)\)\?\.default_effort\?\?"high"\})/,
-        (_m, head, arg, body) => head! + snippet(arg!) + body!,
+        (_m, head, arg, body) => head + snippet(arg) + body,
         { required: false },
       );
     }

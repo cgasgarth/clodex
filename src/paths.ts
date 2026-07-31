@@ -1,7 +1,7 @@
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
-export const APP_DIR_NAME = 'clodex';
+const APP_DIR_NAME = 'clodex';
 
 interface HomeEnv {
   [name: string]: string | undefined;
@@ -14,7 +14,7 @@ function userHome(env: HomeEnv = process.env): string {
   return env.HOME ?? env.USERPROFILE ?? homedir();
 }
 
-export function resolveAppHomeOverride(env: HomeEnv = process.env): string | undefined {
+function resolveAppHomeOverride(env: HomeEnv = process.env): string | undefined {
   const override = env.CLODEX_HOME;
   return override?.trim() || undefined;
 }

@@ -1,8 +1,8 @@
-import { OPENAI_METADATA_TIMEOUT_MS } from '../timeouts.js';
+import { PROVIDER_METADATA_TIMEOUT_MS } from '../timeouts.js';
 
 const CODEX_USAGE_URL = 'https://chatgpt.com/backend-api/wham/usage';
 
-export interface OpenAiUsageWindow {
+interface OpenAiUsageWindow {
   usedPercent: number;
   resetAt: number;
   limitWindowSeconds: number;
@@ -134,7 +134,7 @@ export async function fetchOpenAiUsage(
   const controller = new AbortController();
   const timer = setTimeout(
     () => controller.abort(),
-    options.timeoutMs ?? OPENAI_METADATA_TIMEOUT_MS,
+    options.timeoutMs ?? PROVIDER_METADATA_TIMEOUT_MS,
   );
   timer.unref();
   try {
