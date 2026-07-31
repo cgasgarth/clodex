@@ -824,7 +824,10 @@ describe('translated request cancellation', () => {
           event: 'translation_cancelled',
           requestId: 'req-cancel-1',
           phase: 'translating',
+          cancellationReason: 'downstream_client_abort',
         }));
+        expect(entries.some(entry => entry.event === 'translation_failed')).toBe(false);
+        expect(entries.some(entry => entry.event === 'upstream_error')).toBe(false);
       });
     } finally {
       handle.close();
@@ -1056,6 +1059,86 @@ describe('SDK translated error logging', () => {
         event: 'translation_failed',
         requestId: 'req-transport-error',
         errorCode: 'websocket_transport_error',
+        partialResponse: false,
+        replaySafe: true,
+        recoveryAction: 'none',
+      }));
+      expect(entries).toContainEqual(expect.objectContaining({
+        event: 'upstream_error',
+        requestId: 'req-transport-error',
+        partialResponse: false,
+        replaySafe: true,
+        recoveryAction: 'none',
+      }));
+    } finally {
+      handle.close();
+      await new Promise<void>(resolve => upstream.close(() => resolve()));
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 20_000);
+
+  it('ends a partial transport failure with a correlated error without replaying the request', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'clodex-sdk-partial-transport-'));
+    const inferenceLogPath = join(dir, 'inference.jsonl');
+    let requestCount = 0;
+    const upstream = http.createServer((req, res) => {
+      requestCount += 1;
+      req.resume();
+      req.once('end', () => {
+        res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Connection': 'close' });
+        res.write('data: {"id":"chatcmpl-partial","object":"chat.completion.chunk","created":1,"model":"translated-model","choices":[{"index":0,"delta":{"role":"assistant","content":"partial output"},"finish_reason":null}]}\n\n');
+        res.end('data: {"error":{"type":"transport_error","code":"websocket_transport_error","message":"connection ended"}}\n\n');
+      });
+    });
+    await new Promise<void>((resolve, reject) => {
+      upstream.once('error', reject);
+      upstream.listen(0, '127.0.0.1', () => resolve());
+    });
+    const address = upstream.address();
+    if (!address || typeof address === 'string') throw new Error('test upstream did not bind');
+    const route: ProxyRoute = {
+      aliasId: 'clodex:test:translated-model',
+      realModelId: 'translated-model',
+      displayName: 'Translated Model',
+      upstreamUrl: '',
+      apiKey: 'provider-key',
+      modelFormat: 'openai',
+      npm: '@ai-sdk/openai-compatible',
+      baseURL: `http://127.0.0.1:${address.port}/v1`,
+      providerId: 'test-provider',
+    };
+    const handle = await startProxyCatalog([route], route.aliasId, false, inferenceLogPath);
+
+    try {
+      const res = await postToProxy(handle.port, handle.token, {
+        model: route.aliasId,
+        max_tokens: 100,
+        messages: [{ role: 'user', content: 'stream then fail' }],
+        stream: true,
+      }, 'req-partial-transport', '/v1/messages',
+      '11111111-1111-4111-8111-111111111111', 'workflow-agent-1');
+
+      expect(requestCount).toBe(1);
+      expect(res.status).toBe(200);
+      expect(res.body).toContain('partial output');
+      expect(res.body).toContain('event: error');
+      expect(res.body).toContain('Clodex did not replay the request');
+      expect(res.body).toContain('"request_id":"req-partial-transport"');
+      const entries = readFileSync(inferenceLogPath, 'utf8').trim().split('\n').map(line => JSON.parse(line));
+      expect(entries).toContainEqual(expect.objectContaining({
+        event: 'translation_failed',
+        requestId: 'req-partial-transport',
+        claudeSessionId: '11111111-1111-4111-8111-111111111111',
+        partialResponse: true,
+        replaySafe: false,
+        recoveryAction: 'client_retry_turn',
+      }));
+      expect(entries).toContainEqual(expect.objectContaining({
+        event: 'upstream_error',
+        requestId: 'req-partial-transport',
+        partialResponse: true,
+        replaySafe: false,
+        recoveryAction: 'client_retry_turn',
       }));
     } finally {
       handle.close();

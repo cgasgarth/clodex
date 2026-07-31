@@ -4,6 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   computeWrapperEnv,
+  applyClaudeStreamIdleTimeout,
+  CLAUDE_STREAM_IDLE_TIMEOUT_MS,
   LAUNCH_TICKET_HEADER,
   LOCAL_GATEWAY_API_KEY,
   setAnthropicCustomHeader,
@@ -41,6 +43,7 @@ describe('computeWrapperEnv', () => {
     }
     expect(env['NODE_EXTRA_CA_CERTS']).toBe('/home/u/.clodex/http-proxy/clodex-ca.pem');
     expect(env['PATH']).toBe('/usr/bin');
+    expect(env['CLAUDE_STREAM_IDLE_TIMEOUT_MS']).toBe(String(CLAUDE_STREAM_IDLE_TIMEOUT_MS));
   });
 
   it('proxy-mode server removes Anthropic bypasses while preserving unrelated hosts', () => {
@@ -90,10 +93,41 @@ describe('computeWrapperEnv', () => {
 
     expect(env['ANTHROPIC_BASE_URL']).toBe('http://127.0.0.1:4242/anthropic');
     expect(env['ANTHROPIC_API_KEY']).toBe(LOCAL_GATEWAY_API_KEY);
+    expect(env['CLAUDE_STREAM_IDLE_TIMEOUT_MS']).toBe(String(CLAUDE_STREAM_IDLE_TIMEOUT_MS));
     expect(LOCAL_GATEWAY_API_KEY.length).toBeGreaterThan(0);
     for (const name of ['HTTPS_PROXY', 'HTTP_PROXY', 'https_proxy', 'http_proxy']) {
       expect(env[name]).toBeUndefined();
     }
+  });
+
+  it('preserves a larger Claude stream idle timeout', () => {
+    const state: ServerRuntimeState = {
+      mode: 'endpoint',
+      port: 4242,
+      pid: process.pid,
+      startedAt: '2026-07-20T00:00:00.000Z',
+    };
+    const env = computeWrapperEnv({
+      ...baseEnv,
+      CLAUDE_STREAM_IDLE_TIMEOUT_MS: String(20 * 60_000),
+    }, state);
+
+    expect(env['CLAUDE_STREAM_IDLE_TIMEOUT_MS']).toBe(String(20 * 60_000));
+  });
+
+  it('raises a shorter Claude stream idle timeout to fifteen minutes', () => {
+    const state: ServerRuntimeState = {
+      mode: 'endpoint',
+      port: 4242,
+      pid: process.pid,
+      startedAt: '2026-07-20T00:00:00.000Z',
+    };
+    const env = computeWrapperEnv({
+      ...baseEnv,
+      CLAUDE_STREAM_IDLE_TIMEOUT_MS: String(5 * 60_000),
+    }, state);
+
+    expect(env['CLAUDE_STREAM_IDLE_TIMEOUT_MS']).toBe(String(15 * 60_000));
   });
 
   it('endpoint-mode daemon preserves its token and carries the pinned account ticket', () => {
@@ -179,5 +213,22 @@ describe('computeWrapperEnv', () => {
     expect(wrapperRequiresServer({})).toBe(false);
     expect(wrapperRequiresServer({ CLODEX_REQUIRE_SERVER: '0' })).toBe(false);
     expect(wrapperRequiresServer({ CLODEX_REQUIRE_SERVER: '1' })).toBe(true);
+  });
+});
+
+describe('applyClaudeStreamIdleTimeout', () => {
+  it('changes only Claude Code stream-idle behavior', () => {
+    const env: NodeJS.ProcessEnv = {
+      MODEL_STREAM_IDLE_TIMEOUT_MS: 'custom-provider-value',
+      CLAUDE_CODE_USER_DIALOG_TIMEOUT_MS: 'custom-dialog-value',
+    };
+
+    applyClaudeStreamIdleTimeout(env);
+
+    expect(env).toEqual({
+      MODEL_STREAM_IDLE_TIMEOUT_MS: 'custom-provider-value',
+      CLAUDE_CODE_USER_DIALOG_TIMEOUT_MS: 'custom-dialog-value',
+      CLAUDE_STREAM_IDLE_TIMEOUT_MS: String(15 * 60_000),
+    });
   });
 });
