@@ -1,25 +1,33 @@
-# clodex
+# Run Codex models in Claude Code with clodex
 
 [![npm version](https://img.shields.io/npm/v/%40bman654%2Fclodex.svg)](https://www.npmjs.com/package/@bman654/clodex)
 
-**clodex** lets Claude Code use models from a ChatGPT/Codex plan or the OpenAI
-API. OpenAI models work as main-session models and in subagents, workflows, and
-agent teams while retaining Claude Code's system prompt, tools, and skills.
+**clodex** lets you use OpenAI Codex models inside Claude Code with either a
+ChatGPT/Codex subscription or an OpenAI API key. Pick Sol, Terra, Luna, or other
+enabled OpenAI models from Claude's `/model` menu and keep the Claude Code
+experience around them:
 
-One persistent local daemon handles model translation, OpenAI WebSocket
-continuation, prompt caching, optional native Codex compaction, accounts,
-metrics, and diagnostics. Anthropic models can continue using Claude Code's own
-login through selective proxy mode.
+- main sessions, resumable sessions, subagents, workflows, and agent teams;
+- Claude Code's terminal UI, system prompt, tools, skills, hooks, and MCPs;
+- model aliases such as `sol`, `terra`, and `luna` in prompts and agent
+  frontmatter; and
+- long-running context with prompt caching and optional native Codex
+  compaction.
+
+One local daemon handles translation, OpenAI WebSocket continuation, caching,
+compaction, accounts, metrics, and diagnostics for every Claude session and its
+children. Anthropic models can still use Claude Code's normal Anthropic login.
 
 ![Model picker](./docs/model-picker.png)
-
-Clodex can also expose local Anthropic- and OpenAI-compatible endpoints.
 
 > clodex is derived from the original [relay-ai](https://github.com/jacob-bd/relay-ai) project, heavily modified and streamlined for this one use case, with the full commit history preserved.
 
 Contributions are welcome — see [CONTRIBUTING.md](./CONTRIBUTING.md) for how to scope a PR and what the quality bar is.
 
 ## Quick start
+
+Install clodex, sign in to OpenAI, choose the Codex models you want Claude to
+show, and patch Claude Code's model metadata:
 
 ```bash
 bun add --global @bman654/clodex
@@ -32,15 +40,19 @@ clodex patch
 clodex claude
 ```
 
-OAuth credentials are stored in the OS credential store. API-key users can run
+After setup, use `clodex claude` wherever you would normally use `claude`.
+Inside Claude Code, `/model` switches between your enabled Codex models. Bare
+`clodex` opens the daemon dashboard; `clodex start` starts it without opening
+the dashboard.
+
+OAuth credentials are stored in the OS credential store. API-key users can use
 `clodex providers add` instead. Favorites and aliases feed `/model`, routing,
-and patching. `clodex patch` is optional for ordinary launches but required for
-OpenAI aliases in the Agent tool; it also supplies correct context windows.
-Re-run it after Claude Code updates, or restore with `clodex patch --restore`.
+subagent model selection, and patching. Re-run `clodex patch` after Claude Code
+updates, or restore the pristine Claude binary with `clodex patch --restore`.
 
-## Highlights
+## What you get inside Claude Code
 
-| Capability | Clodex |
+| Claude Code capability | With Codex models through clodex |
 | --- | --- |
 | Main sessions, subagents, workflows, and agent teams | Yes |
 | Claude Code system prompt, skills, tools, and model frontmatter | Yes |
@@ -49,8 +61,12 @@ Re-run it after Claude Code updates, or restore with `clodex patch --restore`.
 | Persistent shared daemon and OpenAI WebSocket continuation | Yes |
 | Stable prompt-cache routing and explicit cache breakpoints | Yes |
 | Native OpenAI/Codex compaction with durable recovery | Optional |
-| In-process Secondwind tool-output optimization | Optional |
+| In-process Secondwind tool-output optimization | Built in; defaults on |
 | Multiple manually selected ChatGPT/Codex accounts | Up to five |
+
+Clodex can also expose local Anthropic- and OpenAI-compatible endpoints, but
+the primary path is `clodex claude`: Claude Code remains the client and clodex
+routes only the selected OpenAI models.
 
 ### Claude Code Plans and ToS
 
@@ -164,6 +180,23 @@ Accounts, Diagnostics, Secondwind, and Models. Press `1`–`6` to switch views. 
 supports day/week/month navigation with `Tab`, `Shift+Tab`, `←`, `→`, and `0`.
 Secondwind mode changes require confirmation. The Models view enables or disables OpenAI
 models in the live route catalog and the patched picker used by new Claude launches.
+
+### Usage, caching, and API-equivalent cost
+
+The Usage view shows account-scoped input, cache reads, cache writes, output,
+request failures, cache share, and what the same traffic would cost at the
+published OpenAI API rates. ChatGPT subscription usage is not billed by these
+figures.
+
+![Clodex usage dashboard with token history, cache share, and API-equivalent cost](./docs/dashboard-usage.png)
+
+### Secondwind savings and latency
+
+The Secondwind view reports measured tool-output tokens removed, percent saved,
+cache-aware estimated savings, top sessions, and median/p95 latency added by the
+optimizer.
+
+![Clodex Secondwind dashboard with measured token savings and latency](./docs/dashboard-secondwind.png)
 
 Metrics are retained for 400 days in owner-only SQLite. They aggregate in memory
 and flush as one compact batch row each minute or after 1,000 records; dashboard
