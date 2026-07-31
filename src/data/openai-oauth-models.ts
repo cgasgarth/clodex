@@ -29,6 +29,9 @@ interface OAuthModelSeed {
   preferWebSockets?: boolean;
 }
 
+/** Claude-facing context policy shared by the GPT-5.6 Sol, Terra, and Luna routes. */
+export const GPT_5_6_CONTEXT_WINDOW = 1_000_000;
+
 // Models that the ChatGPT Codex backend (chatgpt.com/backend-api/codex) explicitly rejects
 // for OAuth-authenticated ChatGPT accounts. The API returns HTTP 400 with:
 //   "The '<model>' model is not supported when using Codex with a ChatGPT account."
@@ -42,9 +45,9 @@ export const CHATGPT_CODEX_UNSUPPORTED_MODELS = new Set<string>([
 // Ordered from newest to oldest within each tier.
 const OPENAI_OAUTH_MODEL_SEEDS: OAuthModelSeed[] = [
   // GPT-5.6 family (Sol / Terra / Luna)
-  { id: 'gpt-5.6-sol',          name: 'GPT-5.6 Sol',       contextWindow: 272_000, reasoning: true },
-  { id: 'gpt-5.6-terra',        name: 'GPT-5.6 Terra',     contextWindow: 272_000, reasoning: true },
-  { id: 'gpt-5.6-luna',         name: 'GPT-5.6 Luna',      contextWindow: 272_000, reasoning: true, useResponsesLite: true, preferWebSockets: true },
+  { id: 'gpt-5.6-sol',          name: 'GPT-5.6 Sol',       contextWindow: GPT_5_6_CONTEXT_WINDOW, reasoning: true },
+  { id: 'gpt-5.6-terra',        name: 'GPT-5.6 Terra',     contextWindow: GPT_5_6_CONTEXT_WINDOW, reasoning: true },
+  { id: 'gpt-5.6-luna',         name: 'GPT-5.6 Luna',      contextWindow: GPT_5_6_CONTEXT_WINDOW, reasoning: true, useResponsesLite: true, preferWebSockets: true },
   // Fast Codex lane
   { id: 'gpt-5.3-codex-spark',  name: 'GPT-5.3 Codex Spark', contextWindow: 128_000, reasoning: true, preferWebSockets: true },
   // GPT-5.5 family (Pro)

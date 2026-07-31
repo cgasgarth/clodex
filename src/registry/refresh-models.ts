@@ -21,7 +21,11 @@ import {
 } from './pricing.js';
 import { cachedModelCount, isLikelyPlaceholderKey, resolveRefreshCredential, skipWithCachedModels } from './refresh-credentials.js';
 import type { CachedModel, ProviderRegistry, RegistryProvider } from './types.js';
-import { buildOpenAiOAuthModels, CHATGPT_CODEX_UNSUPPORTED_MODELS } from '../data/openai-oauth-models.js';
+import {
+  buildOpenAiOAuthModels,
+  CHATGPT_CODEX_UNSUPPORTED_MODELS,
+  GPT_5_6_CONTEXT_WINDOW,
+} from '../data/openai-oauth-models.js';
 import { modelPrefersResponsesApi } from '../provider-factory.js';
 import { deriveBrand } from '../models.js';
 import { resolveContextWindow } from '../context-window.js';
@@ -115,9 +119,14 @@ function parseOpenAiModelEntries(body: unknown): OpenAiModelEntry[] {
 function buildDynamicOAuthModel(entry: OpenAiModelEntry, seedById: Map<string, CachedModel>): CachedModel {
   const seed = seedById.get(entry.id);
   if (seed) {
+    // Older backend catalogs can still report the pre-1M 272K value. Do not let
+    // that stale metadata downgrade Sol, Terra, or Luna in Claude Code.
+    const contextWindow = /^gpt-5\.6-(?:sol|terra|luna)$/i.test(entry.id)
+      ? GPT_5_6_CONTEXT_WINDOW
+      : entry.context_window ?? seed.contextWindow;
     return {
       ...seed,
-      contextWindow: entry.context_window ?? seed.contextWindow,
+      contextWindow,
       useResponsesLite: entry.useResponsesLite ?? seed.useResponsesLite,
       preferWebSockets: entry.preferWebSockets ?? seed.preferWebSockets,
     };
