@@ -40,7 +40,7 @@ import {
   withRegistryWriteLock,
 } from './registry/lock.js';
 import type { ConflictInfo } from './types.js';
-import { removeAnthropicProxyBypass } from './wrapper-env.js';
+import { applyClaudeStreamIdleTimeout, removeAnthropicProxyBypass } from './wrapper-env.js';
 
 export function detectConflicts(): ConflictInfo[] {
   return CONFLICTING_ENV_VARS.filter(name => process.env[name] !== undefined).map(name => ({
@@ -58,6 +58,10 @@ export function applyClaudeCodeThirdPartyCompat(env: NodeJS.ProcessEnv): void {
   // Third-party routes may enable a shorter system prompt that drops conversational
   // guardrails while hooks/plugins still inject agentic instructions.
   env['CLAUDE_CODE_SIMPLE_SYSTEM_PROMPT'] = '0';
+  // Claude Code's own stream watchdog defaults to five minutes. Long Codex
+  // reasoning turns can legitimately stay quiet longer, so clodex launches use
+  // the supported env override rather than changing provider or daemon timers.
+  applyClaudeStreamIdleTimeout(env);
 }
 
 export function buildChildEnv(

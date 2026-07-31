@@ -207,7 +207,15 @@ export interface InferenceResponseErrorLogEntry {
   errorContent?: string;
   isRetryable?: boolean;
   attemptCount?: number;
+  partialResponse?: boolean;
+  replaySafe?: boolean;
+  recoveryAction?: InferenceRecoveryAction;
 }
+
+export type InferenceRecoveryAction =
+  | 'client_retry_request'
+  | 'client_retry_turn'
+  | 'none';
 
 export interface InferenceRouteUnavailableLogEntry {
   requestId: string;
@@ -283,6 +291,10 @@ export interface InferenceResponseLifecycleLogEntry {
   errorSignature?: string;
   failureSource?: InferenceFailureSource;
   terminationSource?: InferenceTerminationSource;
+  partialResponse?: boolean;
+  replaySafe?: boolean;
+  recoveryAction?: InferenceRecoveryAction;
+  cancellationReason?: 'downstream_client_abort';
 }
 
 export type ProxyLifecycleEvent =
@@ -525,6 +537,10 @@ export function writeInferenceResponseLifecycleLog(
     ...(entry.errorSignature ? { errorSignature: compactLogValue(entry.errorSignature, 100) } : {}),
     ...(entry.failureSource ? { failureSource: entry.failureSource } : {}),
     ...(entry.terminationSource ? { terminationSource: entry.terminationSource } : {}),
+    ...(entry.partialResponse !== undefined ? { partialResponse: entry.partialResponse } : {}),
+    ...(entry.replaySafe !== undefined ? { replaySafe: entry.replaySafe } : {}),
+    ...(entry.recoveryAction ? { recoveryAction: entry.recoveryAction } : {}),
+    ...(entry.cancellationReason ? { cancellationReason: entry.cancellationReason } : {}),
   }));
   publishInferenceTrace({ kind: 'lifecycle', entry });
 }
@@ -591,6 +607,9 @@ export function writeInferenceResponseErrorLog(
     statusCode: entry.statusCode,
     ...(entry.isRetryable !== undefined ? { isRetryable: entry.isRetryable } : {}),
     ...(entry.attemptCount !== undefined ? { attemptCount: entry.attemptCount } : {}),
+    ...(entry.partialResponse !== undefined ? { partialResponse: entry.partialResponse } : {}),
+    ...(entry.replaySafe !== undefined ? { replaySafe: entry.replaySafe } : {}),
+    ...(entry.recoveryAction ? { recoveryAction: entry.recoveryAction } : {}),
     ...(includeContent ? { errorContent: compactLogValueWithMarker(entry.errorContent!, RESPONSE_ERROR_MAX) } : {}),
   }));
   publishInferenceTrace({ kind: 'upstream_error', entry });

@@ -11,6 +11,14 @@ const PROXY_ENV_VARS = ['HTTPS_PROXY', 'HTTP_PROXY', 'https_proxy', 'http_proxy'
 export const REQUIRE_SERVER_ENV = 'CLODEX_REQUIRE_SERVER';
 export const LAUNCH_TICKET_ENV = 'CLODEX_LAUNCH_TICKET';
 export const LAUNCH_TICKET_HEADER = 'x-clodex-launch-ticket';
+export const CLAUDE_STREAM_IDLE_TIMEOUT_MS = 15 * 60_000;
+
+export function applyClaudeStreamIdleTimeout(env: NodeJS.ProcessEnv): void {
+  const configured = Number(env['CLAUDE_STREAM_IDLE_TIMEOUT_MS']);
+  if (!Number.isFinite(configured) || configured < CLAUDE_STREAM_IDLE_TIMEOUT_MS) {
+    env['CLAUDE_STREAM_IDLE_TIMEOUT_MS'] = String(CLAUDE_STREAM_IDLE_TIMEOUT_MS);
+  }
+}
 
 export function setAnthropicCustomHeader(
   env: NodeJS.ProcessEnv,
@@ -98,6 +106,7 @@ export function computeWrapperEnv(
     for (const name of PROXY_ENV_VARS) env[name] = proxyUrl;
     if (state.caPath) env['NODE_EXTRA_CA_CERTS'] = state.caPath;
     removeAnthropicProxyBypass(env);
+    applyClaudeStreamIdleTimeout(env);
     return env;
   }
 
@@ -115,5 +124,6 @@ export function computeWrapperEnv(
     env['ANTHROPIC_API_KEY'] ||= LOCAL_GATEWAY_API_KEY;
     setAnthropicCustomHeader(env, LAUNCH_TICKET_HEADER, undefined);
   }
+  applyClaudeStreamIdleTimeout(env);
   return env;
 }

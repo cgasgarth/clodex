@@ -640,7 +640,10 @@ describe('createResponsesWebSocketFetch', () => {
   });
 
   it('does not retry after model output has reached the downstream stream', async () => {
-    const wsFetch = createResponsesWebSocketFetch(WS_URL);
+    const diagnostics: ResponsesWebSocketDiagnosticEvent[] = [];
+    const wsFetch = createResponsesWebSocketFetch(WS_URL, undefined, {
+      onDiagnostic: event => diagnostics.push(event),
+    });
     const res = await wsFetch('https://x', {
       method: 'POST',
       headers: {},
@@ -661,6 +664,16 @@ describe('createResponsesWebSocketFetch', () => {
     const body = await readAll(res);
     expect(body).toContain('partial output');
     expect(body).toContain('websocket_transport_error');
+    expect(fakeSockets).toHaveLength(1);
+    expect(diagnostics).not.toContainEqual(expect.objectContaining({
+      event: 'ws_transport_retry',
+      outcome: 'started',
+    }));
+    expect(diagnostics).toContainEqual(expect.objectContaining({
+      event: 'ws_response_error',
+      frameCount: 1,
+      emittedModelData: true,
+    }));
   });
 
   it('retries a failed incremental continuation with the complete original context', async () => {

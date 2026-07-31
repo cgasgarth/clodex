@@ -183,11 +183,11 @@ function createTranslationLifecycle(
       write('translation_completed', completed);
       if (ownsResponseLifecycle) write('response_completed', completed);
     },
-    cancel() {
+    cancel(cancellationReason: 'downstream_client_abort' = 'downstream_client_abort') {
       if (stopped) return;
       stopped = true;
       clearInterval(timer);
-      const cancelled = snapshot(Date.now());
+      const cancelled = { ...snapshot(Date.now()), cancellationReason };
       write('translation_cancelled', cancelled);
       if (ownsResponseLifecycle) {
         write('response_client_disconnected', {
@@ -196,7 +196,16 @@ function createTranslationLifecycle(
         });
       }
     },
-    fail(errorType: string, errorSignature?: string, errorCode?: string) {
+    fail(
+      errorType: string,
+      errorSignature?: string,
+      errorCode?: string,
+      recovery?: {
+        partialResponse: boolean;
+        replaySafe: boolean;
+        recoveryAction: 'client_retry_request' | 'client_retry_turn' | 'none';
+      },
+    ) {
       if (stopped) return;
       stopped = true;
       clearInterval(timer);
@@ -205,6 +214,7 @@ function createTranslationLifecycle(
         errorType,
         errorSignature,
         errorCode,
+        ...recovery,
       };
       write('translation_failed', failed);
       if (ownsResponseLifecycle) {
@@ -737,6 +747,9 @@ export async function startProxyCatalog(
           processingMode,
           route.realModelId,
         );
+        const cancelTranslation = () => translationLifecycle?.cancel('downstream_client_abort');
+        if (clientAbort.signal.aborted) cancelTranslation();
+        else clientAbort.signal.addEventListener('abort', cancelTranslation, { once: true });
         const runSdkRequest = async (): Promise<void> => {
           const estimatedInputTokens = estimateAnthropicInputTokens(anthropicBody);
           const forceCompaction = openAiOAuth
@@ -918,19 +931,28 @@ export async function startProxyCatalog(
             plog(() => 'sdk oauth credential replaced after 401; retrying once');
             return 'retry';
           }
+          const partialResponse = res.headersSent;
+          const replaySafe = !partialResponse;
+          const recoveryAction = partialResponse
+            ? 'client_retry_turn'
+            : details?.isRetryable ? 'client_retry_request' : 'none';
           translationLifecycle?.fail(
             err instanceof Error ? err.name : 'UpstreamError',
             sdkTranslationErrorSignature(err),
             details?.transportCode,
+            { partialResponse, replaySafe, recoveryAction },
           );
           const contextLengthExceeded = upstreamStatus === 400
             && isContextLengthExceededError(err, message);
-          const clientMessage = contextLengthExceeded
+          let clientMessage = contextLengthExceeded
             ? anthropicPromptTooLongMessage(
                 anthropicBody,
                 resolveContextWindow(route.realModelId, route.contextWindow),
               )
             : message;
+          if (partialResponse) {
+            clientMessage += ' The upstream stream ended after partial output. Clodex did not replay the request because doing so could duplicate text or tool calls; retry or continue the turn in Claude Code.';
+          }
           plog(() => `sdk error: ${message}${details?.errorContent ? ` — body: ${details.errorContent}` : ''}`);
           if (inferenceLogPath && upstreamStatus >= 400) {
             writeInferenceResponseErrorLog(inferenceLogPath, {
@@ -942,6 +964,9 @@ export async function startProxyCatalog(
               errorContent: details?.errorContent ?? message,
               isRetryable: details?.isRetryable,
               attemptCount: details?.attemptCount,
+              partialResponse,
+              replaySafe,
+              recoveryAction,
             });
           }
           if (!res.headersSent) {
@@ -959,7 +984,7 @@ export async function startProxyCatalog(
             res.write(`event: error\ndata: ${JSON.stringify({
               type: 'error',
               error: { type: errorType, message: clientMessage },
-              ...(contextLengthExceeded ? { request_id: relayRequestId ?? randomUUID() } : {}),
+              request_id: relayRequestId ?? randomUUID(),
             })}\n\n`);
             res.end();
           }
