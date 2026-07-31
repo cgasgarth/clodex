@@ -63,6 +63,13 @@ import { resolveContextWindow } from './context-window.js';
 import { getOrCreateProxyToken } from './proxy-token.js';
 import { BunHttpResponse } from './bun-http-response.js';
 import type { ApiProcessingMode } from './daemon/api-pricing.js';
+import {
+  CHILD_AGENT_STREAM_MAX_RETRIES,
+  childAgentRetryDelayMs,
+  createAgentStreamTransaction,
+  shouldRetryChildAgentStream,
+  waitForChildAgentRetry,
+} from './agent-stream-transaction.js';
 
 type ProxyLog = (message: string | (() => string)) => void;
 
@@ -161,6 +168,12 @@ function createTranslationLifecycle(
       translatedBytes += Buffer.byteLength(chunk);
       translatedChunks += 1;
       lastOutputAt = Date.now();
+    },
+    retry(retryAttempt: number, retryLimit: number, discardedBytes: number, errorCode?: string) {
+      if (stopped) return;
+      write('translation_retrying', {
+        ...snapshot(Date.now()), retryAttempt, retryLimit, discardedBytes, errorCode,
+      });
     },
     complete(usage?: {
       input_tokens?: number;
@@ -440,6 +453,28 @@ async function runSdkRequestWithRecovery(
   }
 }
 
+function prepareAgentStreamTransaction(
+  clientWantsStream: boolean,
+  claudeAgentId: string | undefined,
+  response: ServerResponse,
+  lifecycle: ReturnType<typeof createTranslationLifecycle>,
+  plog: ProxyLog,
+) {
+  const state = { lastDownstreamWriteAt: Date.now() };
+  const prepared = createAgentStreamTransaction({
+    enabled: clientWantsStream && claudeAgentId !== undefined,
+    response,
+    onOutput: chunk => {
+      state.lastDownstreamWriteAt = Date.now();
+      lifecycle?.onOutput(chunk);
+    },
+    onBufferLimitExceeded: bufferedBytes => {
+      plog(() => `child-agent stream transaction exceeded ${bufferedBytes} bytes; switching to passthrough`);
+    },
+  });
+  return { ...prepared, state };
+}
+
 export async function startProxyCatalog(
   routes: ProxyRoute[],
   defaultAliasId: string,
@@ -456,7 +491,6 @@ export async function startProxyCatalog(
   silenceSdkWarnings();
 
   let catalog = createProxyCatalogState(routes, defaultAliasId, modelAliases);
-
   const plog = makeProxyLog(debug, debugLogPath);
 
   const onRejection = (reason: unknown) => {
@@ -767,6 +801,11 @@ export async function startProxyCatalog(
         const cancelTranslation = () => translationLifecycle?.cancel('downstream_client_abort');
         if (clientAbort.signal.aborted) cancelTranslation();
         else clientAbort.signal.addEventListener('abort', cancelTranslation, { once: true });
+        let childAgentRetryCount = 0;
+        const { transaction: streamTransaction, ensureHeaders: ensureStreamHeaders, state: streamState } =
+          prepareAgentStreamTransaction(
+            clientWantsStream, claudeAgentIdHeader, res, translationLifecycle, plog,
+          );
         const runSdkRequest = async (): Promise<void> => {
           const estimatedInputTokens = estimateAnthropicInputTokens(anthropicBody);
           const forceCompaction = openAiOAuth
@@ -816,19 +855,10 @@ export async function startProxyCatalog(
             // Internal override (primarily a test seam / operational tuning knob).
             const keepAliveMs =
               Number(process.env.CLODEX_STREAM_KEEPALIVE_INTERVAL_MS) || STREAM_KEEPALIVE_INTERVAL_MS;
-            let lastDownstreamWriteAt = Date.now();
+            streamState.lastDownstreamWriteAt = Date.now();
             let lastUpstreamPartAt = Date.now();
             const writeStreamChunk = (chunk: string) => {
-              translationLifecycle?.onOutput(chunk);
-              if (!res.headersSent) {
-                res.writeHead(200, {
-                  'Content-Type': 'text/event-stream',
-                  'Cache-Control': 'no-cache',
-                  'Connection': 'keep-alive',
-                });
-              }
-              lastDownstreamWriteAt = Date.now();
-              res.write(chunk);
+              streamTransaction.write(chunk);
             };
             // Heartbeat: while upstream keeps delivering parts but nothing has
             // been written downstream for a full interval (a large tool-call
@@ -837,12 +867,14 @@ export async function startProxyCatalog(
             // NOT go through translationLifecycle.onOutput so diagnostic
             // outputIdleMs still reflects the real buffering gap.
             const keepAlive = setInterval(() => {
-              if (res.writableEnded || !res.headersSent) return;
+              if (res.writableEnded) return;
               const now = Date.now();
-              const outputIdleMs = now - lastDownstreamWriteAt;
+              const outputIdleMs = now - streamState.lastDownstreamWriteAt;
               const upstreamIdleMs = now - lastUpstreamPartAt;
               if (outputIdleMs >= keepAliveMs && upstreamIdleMs < keepAliveMs) {
-                lastDownstreamWriteAt = now;
+                if (!res.headersSent && !streamTransaction.enabled) return;
+                ensureStreamHeaders();
+                streamState.lastDownstreamWriteAt = now;
                 res.write(STREAM_KEEPALIVE_PING);
                 plog(() => `stream keepalive ping: output idle ${outputIdleMs}ms, upstream active (${upstreamIdleMs}ms since last part)`);
               }
@@ -880,6 +912,7 @@ export async function startProxyCatalog(
                   },
                 ),
               );
+              streamTransaction.commit();
             } finally {
               clearInterval(keepAlive);
             }
@@ -937,7 +970,7 @@ export async function startProxyCatalog(
             openAiOAuth,
             upstreamStatus,
             sdkAttempt,
-            res.headersSent,
+            !streamTransaction.replaySafe,
             apiKey,
             route.refreshToken,
           );
@@ -948,10 +981,25 @@ export async function startProxyCatalog(
             plog(() => 'sdk oauth credential replaced after 401; retrying once');
             return 'retry';
           }
-          const partialResponse = res.headersSent;
-          const replaySafe = !partialResponse;
           const clientRetryable = details?.isRetryable
             ?? isTransientUpstreamStatus(upstreamStatus);
+          if (shouldRetryChildAgentStream(
+            streamTransaction, clientRetryable, childAgentRetryCount,
+          )) {
+            childAgentRetryCount += 1;
+            translationLifecycle?.retry(
+              childAgentRetryCount, CHILD_AGENT_STREAM_MAX_RETRIES,
+              streamTransaction.discard() ?? 0, details?.transportCode,
+            );
+            const retryDelayMs = childAgentRetryDelayMs(childAgentRetryCount, details?.retryAfterSeconds);
+            if (!await waitForChildAgentRetry(retryDelayMs, clientAbort.signal)) {
+              translationLifecycle?.cancel();
+              return 'cancelled';
+            }
+            return 'retry';
+          }
+          const partialResponse = !streamTransaction.replaySafe;
+          const replaySafe = !partialResponse;
           const recoveryAction = partialResponse
             ? clientRetryable ? 'client_auto_retry_turn' : 'client_retry_turn'
             : clientRetryable ? 'client_retry_request' : 'none';
