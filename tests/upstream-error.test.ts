@@ -5,6 +5,7 @@ import {
   clampRetryAfterSeconds,
   formatUpstreamError,
   isContextLengthExceededError,
+  isTransientUpstreamStatus,
   sdkUpstreamErrorDetails,
   upstreamHttpStatus,
 } from '../src/upstream-error.js';
@@ -25,6 +26,21 @@ function apiCallError(overrides: {
 }
 
 describe('sdkUpstreamErrorDetails retry-after extraction', () => {
+  it('uses Anthropic transient error types for overloads and timeouts', () => {
+    expect(anthropicErrorType(500)).toBe('api_error');
+    expect(anthropicErrorType(504)).toBe('timeout_error');
+    expect(anthropicErrorType(529)).toBe('overloaded_error');
+  });
+
+  it('falls back to Claude Code transient HTTP semantics when stream metadata is absent', () => {
+    for (const status of [408, 409, 429, 500, 502, 503, 504, 529]) {
+      expect(isTransientUpstreamStatus(status)).toBe(true);
+    }
+    for (const status of [400, 401, 403, 404, 413, 422, 501]) {
+      expect(isTransientUpstreamStatus(status)).toBe(false);
+    }
+  });
+
   it('keeps every non-WebSocket 403 a terminal permission error (WS layer owns the throttle mapping)', () => {
     const details = sdkUpstreamErrorDetails(apiCallError({
       statusCode: 403,

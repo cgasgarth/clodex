@@ -432,8 +432,22 @@ export function anthropicErrorType(status: number): string {
     case 403: return 'permission_error';
     case 404: return 'not_found_error';
     case 429: return 'rate_limit_error';
+    case 504: return 'timeout_error';
+    case 529: return 'overloaded_error';
     default: return 'api_error';
   }
+}
+
+/** HTTP failures Claude Code treats as transient when provider metadata was lost in a stream wrapper. */
+export function isTransientUpstreamStatus(status: number): boolean {
+  return status === 408
+    || status === 409
+    || status === 429
+    || status === 500
+    || status === 502
+    || status === 503
+    || status === 504
+    || status === 529;
 }
 
 function truncateForClient(message: string): string {

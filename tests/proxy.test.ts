@@ -1122,7 +1122,8 @@ describe('SDK translated error logging', () => {
       expect(res.status).toBe(200);
       expect(res.body).toContain('partial output');
       expect(res.body).toContain('event: error');
-      expect(res.body).toContain('Clodex did not replay the request');
+      expect(res.body).toContain('Claude Code can automatically retry');
+      expect(res.body).toContain('Clodex did not replay it server-side');
       expect(res.body).toContain('"request_id":"req-partial-transport"');
       const entries = readFileSync(inferenceLogPath, 'utf8').trim().split('\n').map(line => JSON.parse(line));
       expect(entries).toContainEqual(expect.objectContaining({
@@ -1131,14 +1132,137 @@ describe('SDK translated error logging', () => {
         claudeSessionId: '11111111-1111-4111-8111-111111111111',
         partialResponse: true,
         replaySafe: false,
-        recoveryAction: 'client_retry_turn',
+        recoveryAction: 'client_auto_retry_turn',
       }));
       expect(entries).toContainEqual(expect.objectContaining({
         event: 'upstream_error',
         requestId: 'req-partial-transport',
         partialResponse: true,
         replaySafe: false,
+        recoveryAction: 'client_auto_retry_turn',
+      }));
+    } finally {
+      handle.close();
+      await new Promise<void>(resolve => upstream.close(() => resolve()));
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 20_000);
+
+  it('keeps a terminal mid-stream error explicit instead of promising automatic recovery', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'clodex-sdk-partial-terminal-'));
+    const inferenceLogPath = join(dir, 'inference.jsonl');
+    const upstream = http.createServer((req, res) => {
+      req.resume();
+      req.once('end', () => {
+        res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Connection': 'close' });
+        res.write('data: {"id":"chatcmpl-terminal","object":"chat.completion.chunk","created":1,"model":"translated-model","choices":[{"index":0,"delta":{"role":"assistant","content":"partial output"},"finish_reason":null}]}\n\n');
+        res.end('data: {"error":{"type":"invalid_request_error","code":"invalid_prompt","message":"request cannot be retried (HTTP 400)"}}\n\n');
+      });
+    });
+    await new Promise<void>((resolve, reject) => {
+      upstream.once('error', reject);
+      upstream.listen(0, '127.0.0.1', () => resolve());
+    });
+    const address = upstream.address();
+    if (!address || typeof address === 'string') throw new Error('test upstream did not bind');
+    const route: ProxyRoute = {
+      aliasId: 'clodex:test:translated-model',
+      realModelId: 'translated-model',
+      displayName: 'Translated Model',
+      upstreamUrl: '',
+      apiKey: 'provider-key',
+      modelFormat: 'openai',
+      npm: '@ai-sdk/openai-compatible',
+      baseURL: `http://127.0.0.1:${address.port}/v1`,
+      providerId: 'test-provider',
+    };
+    const handle = await startProxyCatalog([route], route.aliasId, false, inferenceLogPath);
+
+    try {
+      const res = await postToProxy(handle.port, handle.token, {
+        model: route.aliasId,
+        max_tokens: 100,
+        messages: [{ role: 'user', content: 'stream then reject' }],
+        stream: true,
+      }, 'req-partial-terminal');
+
+      expect(res.status).toBe(200);
+      expect(res.body).toContain('event: error');
+      expect(res.body).toContain('retry or continue the turn');
+      expect(res.body).not.toContain('automatically retry');
+      const entries = readFileSync(inferenceLogPath, 'utf8').trim().split('\n').map(line => JSON.parse(line));
+      expect(entries).toContainEqual(expect.objectContaining({
+        event: 'upstream_error',
+        requestId: 'req-partial-terminal',
+        isRetryable: false,
+        partialResponse: true,
+        replaySafe: false,
         recoveryAction: 'client_retry_turn',
+      }));
+    } finally {
+      handle.close();
+      await new Promise<void>(resolve => upstream.close(() => resolve()));
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 20_000);
+
+  it('marks an interrupted partial tool call for Claude-side automatic retry without server replay', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'clodex-sdk-partial-tool-'));
+    const inferenceLogPath = join(dir, 'inference.jsonl');
+    let requestCount = 0;
+    const upstream = http.createServer((req, res) => {
+      requestCount += 1;
+      req.resume();
+      req.once('end', () => {
+        res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Connection': 'close' });
+        res.write('data: {"id":"chatcmpl-tool","object":"chat.completion.chunk","created":1,"model":"translated-model","choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"index":0,"id":"call_probe","type":"function","function":{"name":"Bash","arguments":"{\\"command\\":\\"echo"}}]},"finish_reason":null}]}\n\n');
+        res.end('data: {"error":{"type":"transport_error","code":"websocket_transport_error","message":"connection ended"}}\n\n');
+      });
+    });
+    await new Promise<void>((resolve, reject) => {
+      upstream.once('error', reject);
+      upstream.listen(0, '127.0.0.1', () => resolve());
+    });
+    const address = upstream.address();
+    if (!address || typeof address === 'string') throw new Error('test upstream did not bind');
+    const route: ProxyRoute = {
+      aliasId: 'clodex:test:translated-model',
+      realModelId: 'translated-model',
+      displayName: 'Translated Model',
+      upstreamUrl: '',
+      apiKey: 'provider-key',
+      modelFormat: 'openai',
+      npm: '@ai-sdk/openai-compatible',
+      baseURL: `http://127.0.0.1:${address.port}/v1`,
+      providerId: 'test-provider',
+    };
+    const handle = await startProxyCatalog([route], route.aliasId, false, inferenceLogPath);
+
+    try {
+      const res = await postToProxy(handle.port, handle.token, {
+        model: route.aliasId,
+        max_tokens: 100,
+        messages: [{ role: 'user', content: 'call a tool then fail' }],
+        tools: [{ name: 'Bash', description: 'Run a command', input_schema: { type: 'object' } }],
+        stream: true,
+      }, 'req-partial-tool', '/v1/messages',
+      '22222222-2222-4222-8222-222222222222', 'subagent-tool-1');
+
+      expect(requestCount).toBe(1);
+      expect(res.status).toBe(200);
+      expect(res.body).toContain('"type":"tool_use"');
+      expect(res.body).toContain('event: error');
+      expect(res.body).toContain('Claude Code can automatically retry');
+      expect(res.body).not.toContain('"type":"message_stop"');
+      const entries = readFileSync(inferenceLogPath, 'utf8').trim().split('\n').map(line => JSON.parse(line));
+      expect(entries).toContainEqual(expect.objectContaining({
+        event: 'upstream_error',
+        requestId: 'req-partial-tool',
+        claudeAgentId: 'subagent-tool-1',
+        isRetryable: true,
+        partialResponse: true,
+        replaySafe: false,
+        recoveryAction: 'client_auto_retry_turn',
       }));
     } finally {
       handle.close();
