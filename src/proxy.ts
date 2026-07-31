@@ -45,6 +45,7 @@ import {
 } from './sdk-adapter.js';
 import {
   anthropicErrorType,
+  isTransientUpstreamStatus,
   formatUpstreamError,
   isContextLengthExceededError,
   sdkUpstreamErrorDetails,
@@ -203,7 +204,7 @@ function createTranslationLifecycle(
       recovery?: {
         partialResponse: boolean;
         replaySafe: boolean;
-        recoveryAction: 'client_retry_request' | 'client_retry_turn' | 'none';
+        recoveryAction: 'client_retry_request' | 'client_auto_retry_turn' | 'client_retry_turn' | 'none';
       },
     ) {
       if (stopped) return;
@@ -933,9 +934,11 @@ export async function startProxyCatalog(
           }
           const partialResponse = res.headersSent;
           const replaySafe = !partialResponse;
+          const clientRetryable = details?.isRetryable
+            ?? isTransientUpstreamStatus(upstreamStatus);
           const recoveryAction = partialResponse
-            ? 'client_retry_turn'
-            : details?.isRetryable ? 'client_retry_request' : 'none';
+            ? clientRetryable ? 'client_auto_retry_turn' : 'client_retry_turn'
+            : clientRetryable ? 'client_retry_request' : 'none';
           translationLifecycle?.fail(
             err instanceof Error ? err.name : 'UpstreamError',
             sdkTranslationErrorSignature(err),
@@ -951,18 +954,22 @@ export async function startProxyCatalog(
               )
             : message;
           if (partialResponse) {
-            clientMessage += ' The upstream stream ended after partial output. Clodex did not replay the request because doing so could duplicate text or tool calls; retry or continue the turn in Claude Code.';
+            clientMessage += clientRetryable
+              ? ' The upstream stream ended after partial output. Claude Code can automatically retry this transient interruption; Clodex did not replay it server-side because doing so could duplicate text or tool calls.'
+              : ' The upstream stream ended after partial output. Clodex did not replay the request because doing so could duplicate text or tool calls; retry or continue the turn in Claude Code.';
           }
           plog(() => `sdk error: ${message}${details?.errorContent ? ` — body: ${details.errorContent}` : ''}`);
           if (inferenceLogPath && upstreamStatus >= 400) {
             writeInferenceResponseErrorLog(inferenceLogPath, {
               ...(relayRequestId ? { requestId: relayRequestId } : {}),
+              ...(claudeSessionId ? { claudeSessionId } : {}),
+              ...(claudeAgentIdHeader ? { claudeAgentId: claudeAgentIdHeader } : {}),
               modelId: originalModel,
               provider: route.providerId ?? route.aliasId.split(':')[1] ?? 'unknown',
               route: 'translated',
               statusCode: upstreamStatus,
               errorContent: details?.errorContent ?? message,
-              isRetryable: details?.isRetryable,
+              isRetryable: clientRetryable,
               attemptCount: details?.attemptCount,
               partialResponse,
               replaySafe,

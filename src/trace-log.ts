@@ -200,6 +200,8 @@ export interface InferenceRequestLogEntry {
 
 export interface InferenceResponseErrorLogEntry {
   requestId?: string;
+  claudeSessionId?: string;
+  claudeAgentId?: string;
   modelId: string;
   provider: string;
   route: 'passthrough' | 'translated';
@@ -214,6 +216,7 @@ export interface InferenceResponseErrorLogEntry {
 
 export type InferenceRecoveryAction =
   | 'client_retry_request'
+  | 'client_auto_retry_turn'
   | 'client_retry_turn'
   | 'none';
 
@@ -597,10 +600,13 @@ export function writeInferenceResponseErrorLog(
   entry: InferenceResponseErrorLogEntry,
 ): void {
   const includeContent = process.env[REQUEST_PREVIEW_ENV] === '1' && entry.errorContent;
+  const claudeSessionId = safeClaudeSessionId(entry.claudeSessionId);
   writeSecureLogLine(path, JSON.stringify({
     timestamp: new Date().toISOString(),
     event: 'upstream_error',
     ...(entry.requestId ? { requestId: compactLogValue(entry.requestId, 100) } : {}),
+    ...(claudeSessionId ? { claudeSessionId } : {}),
+    ...(entry.claudeAgentId ? { claudeAgentId: compactLogValue(entry.claudeAgentId, 100) } : {}),
     modelId: compactLogValue(entry.modelId),
     provider: compactLogValue(entry.provider, 200),
     route: entry.route,
