@@ -812,6 +812,7 @@ describe('translated request cancellation', () => {
           Authorization: `Bearer ${handle.token}`,
           'Content-Length': Buffer.byteLength(payload),
           'x-relay-request-id': 'req-cancel-1',
+          'x-claude-code-agent-id': 'workflow-cancel-1',
         },
       });
       request.on('error', () => {});
@@ -1078,7 +1079,84 @@ describe('SDK translated error logging', () => {
     }
   }, 20_000);
 
-  it('ends a partial transport failure with a correlated error without replaying the request', async () => {
+  it.each([
+    ['workflow agent', 'workflow-agent-retry'],
+    ['subagent', 'subagent-retry'],
+  ])('buffers and safely retries a partial transport failure for a %s', async (_label, agentId) => {
+    const dir = mkdtempSync(join(tmpdir(), 'clodex-sdk-agent-retry-'));
+    const inferenceLogPath = join(dir, 'inference.jsonl');
+    let requestCount = 0;
+    const upstream = http.createServer((req, res) => {
+      requestCount += 1;
+      req.resume();
+      req.once('end', () => {
+        res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Connection': 'close' });
+        if (requestCount === 1) {
+          res.write('data: {"id":"discarded","object":"chat.completion.chunk","created":1,"model":"translated-model","choices":[{"index":0,"delta":{"role":"assistant","content":"discarded partial output"},"finish_reason":null}]}\n\n');
+          res.end('data: {"error":{"type":"transport_error","code":"websocket_transport_error","message":"connection ended"}}\n\n');
+          return;
+        }
+        res.write('data: {"id":"recovered","object":"chat.completion.chunk","created":1,"model":"translated-model","choices":[{"index":0,"delta":{"role":"assistant","content":"recovered output"},"finish_reason":null}]}\n\n');
+        res.write('data: {"id":"recovered","object":"chat.completion.chunk","created":1,"model":"translated-model","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\n');
+        res.end('data: [DONE]\n\n');
+      });
+    });
+    await new Promise<void>((resolve, reject) => {
+      upstream.once('error', reject);
+      upstream.listen(0, '127.0.0.1', () => resolve());
+    });
+    const address = upstream.address();
+    if (!address || typeof address === 'string') throw new Error('test upstream did not bind');
+    const route: ProxyRoute = {
+      aliasId: 'clodex:test:translated-model',
+      realModelId: 'translated-model',
+      displayName: 'Translated Model',
+      upstreamUrl: '',
+      apiKey: 'provider-key',
+      modelFormat: 'openai',
+      npm: '@ai-sdk/openai-compatible',
+      baseURL: `http://127.0.0.1:${address.port}/v1`,
+      providerId: 'test-provider',
+    };
+    const handle = await startProxyCatalog([route], route.aliasId, false, inferenceLogPath);
+
+    try {
+      const res = await postToProxy(handle.port, handle.token, {
+        model: route.aliasId,
+        max_tokens: 100,
+        messages: [{ role: 'user', content: 'recover this agent turn' }],
+        stream: true,
+      }, `req-${agentId}`, '/v1/messages',
+      '11111111-1111-4111-8111-111111111111', agentId);
+
+      expect(requestCount).toBe(2);
+      expect(res.status).toBe(200);
+      expect(res.body).toContain('recovered output');
+      expect(res.body).not.toContain('discarded partial output');
+      expect(res.body).not.toContain('event: error');
+      expect(res.body).toContain('event: message_stop');
+      const entries = readFileSync(inferenceLogPath, 'utf8').trim().split('\n').map(line => JSON.parse(line));
+      expect(entries.some(entry => entry.event === 'translation_failed')).toBe(false);
+      expect(entries.some(entry => entry.event === 'upstream_error')).toBe(false);
+      expect(entries).toContainEqual(expect.objectContaining({
+        event: 'translation_retrying',
+        requestId: `req-${agentId}`,
+        retryAttempt: 1,
+        retryLimit: 2,
+        discardedBytes: expect.any(Number),
+      }));
+      expect(entries).toContainEqual(expect.objectContaining({
+        event: 'translation_completed',
+        requestId: `req-${agentId}`,
+      }));
+    } finally {
+      handle.close();
+      await new Promise<void>(resolve => upstream.close(() => resolve()));
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 20_000);
+
+  it('keeps main-agent partial streaming behavior unchanged', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'clodex-sdk-partial-transport-'));
     const inferenceLogPath = join(dir, 'inference.jsonl');
     let requestCount = 0;
@@ -1117,7 +1195,7 @@ describe('SDK translated error logging', () => {
         messages: [{ role: 'user', content: 'stream then fail' }],
         stream: true,
       }, 'req-partial-transport', '/v1/messages',
-      '11111111-1111-4111-8111-111111111111', 'workflow-agent-1');
+      '11111111-1111-4111-8111-111111111111');
 
       expect(requestCount).toBe(1);
       expect(res.status).toBe(200);
@@ -1149,10 +1227,12 @@ describe('SDK translated error logging', () => {
     }
   }, 20_000);
 
-  it('keeps a terminal mid-stream error explicit instead of promising automatic recovery', async () => {
+  it('does not retry a non-retryable workflow error or expose its buffered output', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'clodex-sdk-partial-terminal-'));
     const inferenceLogPath = join(dir, 'inference.jsonl');
+    let requestCount = 0;
     const upstream = http.createServer((req, res) => {
+      requestCount += 1;
       req.resume();
       req.once('end', () => {
         res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Connection': 'close' });
@@ -1185,20 +1265,24 @@ describe('SDK translated error logging', () => {
         max_tokens: 100,
         messages: [{ role: 'user', content: 'stream then reject' }],
         stream: true,
-      }, 'req-partial-terminal');
+      }, 'req-partial-terminal', '/v1/messages',
+      '44444444-4444-4444-8444-444444444444', 'workflow-terminal');
 
-      expect(res.status).toBe(200);
-      expect(res.body).toContain('event: error');
-      expect(res.body).toContain('retry or continue the turn');
-      expect(res.body).not.toContain('automatically retry');
+      expect(requestCount).toBe(1);
+      expect(res.status).toBe(400);
+      expect(res.body).not.toContain('partial output');
+      expect(JSON.parse(res.body)).toMatchObject({
+        type: 'error',
+        error: { type: 'invalid_request_error' },
+      });
       const entries = readFileSync(inferenceLogPath, 'utf8').trim().split('\n').map(line => JSON.parse(line));
       expect(entries).toContainEqual(expect.objectContaining({
         event: 'upstream_error',
         requestId: 'req-partial-terminal',
         isRetryable: false,
-        partialResponse: true,
-        replaySafe: false,
-        recoveryAction: 'client_retry_turn',
+        partialResponse: false,
+        replaySafe: true,
+        recoveryAction: 'none',
       }));
     } finally {
       handle.close();
@@ -1207,7 +1291,96 @@ describe('SDK translated error logging', () => {
     }
   }, 20_000);
 
-  it('marks an interrupted partial tool call for Claude-side automatic retry without server replay', async () => {
+  it('retries a buffered workflow tool call without exposing the failed attempt', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'clodex-sdk-agent-tool-retry-'));
+    const inferenceLogPath = join(dir, 'inference.jsonl');
+    let requestCount = 0;
+    const upstream = http.createServer((req, res) => {
+      requestCount += 1;
+      req.resume();
+      req.once('end', () => {
+        res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Connection': 'close' });
+        const failed = requestCount === 1;
+        const name = failed ? 'DiscardedTool' : 'FinalTool';
+        const id = failed ? 'call_discarded' : 'call_final';
+        res.write(`data: ${JSON.stringify({
+          id: `chatcmpl-${id}`,
+          object: 'chat.completion.chunk',
+          created: 1,
+          model: 'translated-model',
+          choices: [{
+            index: 0,
+            delta: {
+              role: 'assistant',
+              tool_calls: [{
+                index: 0, id, type: 'function',
+                function: { name, arguments: '{"value":true}' },
+              }],
+            },
+            finish_reason: null,
+          }],
+        })}\n\n`);
+        if (failed) {
+          res.end('data: {"error":{"type":"transport_error","code":"websocket_transport_error","message":"connection ended"}}\n\n');
+          return;
+        }
+        res.write(`data: ${JSON.stringify({
+          id: `chatcmpl-${id}`,
+          object: 'chat.completion.chunk',
+          created: 1,
+          model: 'translated-model',
+          choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }],
+        })}\n\n`);
+        res.end('data: [DONE]\n\n');
+      });
+    });
+    await new Promise<void>((resolve, reject) => {
+      upstream.once('error', reject);
+      upstream.listen(0, '127.0.0.1', () => resolve());
+    });
+    const address = upstream.address();
+    if (!address || typeof address === 'string') throw new Error('test upstream did not bind');
+    const route: ProxyRoute = {
+      aliasId: 'clodex:test:translated-model',
+      realModelId: 'translated-model',
+      displayName: 'Translated Model',
+      upstreamUrl: '',
+      apiKey: 'provider-key',
+      modelFormat: 'openai',
+      npm: '@ai-sdk/openai-compatible',
+      baseURL: `http://127.0.0.1:${address.port}/v1`,
+      providerId: 'test-provider',
+    };
+    const handle = await startProxyCatalog([route], route.aliasId, false, inferenceLogPath);
+
+    try {
+      const res = await postToProxy(handle.port, handle.token, {
+        model: route.aliasId,
+        max_tokens: 100,
+        messages: [{ role: 'user', content: 'call one tool safely' }],
+        tools: [{ name: 'FinalTool', description: 'Final tool', input_schema: { type: 'object' } }],
+        stream: true,
+      }, 'req-workflow-tool-retry', '/v1/messages',
+      '22222222-2222-4222-8222-222222222222', 'workflow-tool-retry');
+
+      expect(requestCount).toBe(2);
+      expect(res.status).toBe(200);
+      expect(res.body).toContain('FinalTool');
+      expect(res.body).not.toContain('DiscardedTool');
+      expect(res.body.split('"type":"tool_use"')).toHaveLength(2);
+      expect(res.body).not.toContain('event: error');
+      expect(res.body).toContain('event: message_stop');
+      const entries = readFileSync(inferenceLogPath, 'utf8').trim().split('\n').map(line => JSON.parse(line));
+      expect(entries.some(entry => entry.event === 'translation_failed')).toBe(false);
+      expect(entries.some(entry => entry.event === 'upstream_error')).toBe(false);
+    } finally {
+      handle.close();
+      await new Promise<void>(resolve => upstream.close(() => resolve()));
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 20_000);
+
+  it('exhausts bounded retries without exposing a partial subagent tool call', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'clodex-sdk-partial-tool-'));
     const inferenceLogPath = join(dir, 'inference.jsonl');
     let requestCount = 0;
@@ -1249,11 +1422,13 @@ describe('SDK translated error logging', () => {
       }, 'req-partial-tool', '/v1/messages',
       '22222222-2222-4222-8222-222222222222', 'subagent-tool-1');
 
-      expect(requestCount).toBe(1);
-      expect(res.status).toBe(200);
-      expect(res.body).toContain('"type":"tool_use"');
-      expect(res.body).toContain('event: error');
-      expect(res.body).toContain('Claude Code can automatically retry');
+      expect(requestCount).toBe(3);
+      expect(res.status).toBe(502);
+      expect(res.body).not.toContain('"type":"tool_use"');
+      expect(JSON.parse(res.body)).toMatchObject({
+        type: 'error',
+        error: { type: 'api_error' },
+      });
       expect(res.body).not.toContain('"type":"message_stop"');
       const entries = readFileSync(inferenceLogPath, 'utf8').trim().split('\n').map(line => JSON.parse(line));
       expect(entries).toContainEqual(expect.objectContaining({
@@ -1261,10 +1436,11 @@ describe('SDK translated error logging', () => {
         requestId: 'req-partial-tool',
         claudeAgentId: 'subagent-tool-1',
         isRetryable: true,
-        partialResponse: true,
-        replaySafe: false,
-        recoveryAction: 'client_auto_retry_turn',
+        partialResponse: false,
+        replaySafe: true,
+        recoveryAction: 'client_retry_request',
       }));
+      expect(entries.filter(entry => entry.event === 'translation_retrying')).toHaveLength(2);
     } finally {
       handle.close();
       await new Promise<void>(resolve => upstream.close(() => resolve()));
@@ -1442,7 +1618,7 @@ describe('SDK translated error logging', () => {
     }
   }, 20_000);
 
-  it('emits keepalive pings while a tool-call argument is buffered with no downstream output', async () => {
+  it('keeps a buffered workflow agent alive until its complete response commits', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'clodex-sdk-keepalive-'));
     const inferenceLogPath = join(dir, 'inference.jsonl');
     // A tool call whose arguments stream as many small deltas over ~800ms. The
@@ -1506,7 +1682,8 @@ describe('SDK translated error logging', () => {
         max_tokens: 100,
         messages: [{ role: 'user', content: 'call a tool with a big argument' }],
         stream: true,
-      }, 'req-keepalive-1');
+      }, 'req-keepalive-1', '/v1/messages',
+      '33333333-3333-4333-8333-333333333333', 'workflow-keepalive');
 
       expect(res.status).toBe(200);
       // At least one ping must have been injected during the buffering window.

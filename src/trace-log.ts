@@ -220,6 +220,7 @@ type InferenceResponseLifecycleEvent =
   | 'translation_dispatched'
   | 'translation_started'
   | 'translation_progress'
+  | 'translation_retrying'
   | 'translation_completed'
   | 'translation_cancelled'
   | 'translation_failed'
@@ -272,6 +273,9 @@ export interface InferenceResponseLifecycleLogEntry {
   sdkIdleMs?: number;
   translatedBytes?: number;
   translatedChunks?: number;
+  retryAttempt?: number;
+  retryLimit?: number;
+  discardedBytes?: number;
   outputIdleMs?: number;
   usageStage?: 'message_start' | 'message_delta';
   inputTokens?: number;
@@ -494,6 +498,9 @@ export function writeInferenceResponseLifecycleLog(
   const sdkIdleMs = nonNegativeInteger(entry.sdkIdleMs);
   const translatedBytes = nonNegativeInteger(entry.translatedBytes);
   const translatedChunks = nonNegativeInteger(entry.translatedChunks);
+  const retryAttempt = nonNegativeInteger(entry.retryAttempt);
+  const retryLimit = nonNegativeInteger(entry.retryLimit);
+  const discardedBytes = nonNegativeInteger(entry.discardedBytes);
   const outputIdleMs = nonNegativeInteger(entry.outputIdleMs);
   const inputTokens = nonNegativeInteger(entry.inputTokens);
   const outputTokens = nonNegativeInteger(entry.outputTokens);
@@ -523,6 +530,9 @@ export function writeInferenceResponseLifecycleLog(
     ...(sdkIdleMs !== undefined ? { sdkIdleMs } : {}),
     ...(translatedBytes !== undefined ? { translatedBytes } : {}),
     ...(translatedChunks !== undefined ? { translatedChunks } : {}),
+    ...(retryAttempt !== undefined ? { retryAttempt } : {}),
+    ...(retryLimit !== undefined ? { retryLimit } : {}),
+    ...(discardedBytes !== undefined ? { discardedBytes } : {}),
     ...(outputIdleMs !== undefined ? { outputIdleMs } : {}),
     ...(entry.usageStage ? { usageStage: entry.usageStage } : {}),
     ...(inputTokens !== undefined ? { inputTokens } : {}),
