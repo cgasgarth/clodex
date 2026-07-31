@@ -29,8 +29,8 @@ interface OAuthModelSeed {
   preferWebSockets?: boolean;
 }
 
-/** GPT-5.6 Codex models expose a 1.05M total window (922K input + 128K output). */
-export const GPT_5_6_CONTEXT_WINDOW = 1_050_000;
+/** Claude-facing context policy shared by the GPT-5.6 Sol, Terra, and Luna routes. */
+export const GPT_5_6_CONTEXT_WINDOW = 1_000_000;
 
 // Models that the ChatGPT Codex backend (chatgpt.com/backend-api/codex) explicitly rejects
 // for OAuth-authenticated ChatGPT accounts. The API returns HTTP 400 with:

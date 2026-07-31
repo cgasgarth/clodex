@@ -222,9 +222,9 @@ describe('registry/refresh-models', () => {
       const terra = models.find(m => m.id === 'gpt-5.6-terra');
       expect(luna?.useResponsesLite).toBe(true);
       expect(luna?.preferWebSockets).toBe(true);
-      expect(luna?.contextWindow).toBe(1_050_000);
-      expect(sol?.contextWindow).toBe(1_050_000);
-      expect(terra?.contextWindow).toBe(1_050_000);
+      expect(luna?.contextWindow).toBe(1_000_000);
+      expect(sol?.contextWindow).toBe(1_000_000);
+      expect(terra?.contextWindow).toBe(1_000_000);
       // A model the backend does not flag stays on the HTTP path.
       expect(sol?.useResponsesLite).toBeUndefined();
       expect(sol?.preferWebSockets).toBeUndefined();
@@ -255,7 +255,7 @@ describe('registry/refresh-models', () => {
       const spark = savedRegistry.providers[0]?.modelsCache?.models.find(
         m => m.id === 'gpt-5.3-codex-spark',
       );
-      expect(luna?.contextWindow).toBe(1_050_000);
+      expect(luna?.contextWindow).toBe(1_000_000);
       expect(luna?.useResponsesLite).toBe(true);
       expect(luna?.preferWebSockets).toBe(true);
       expect(spark).toMatchObject({
