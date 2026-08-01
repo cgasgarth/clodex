@@ -23,7 +23,7 @@ import {
 import {
   approximateResponsesItemsTokens,
   estimatedRebasedInputTokens,
-  planResponsesOverflowRecovery,
+  runProgressiveOverflowRecovery,
   type OverflowRecoveryCandidate,
   type OverflowRecoverySource,
 } from './responses-overflow-recovery.js';
@@ -696,6 +696,28 @@ function responsesCheckpointPartitionKey(
 
 function inputArray(payload: JsonObject): unknown[] {
   return Array.isArray(payload.input) ? payload.input : [];
+}
+
+function overflowRebasePayload(
+  payload: JsonObject,
+  rebasedInput: unknown[],
+  compactedOutput: unknown[],
+  tail: unknown[],
+  estimatedInputTokens: number | undefined,
+  compactOutputTokens: number | undefined,
+): { payload: JsonObject; estimatedInputTokens: number } {
+  const rebasedPayload: JsonObject = { ...payload, input: rebasedInput };
+  delete rebasedPayload.previous_response_id;
+  return {
+    payload: rebasedPayload,
+    estimatedInputTokens: estimatedRebasedInputTokens(
+      compactedOutput,
+      tail,
+      inputArray(payload),
+      estimatedInputTokens,
+      compactOutputTokens,
+    ),
+  };
 }
 
 function normalizeToolCallJson(value: unknown): unknown {
@@ -2613,7 +2635,6 @@ export function createResponsesWebSocketFetch(
       | 'unpartitioned_socket' = partitionKey
         ? 'new_partition_head'
         : 'unpartitioned_socket';
-
     const compactThreshold = options.compactThreshold;
     const measuredInputTokens = selected?.lastInputTokens ?? selectedCheckpoint?.lastInputTokens;
     const estimatedInputTokens = diagnosticCorrelation?.estimatedInputTokens;
@@ -2637,7 +2658,6 @@ export function createResponsesWebSocketFetch(
     let terminalOverflowReason: string | undefined;
     const contextWindow = options.contextWindow;
     const attemptedOverflowPrefixes = new Set<string>();
-
     const overflowSources = (): OverflowRecoverySource[] => {
       const sources: OverflowRecoverySource[] = [];
       if (
@@ -2678,7 +2698,6 @@ export function createResponsesWebSocketFetch(
       }
       return sources;
     };
-
     const recoverySources = overflowSources();
     const liveContinuationEstimatedTokens = (
       selected?.responseId
@@ -2695,12 +2714,39 @@ export function createResponsesWebSocketFetch(
       && liveContinuationEstimatedTokens !== undefined
       && liveContinuationEstimatedTokens < contextWindow
     );
-
+    const applyOverflowRebase = (
+      rebasedInput: unknown[],
+      compactedOutput: unknown[],
+      tail: unknown[],
+      usage: ResponsesCompactionUsage | undefined,
+    ): number => {
+      if (usage) {
+        compactionUsage = compactionUsage
+          ? addResponseUsage(compactionUsage, usage)
+          : usage;
+      }
+      const rebase = overflowRebasePayload(
+        payload, rebasedInput, compactedOutput, tail, estimatedInputTokens, usage?.outputTokens,
+      );
+      const estimatedRebasedTokens = rebase.estimatedInputTokens;
+      sendPayload = rebase.payload;
+      retryPayload = sendPayload;
+      compactedInputBase = rebasedInput;
+      supersededEntry = selected && connectionEntries(partitionKey).includes(selected)
+        ? selected
+        : undefined;
+      selected = undefined;
+      continued = false;
+      compacted = true;
+      decision = 'overflow_rebase_new_head';
+      return estimatedRebasedTokens;
+    };
     const compactOverflowCandidate = async (
       candidate: OverflowRecoveryCandidate,
       reason: 'known_oversized' | 'compact_context_rejection' | 'response_context_rejection',
-    ): Promise<boolean> => {
-      if (!contextWindow || attemptedOverflowPrefixes.has(candidate.prefixFingerprint)) return false;
+      stage: number,
+    ): Promise<{ input: unknown[]; estimatedInputTokens: number } | undefined> => {
+      if (!contextWindow || attemptedOverflowPrefixes.has(candidate.prefixFingerprint)) return undefined;
       attemptedOverflowPrefixes.add(candidate.prefixFingerprint);
       emitDiagnostic(options, {
         event: 'ws_overflow_recovery',
@@ -2716,6 +2762,7 @@ export function createResponsesWebSocketFetch(
         prefixFingerprint: candidate.prefixFingerprint,
         tailFingerprint: candidate.tailFingerprint,
         attemptCount: attemptedOverflowPrefixes.size,
+        stage,
       }, diagnosticCorrelation);
       try {
         const result = await compactResponsesWindow({
@@ -2727,17 +2774,11 @@ export function createResponsesWebSocketFetch(
           timeoutMs: options.compactTimeoutMs,
         });
         const rebasedInput = [...result.output, ...candidate.tail];
-        if (result.usage) {
-          compactionUsage = compactionUsage
-            ? addResponseUsage(compactionUsage, result.usage)
-            : result.usage;
-        }
-        const estimatedRebasedTokens = estimatedRebasedInputTokens(
+        const estimatedRebasedTokens = applyOverflowRebase(
+          rebasedInput,
           result.output,
           candidate.tail,
-          inputArray(payload),
-          estimatedInputTokens,
-          result.usage?.outputTokens,
+          result.usage,
         );
         if (estimatedRebasedTokens >= contextWindow) {
           emitDiagnostic(options, {
@@ -2748,20 +2789,10 @@ export function createResponsesWebSocketFetch(
             contextWindow,
             estimatedRebasedTokens,
             prefixFingerprint: candidate.prefixFingerprint,
+            stage,
           }, diagnosticCorrelation);
-          return false;
+          return undefined;
         }
-        sendPayload = { ...payload, input: rebasedInput };
-        delete sendPayload.previous_response_id;
-        retryPayload = sendPayload;
-        compactedInputBase = rebasedInput;
-        supersededEntry = selected && connectionEntries(partitionKey).includes(selected)
-          ? selected
-          : undefined;
-        selected = undefined;
-        continued = false;
-        compacted = true;
-        decision = 'overflow_rebase_new_head';
         emitDiagnostic(options, {
           event: 'ws_overflow_recovery',
           outcome: 'completed',
@@ -2777,9 +2808,10 @@ export function createResponsesWebSocketFetch(
           prefixFingerprint: candidate.prefixFingerprint,
           tailFingerprint: candidate.tailFingerprint,
           attemptCount: attemptedOverflowPrefixes.size,
+          stage,
           ...(result.usage ?? {}),
         }, diagnosticCorrelation);
-        return true;
+        return { input: rebasedInput, estimatedInputTokens: estimatedRebasedTokens };
       } catch (error) {
         const compactError = error instanceof ResponsesCompactionError ? error : undefined;
         if (compactError?.usage) {
@@ -2795,6 +2827,7 @@ export function createResponsesWebSocketFetch(
           contextWindow,
           prefixFingerprint: candidate.prefixFingerprint,
           attemptCount: attemptedOverflowPrefixes.size,
+          stage,
           errorType: boundedDiagnosticIdentifier(
             error instanceof Error ? error.name : typeof error,
           ),
@@ -2804,10 +2837,9 @@ export function createResponsesWebSocketFetch(
           providerErrorType: boundedDiagnosticIdentifier(compactError?.errorType),
           errorFingerprint: compactError?.errorFingerprint,
         }, diagnosticCorrelation);
-        return false;
+        return undefined;
       }
     };
-
     const runOverflowRecovery = async (
       reason: 'known_oversized' | 'compact_context_rejection' | 'response_context_rejection',
     ): Promise<boolean> => {
@@ -2816,30 +2848,52 @@ export function createResponsesWebSocketFetch(
         || contextWindow === undefined
         || contextWindow <= 0
       ) return false;
-      const plan = planResponsesOverflowRecovery({
-        fullInput: inputArray(payload),
-        sources: recoverySources,
+      const recoveryInput = compactedInputBase ?? inputArray(payload);
+      const recoveryEstimate = compactedInputBase
+        ? estimatedRebasedInputTokens(
+          recoveryInput,
+          [],
+          inputArray(payload),
+          estimatedInputTokens,
+        )
+        : estimatedInputTokens;
+      const result = await runProgressiveOverflowRecovery({
+        fullInput: recoveryInput,
+        sources: compactedInputBase ? [] : recoverySources,
         compactThreshold,
         contextWindow,
-        estimatedInputTokens,
-        maxCandidates: 2,
+        estimatedInputTokens: recoveryEstimate,
+        requireInitialCompaction: reason === 'response_context_rejection',
+        compactCandidate: (candidate, stage) => compactOverflowCandidate(candidate, reason, stage),
+        onPlan: ({ stage, inputItems, estimatedInputTokens: stageEstimate, plan }) => {
+          emitDiagnostic(options, {
+            event: 'ws_overflow_recovery',
+            outcome: plan.candidates.length ? 'planned' : 'unavailable',
+            reason,
+            contextWindow,
+            compactThreshold,
+            estimatedInputTokens: stageEstimate,
+            sourceItems: inputItems,
+            candidateCount: plan.candidates.length,
+            rejected: plan.rejected,
+            stage,
+          }, diagnosticCorrelation);
+        },
       });
-      emitDiagnostic(options, {
-        event: 'ws_overflow_recovery',
-        outcome: plan.candidates.length ? 'planned' : 'unavailable',
-        reason,
-        contextWindow,
-        compactThreshold,
-        estimatedInputTokens,
-        candidateCount: plan.candidates.length,
-        rejected: plan.rejected,
-      }, diagnosticCorrelation);
-      for (const candidate of plan.candidates) {
-        if (await compactOverflowCandidate(candidate, reason)) return true;
+      if (!result.recovered) {
+        emitDiagnostic(options, {
+          event: 'ws_overflow_recovery',
+          outcome: 'exhausted',
+          reason: result.reason,
+          contextWindow,
+          compactThreshold,
+          stage: result.stages,
+          rebasedItems: result.input.length,
+          estimatedRebasedTokens: result.estimatedInputTokens,
+        }, diagnosticCorrelation);
       }
-      return false;
+      return result.recovered;
     };
-
     if (
       compactThreshold !== undefined
       && contextWindow !== undefined
@@ -2851,7 +2905,6 @@ export function createResponsesWebSocketFetch(
         terminalOverflowReason = 'No dependency-safe native compaction prefix could recover the oversized request';
       }
     }
-
     if (
       compactThreshold !== undefined
       && compactionReason

@@ -5468,6 +5468,113 @@ describe('createResponsesWebSocketFetch', () => {
     await readAll(next);
   });
 
+  it('progressively folds a large workflow transcript after a one-shot compact rejection', async () => {
+    const diagnostics: ResponsesWebSocketDiagnosticEvent[] = [];
+    const fullInput = Array.from({ length: 793 }, (_, index) => [
+      {
+        type: 'message',
+        role: 'user',
+        content: [{ type: 'input_text', text: `user-${index}-${'u'.repeat(500)}` }],
+      },
+      {
+        type: 'message',
+        role: 'assistant',
+        content: [{ type: 'output_text', text: `assistant-${index}-${'a'.repeat(500)}` }],
+      },
+    ]).flat();
+    const compactBodies: unknown[][] = [];
+    const compactFetch = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as { input: unknown[] };
+      compactBodies.push(body.input);
+      if (compactBodies.length === 1) {
+        return new Response(JSON.stringify({
+          error: {
+            type: 'invalid_request_error',
+            code: 'context_length_exceeded',
+            message: 'maximum context length exceeded',
+          },
+        }), {
+          status: 400,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      const stage = compactBodies.length - 1;
+      return new Response(JSON.stringify({
+        output: [{ type: 'compaction', encrypted_content: `canonical-${stage}` }],
+        usage: {
+          input_tokens: 60_000,
+          input_tokens_details: { cached_tokens: 55_000 },
+          output_tokens: 1_000,
+        },
+      }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    });
+    const wsFetch = createResponsesWebSocketFetch(WS_URL, undefined, {
+      accountId: 'acct-progressive-overflow',
+      compactThreshold: 70_000,
+      contextWindow: 250_000,
+      compactFetch: compactFetch as typeof fetch,
+      onDiagnostic: event => diagnostics.push(event),
+    });
+
+    const response = await withResponsesWebSocketDiagnosticContext(
+      { estimatedInputTokens: 220_000, claudeAgentId: 'workflow-progressive-overflow' },
+      () => wsFetch('https://example.test/responses', {
+        method: 'POST',
+        headers: {},
+        body: JSON.stringify(sessionPayload(fullInput, { model: 'gpt-5.6-sol' })),
+      }),
+    );
+
+    expect(compactBodies.length).toBeGreaterThanOrEqual(4);
+    expect(compactBodies[0]).toEqual(fullInput);
+    const successfulBodies = compactBodies.slice(1);
+    for (let index = 1; index < successfulBodies.length; index += 1) {
+      expect(successfulBodies[index]![0]).toMatchObject({
+        type: 'compaction',
+        encrypted_content: `canonical-${index}`,
+      });
+    }
+
+    const replacement = lastSocket();
+    replacement.emit('open');
+    const sent = JSON.parse(replacement.send.mock.calls[0]![0] as string);
+    expect(sent.previous_response_id).toBeUndefined();
+    expect(sent.input.length).toBeLessThan(successfulBodies.at(-1)!.length);
+    expect(sent.input[0]).toMatchObject({ type: 'compaction' });
+    emitTextResponse(replacement, 'resp_progressive_overflow', 'recovered', {
+      input_tokens: 60_000,
+      input_tokens_details: { cached_tokens: 55_000 },
+      output_tokens: 10,
+    });
+    const events = (await readAll(response))
+      .split('\n\n')
+      .filter(Boolean)
+      .map(frame => JSON.parse(frame.replace(/^data: /, '')));
+    const completedUsage = events.find(event => event.type === 'response.completed')?.response.usage;
+    const compactStages = compactBodies.length - 1;
+    expect(completedUsage).toMatchObject({
+      input_tokens: 60_000 + compactStages * 60_000,
+      output_tokens: 10 + compactStages * 1_000,
+      input_tokens_details: { cached_tokens: 55_000 + compactStages * 55_000 },
+    });
+    const completedStages = diagnostics.filter(event => (
+      event.event === 'ws_overflow_recovery'
+      && event.outcome === 'completed'
+      && typeof event.stage === 'number'
+    ));
+    expect(completedStages.length).toBe(compactStages);
+    expect(completedStages.map(event => event.stage)).toEqual(
+      Array.from({ length: compactStages }, (_, index) => index + 1),
+    );
+    const rebasedItemCounts = completedStages.map(event => event.rebasedItems as number);
+    for (let index = 1; index < rebasedItemCounts.length; index += 1) {
+      expect(rebasedItemCounts[index]).toBeLessThan(rebasedItemCounts[index - 1]!);
+    }
+  });
+
   it('recovers one upstream context rejection before output and never replays after output', async () => {
     const canonical = [{ type: 'compaction', encrypted_content: 'response-recovery' }];
     const compactFetch = vi.fn(async () => new Response(JSON.stringify({

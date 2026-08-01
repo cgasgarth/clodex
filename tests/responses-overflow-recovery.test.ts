@@ -2,6 +2,7 @@ import { describe, expect, it } from 'bun:test';
 import {
   estimatedRebasedInputTokens,
   planResponsesOverflowRecovery,
+  runProgressiveOverflowRecovery,
 } from '../src/oauth/responses-overflow-recovery.js';
 
 const user = (text: string) => ({
@@ -141,5 +142,60 @@ describe('Responses oversized-context recovery planner', () => {
       undefined,
       5_000,
     )).toBeGreaterThan(5_000);
+  });
+
+  it('plans every compaction stage from the prior canonical rebase', async () => {
+    const fullInput = Array.from({ length: 12 }, (_, index) => (
+      index % 2 === 0 ? user('u'.repeat(1_000)) : assistant('a'.repeat(1_000))
+    ));
+    const compactedPrefixes: unknown[][] = [];
+    const result = await runProgressiveOverflowRecovery({
+      fullInput,
+      compactThreshold: 1_200,
+      contextWindow: 10_000,
+      estimatedInputTokens: 3_200,
+      compactCandidate: async candidate => {
+        compactedPrefixes.push(candidate.prefix);
+        const canonical = [{ type: 'compaction', encrypted_content: `stage-${compactedPrefixes.length}` }];
+        const input = [...canonical, ...candidate.tail];
+        return {
+          input,
+          estimatedInputTokens: Math.max(1_000, 3_200 - compactedPrefixes.length * 1_100),
+        };
+      },
+    });
+
+    expect(result).toMatchObject({ recovered: true, reason: 'target_reached', stages: 2 });
+    expect(compactedPrefixes).toHaveLength(2);
+    expect(compactedPrefixes[1]?.[0]).toEqual({
+      type: 'compaction',
+      encrypted_content: 'stage-1',
+    });
+  });
+
+  it('fails closed when a compaction stage does not reduce the estimated window', async () => {
+    const fullInput = [user('start'), assistant('middle'), user('latest')];
+    const result = await runProgressiveOverflowRecovery({
+      fullInput,
+      sources: [{
+        kind: 'checkpoint',
+        prefix: [fullInput[0]],
+        tail: fullInput.slice(1),
+        prefixInputTokens: 50,
+      }],
+      compactThreshold: 100,
+      contextWindow: 1_000,
+      estimatedInputTokens: 500,
+      compactCandidate: async candidate => ({
+        input: [{ type: 'compaction', encrypted_content: 'no-progress' }, ...candidate.tail],
+        estimatedInputTokens: 500,
+      }),
+    });
+
+    expect(result).toMatchObject({
+      recovered: false,
+      reason: 'non_monotonic_progress',
+      stages: 1,
+    });
   });
 });

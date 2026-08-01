@@ -60,6 +60,46 @@ export interface ResponsesOverflowRecoveryPlan {
   }>;
 }
 
+interface ProgressiveOverflowRecoveryStep {
+  input: unknown[];
+  estimatedInputTokens: number;
+}
+
+interface ProgressiveOverflowRecoveryPlanEvent {
+  stage: number;
+  inputItems: number;
+  estimatedInputTokens?: number;
+  plan: ResponsesOverflowRecoveryPlan;
+}
+
+export interface ProgressiveOverflowRecoveryOptions {
+  fullInput: unknown[];
+  sources?: OverflowRecoverySource[];
+  compactThreshold: number;
+  contextWindow: number;
+  estimatedInputTokens?: number;
+  requireInitialCompaction?: boolean;
+  maxStages?: number;
+  maxCandidatesPerStage?: number;
+  compactCandidate: (
+    candidate: OverflowRecoveryCandidate,
+    stage: number,
+  ) => Promise<ProgressiveOverflowRecoveryStep | undefined>;
+  onPlan?: (event: ProgressiveOverflowRecoveryPlanEvent) => void;
+}
+
+export interface ProgressiveOverflowRecoveryResult {
+  recovered: boolean;
+  input: unknown[];
+  estimatedInputTokens?: number;
+  stages: number;
+  reason:
+    | 'target_reached'
+    | 'no_dependency_safe_prefix'
+    | 'non_monotonic_progress'
+    | 'maximum_compaction_stages';
+}
+
 function record(value: unknown): JsonObject | undefined {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? value as JsonObject
@@ -289,4 +329,96 @@ export function estimatedRebasedInputTokens(
   return fixedPromptTokens(fullInput, estimatedInputTokens)
     + compactTokens
     + approximateResponsesItemsTokens(tail);
+}
+
+/**
+ * Repeatedly fold dependency-closed prefixes into canonical compact output.
+ * Each stage plans from the previous stage's rebase, never the original input.
+ */
+export async function runProgressiveOverflowRecovery(
+  options: ProgressiveOverflowRecoveryOptions,
+): Promise<ProgressiveOverflowRecoveryResult> {
+  let input = options.fullInput;
+  let estimatedInputTokens = options.estimatedInputTokens;
+  let sources = options.sources ?? [];
+  let madeProgress = false;
+  const maxStages = Math.max(1, options.maxStages ?? 8);
+  const maxCandidates = Math.max(1, options.maxCandidatesPerStage ?? 4);
+
+  for (let stage = 1; stage <= maxStages; stage += 1) {
+    if (
+      estimatedInputTokens !== undefined
+      && estimatedInputTokens <= options.compactThreshold
+      && (madeProgress || !options.requireInitialCompaction)
+    ) {
+      return { recovered: madeProgress, input, estimatedInputTokens, stages: stage - 1, reason: 'target_reached' };
+    }
+    const beforeEstimate = estimatedInputTokens;
+    const plan = planResponsesOverflowRecovery({
+      fullInput: input,
+      sources,
+      compactThreshold: options.compactThreshold,
+      contextWindow: options.contextWindow,
+      estimatedInputTokens,
+      maxCandidates,
+    });
+    sources = [];
+    options.onPlan?.({ stage, inputItems: input.length, estimatedInputTokens, plan });
+
+    let step: ProgressiveOverflowRecoveryStep | undefined;
+    for (const candidate of plan.candidates) {
+      step = await options.compactCandidate(candidate, stage);
+      if (step) break;
+    }
+    if (!step) {
+      const safelyRebased = madeProgress
+        && estimatedInputTokens !== undefined
+        && estimatedInputTokens < options.contextWindow;
+      return {
+        recovered: safelyRebased,
+        input,
+        estimatedInputTokens,
+        stages: stage - 1,
+        reason: 'no_dependency_safe_prefix',
+      };
+    }
+    if (
+      options.requireInitialCompaction
+      && !madeProgress
+      && beforeEstimate !== undefined
+      && beforeEstimate <= options.compactThreshold
+      && step.estimatedInputTokens < options.contextWindow
+    ) {
+      return {
+        recovered: true,
+        input: step.input,
+        estimatedInputTokens: step.estimatedInputTokens,
+        stages: stage,
+        reason: 'target_reached',
+      };
+    }
+    if (
+      beforeEstimate !== undefined
+      && step.estimatedInputTokens >= beforeEstimate
+    ) {
+      return {
+        recovered: false,
+        input: step.input,
+        estimatedInputTokens: step.estimatedInputTokens,
+        stages: stage,
+        reason: 'non_monotonic_progress',
+      };
+    }
+    input = step.input;
+    estimatedInputTokens = step.estimatedInputTokens;
+    madeProgress = true;
+  }
+
+  return {
+    recovered: false,
+    input,
+    estimatedInputTokens,
+    stages: maxStages,
+    reason: 'maximum_compaction_stages',
+  };
 }
