@@ -2,6 +2,7 @@ import { describe, expect, it } from 'bun:test';
 import {
   estimatedRebasedInputTokens,
   planResponsesOverflowRecovery,
+  ResponsesOverflowRecoverySession,
   runProgressiveOverflowRecovery,
 } from '../src/oauth/responses-overflow-recovery.js';
 
@@ -197,5 +198,120 @@ describe('Responses oversized-context recovery planner', () => {
       reason: 'non_monotonic_progress',
       stages: 1,
     });
+  });
+
+  it('fails closed when an accepted fold remains above target and no safe prefix remains', async () => {
+    const fullInput = [user('start'), assistant('middle'), user('latest')];
+    let calls = 0;
+    const result = await runProgressiveOverflowRecovery({
+      fullInput,
+      sources: [{
+        kind: 'checkpoint',
+        prefix: fullInput.slice(0, 2),
+        tail: fullInput.slice(2),
+        prefixInputTokens: 50,
+      }],
+      compactThreshold: 100,
+      contextWindow: 1_000,
+      estimatedInputTokens: 500,
+      compactCandidate: async () => {
+        calls += 1;
+        return {
+          input: [{ type: 'compaction', encrypted_content: 'only-fold' }],
+          estimatedInputTokens: 400,
+        };
+      },
+    });
+
+    expect(calls).toBe(1);
+    expect(result).toMatchObject({
+      recovered: false,
+      reason: 'no_dependency_safe_prefix',
+      estimatedInputTokens: 400,
+    });
+  });
+
+  it('accepts the eighth and final stage when it reaches the target', async () => {
+    const fullInput = Array.from({ length: 20 }, (_, index) => (
+      index % 2 === 0
+        ? user(`user-${index}-${'u'.repeat(400)}`)
+        : assistant(`assistant-${index}-${'a'.repeat(400)}`)
+    ));
+    let calls = 0;
+    const result = await runProgressiveOverflowRecovery({
+      fullInput,
+      compactThreshold: 1_000,
+      contextWindow: 10_000,
+      maxCandidatesPerStage: 20,
+      compactCandidate: async candidate => {
+        calls += 1;
+        return {
+          // Keep the structural fixture stable so this unit test isolates the
+          // loop boundary rather than candidate-shape convergence.
+          input: [...candidate.prefix, ...candidate.tail],
+          estimatedInputTokens: 1_800 - calls * 100,
+        };
+      },
+    });
+
+    expect(calls).toBe(8);
+    expect(result).toMatchObject({
+      recovered: true,
+      reason: 'target_reached',
+      stages: 8,
+      estimatedInputTokens: 1_000,
+    });
+  });
+
+  it('uses a dependency-safe prefix after the compact endpoint rejects a below-threshold estimate', async () => {
+    const fullInput = [user('start'), assistant('middle'), user('latest')];
+    const compactBodies: unknown[][] = [];
+    const session = new ResponsesOverflowRecoverySession({
+      requestUrl: 'https://example.test/responses',
+      headers: {},
+      payload: { model: 'gpt-5.6-sol', input: fullInput },
+      compactThreshold: 1_000,
+      contextWindow: 2_000,
+      fetch: (async (_url: string | URL | Request, init?: RequestInit) => {
+        const body = JSON.parse(String(init?.body)) as { input: unknown[] };
+        compactBodies.push(body.input);
+        return new Response(JSON.stringify({
+          output: [{ type: 'compaction', encrypted_content: 'prefix-only' }],
+          usage: { input_tokens: 80, output_tokens: 5 },
+        }), { status: 200, headers: { 'content-type': 'application/json' } });
+      }) as typeof fetch,
+    });
+
+    const result = await session.recover({
+      reason: 'compact_context_rejection',
+      input: fullInput,
+      estimatedInputTokens: 100,
+      forceInitialCompaction: true,
+    });
+
+    expect(result.recovered).toBe(true);
+    expect(compactBodies).toHaveLength(1);
+    expect(compactBodies[0]).not.toEqual(fullInput);
+    expect(compactBodies[0]).toEqual(fullInput.slice(0, 1));
+  });
+
+  it('enforces one compact-call cap and deadline across a recovery session', () => {
+    let now = 1_000;
+    const session = new ResponsesOverflowRecoverySession({
+      requestUrl: 'https://example.test/responses',
+      headers: {},
+      payload: { model: 'gpt-5.6-sol', input: [] },
+      compactThreshold: 1_000,
+      contextWindow: 2_000,
+      maxCompactCalls: 2,
+      deadlineMs: 100,
+      compactTimeoutMs: 1_000,
+      now: () => now,
+    });
+
+    expect(session.claimCompactionCall()).toEqual({ ok: true, attempt: 1, timeoutMs: 100 });
+    now += 101;
+    expect(session.claimCompactionCall()).toEqual({ ok: false, reason: 'deadline' });
+    expect(session.attemptCount).toBe(1);
   });
 });

@@ -16,15 +16,14 @@ import { loadBunNativeWebSocket } from '../bun-websocket.js';
 import { anthropicErrorType, clampRetryAfterSeconds } from '../upstream-error.js';
 import {
   compactResponsesWindow,
-  RESPONSES_COMPACT_TIMEOUT_MS,
   ResponsesCompactionError,
   type ResponsesCompactionUsage,
 } from './responses-compaction.js';
 import {
   approximateResponsesItemsTokens,
   estimatedRebasedInputTokens,
-  runProgressiveOverflowRecovery,
-  type OverflowRecoveryCandidate,
+  ResponsesOverflowRecoverySession,
+  type OverflowRecoveryReason,
   type OverflowRecoverySource,
 } from './responses-overflow-recovery.js';
 import {
@@ -69,6 +68,9 @@ export interface ResponsesWebSocketFetchOptions {
   /** Test seam; production uses Bun's native WebSocket client. */
   webSocketConstructor?: WebSocketConstructor;
   compactTimeoutMs?: number;
+  overflowRecoveryMaxCompactCalls?: number;
+  overflowRecoveryMaxContextRejections?: number;
+  overflowRecoveryDeadlineMs?: number;
   /** Private durable store for compacted native-compaction recovery state. */
   checkpointStoreDir?: string;
   now?: () => number;
@@ -696,28 +698,6 @@ function responsesCheckpointPartitionKey(
 
 function inputArray(payload: JsonObject): unknown[] {
   return Array.isArray(payload.input) ? payload.input : [];
-}
-
-function overflowRebasePayload(
-  payload: JsonObject,
-  rebasedInput: unknown[],
-  compactedOutput: unknown[],
-  tail: unknown[],
-  estimatedInputTokens: number | undefined,
-  compactOutputTokens: number | undefined,
-): { payload: JsonObject; estimatedInputTokens: number } {
-  const rebasedPayload: JsonObject = { ...payload, input: rebasedInput };
-  delete rebasedPayload.previous_response_id;
-  return {
-    payload: rebasedPayload,
-    estimatedInputTokens: estimatedRebasedInputTokens(
-      compactedOutput,
-      tail,
-      inputArray(payload),
-      estimatedInputTokens,
-      compactOutputTokens,
-    ),
-  };
 }
 
 function normalizeToolCallJson(value: unknown): unknown {
@@ -2410,6 +2390,7 @@ export function createResponsesWebSocketFetch(
     const runCompactionTrigger = async (
       entry: ConnectionEntry,
       delta: unknown[],
+      compactTimeoutMs: number,
     ): Promise<{ output: unknown[]; usage?: ResponseUsage; triggerWireBytes: number }> => {
       if (!entry.responseId) {
         throw new ResponsesCompactionError('Native compaction trigger requires a live response chain');
@@ -2489,7 +2470,6 @@ export function createResponsesWebSocketFetch(
           closeContext(ctx);
         },
       });
-      const compactTimeoutMs = options.compactTimeoutMs ?? RESPONSES_COMPACT_TIMEOUT_MS;
       let timedOut = false;
       const didTimeOut = () => timedOut;
       const compactTimer = setTimeout(() => {
@@ -2654,10 +2634,9 @@ export function createResponsesWebSocketFetch(
     let compacted = false;
     let compactionUsage: ResponsesCompactionUsage | undefined;
     let failedTriggerCompactedInput: unknown[] | undefined;
-    let failedTriggerUsage: ResponsesCompactionUsage | undefined;
     let terminalOverflowReason: string | undefined;
+    let overflowRebasedEstimate: number | undefined;
     const contextWindow = options.contextWindow;
-    const attemptedOverflowPrefixes = new Set<string>();
     const overflowSources = (): OverflowRecoverySource[] => {
       const sources: OverflowRecoverySource[] = [];
       if (
@@ -2699,6 +2678,14 @@ export function createResponsesWebSocketFetch(
       return sources;
     };
     const recoverySources = overflowSources();
+    const sourceEstimatedInputTokens = recoverySources.reduce<number | undefined>((largest, source) => {
+      if (source.prefixInputTokens === undefined) return largest;
+      const estimate = source.prefixInputTokens + approximateResponsesItemsTokens(source.tail);
+      return largest === undefined ? estimate : Math.max(largest, estimate);
+    }, undefined);
+    const overflowSourceEntry = selected && connectionEntries(partitionKey).includes(selected)
+      ? selected
+      : undefined;
     const liveContinuationEstimatedTokens = (
       selected?.responseId
       && selectedMatch
@@ -2714,183 +2701,60 @@ export function createResponsesWebSocketFetch(
       && liveContinuationEstimatedTokens !== undefined
       && liveContinuationEstimatedTokens < contextWindow
     );
-    const applyOverflowRebase = (
-      rebasedInput: unknown[],
-      compactedOutput: unknown[],
-      tail: unknown[],
-      usage: ResponsesCompactionUsage | undefined,
-    ): number => {
-      if (usage) {
-        compactionUsage = compactionUsage
-          ? addResponseUsage(compactionUsage, usage)
-          : usage;
-      }
-      const rebase = overflowRebasePayload(
-        payload, rebasedInput, compactedOutput, tail, estimatedInputTokens, usage?.outputTokens,
-      );
-      const estimatedRebasedTokens = rebase.estimatedInputTokens;
-      sendPayload = rebase.payload;
+    const overflowRecovery = compactThreshold !== undefined
+      ? new ResponsesOverflowRecoverySession({
+        requestUrl,
+        headers,
+        payload,
+        compactThreshold,
+        contextWindow: contextWindow ?? Number.MAX_SAFE_INTEGER,
+        fetch: options.compactFetch,
+        signal: init?.signal ?? undefined,
+        compactTimeoutMs: options.compactTimeoutMs,
+        maxCompactCalls: options.overflowRecoveryMaxCompactCalls,
+        maxContextRejections: options.overflowRecoveryMaxContextRejections,
+        deadlineMs: options.overflowRecoveryDeadlineMs,
+        now: resolvedOptions.now,
+        onDiagnostic: event => emitDiagnostic(options, event as ResponsesWebSocketDiagnosticEvent, diagnosticCorrelation),
+      })
+      : undefined;
+    const commitOverflowRebase = (rebasedInput: unknown[], rebasedEstimate: number): void => {
+      sendPayload = { ...payload, input: rebasedInput };
+      delete sendPayload.previous_response_id;
       retryPayload = sendPayload;
       compactedInputBase = rebasedInput;
-      supersededEntry = selected && connectionEntries(partitionKey).includes(selected)
-        ? selected
-        : undefined;
+      overflowRebasedEstimate = rebasedEstimate;
+      supersededEntry ??= overflowSourceEntry;
       selected = undefined;
       continued = false;
       compacted = true;
       decision = 'overflow_rebase_new_head';
-      return estimatedRebasedTokens;
-    };
-    const compactOverflowCandidate = async (
-      candidate: OverflowRecoveryCandidate,
-      reason: 'known_oversized' | 'compact_context_rejection' | 'response_context_rejection',
-      stage: number,
-    ): Promise<{ input: unknown[]; estimatedInputTokens: number } | undefined> => {
-      if (!contextWindow || attemptedOverflowPrefixes.has(candidate.prefixFingerprint)) return undefined;
-      attemptedOverflowPrefixes.add(candidate.prefixFingerprint);
-      emitDiagnostic(options, {
-        event: 'ws_overflow_recovery',
-        outcome: 'attempted',
-        reason,
-        source: candidate.source,
-        contextWindow,
-        compactThreshold,
-        prefixItems: candidate.prefix.length,
-        tailItems: candidate.tail.length,
-        estimatedPrefixTokens: candidate.estimatedPrefixTokens,
-        estimatedTailTokens: candidate.estimatedTailTokens,
-        prefixFingerprint: candidate.prefixFingerprint,
-        tailFingerprint: candidate.tailFingerprint,
-        attemptCount: attemptedOverflowPrefixes.size,
-        stage,
-      }, diagnosticCorrelation);
-      try {
-        const result = await compactResponsesWindow({
-          requestUrl,
-          headers,
-          payload: { ...payload, input: candidate.prefix },
-          fetch: options.compactFetch,
-          signal: init?.signal ?? undefined,
-          timeoutMs: options.compactTimeoutMs,
-        });
-        const rebasedInput = [...result.output, ...candidate.tail];
-        const estimatedRebasedTokens = applyOverflowRebase(
-          rebasedInput,
-          result.output,
-          candidate.tail,
-          result.usage,
-        );
-        if (estimatedRebasedTokens >= contextWindow) {
-          emitDiagnostic(options, {
-            event: 'ws_overflow_recovery',
-            outcome: 'candidate_rejected',
-            reason: 'rebased_input_exceeds_context_window',
-            source: candidate.source,
-            contextWindow,
-            estimatedRebasedTokens,
-            prefixFingerprint: candidate.prefixFingerprint,
-            stage,
-          }, diagnosticCorrelation);
-          return undefined;
-        }
-        emitDiagnostic(options, {
-          event: 'ws_overflow_recovery',
-          outcome: 'completed',
-          reason,
-          source: candidate.source,
-          contextWindow,
-          compactThreshold,
-          prefixItems: candidate.prefix.length,
-          compactedItems: result.output.length,
-          tailItems: candidate.tail.length,
-          rebasedItems: rebasedInput.length,
-          estimatedRebasedTokens,
-          prefixFingerprint: candidate.prefixFingerprint,
-          tailFingerprint: candidate.tailFingerprint,
-          attemptCount: attemptedOverflowPrefixes.size,
-          stage,
-          ...(result.usage ?? {}),
-        }, diagnosticCorrelation);
-        return { input: rebasedInput, estimatedInputTokens: estimatedRebasedTokens };
-      } catch (error) {
-        const compactError = error instanceof ResponsesCompactionError ? error : undefined;
-        if (compactError?.usage) {
-          compactionUsage = compactionUsage
-            ? addResponseUsage(compactionUsage, compactError.usage)
-            : compactError.usage;
-        }
-        emitDiagnostic(options, {
-          event: 'ws_overflow_recovery',
-          outcome: 'candidate_failed',
-          reason,
-          source: candidate.source,
-          contextWindow,
-          prefixFingerprint: candidate.prefixFingerprint,
-          attemptCount: attemptedOverflowPrefixes.size,
-          stage,
-          errorType: boundedDiagnosticIdentifier(
-            error instanceof Error ? error.name : typeof error,
-          ),
-          statusCode: compactError?.statusCode,
-          failureClass: compactError?.failureClass,
-          errorCode: boundedDiagnosticIdentifier(compactError?.errorCode),
-          providerErrorType: boundedDiagnosticIdentifier(compactError?.errorType),
-          errorFingerprint: compactError?.errorFingerprint,
-        }, diagnosticCorrelation);
-        return undefined;
-      }
     };
     const runOverflowRecovery = async (
-      reason: 'known_oversized' | 'compact_context_rejection' | 'response_context_rejection',
+      reason: OverflowRecoveryReason,
     ): Promise<boolean> => {
-      if (
-        compactThreshold === undefined
-        || contextWindow === undefined
-        || contextWindow <= 0
-      ) return false;
+      if (!overflowRecovery || contextWindow === undefined || contextWindow <= 0) return false;
       const recoveryInput = compactedInputBase ?? inputArray(payload);
       const recoveryEstimate = compactedInputBase
-        ? estimatedRebasedInputTokens(
+        ? overflowRebasedEstimate ?? estimatedRebasedInputTokens(
           recoveryInput,
           [],
           inputArray(payload),
           estimatedInputTokens,
         )
-        : estimatedInputTokens;
-      const result = await runProgressiveOverflowRecovery({
-        fullInput: recoveryInput,
+        : sourceEstimatedInputTokens === undefined
+          ? estimatedInputTokens
+          : Math.max(estimatedInputTokens ?? 0, sourceEstimatedInputTokens);
+      const result = await overflowRecovery.recover({
+        input: recoveryInput,
         sources: compactedInputBase ? [] : recoverySources,
-        compactThreshold,
-        contextWindow,
         estimatedInputTokens: recoveryEstimate,
-        requireInitialCompaction: reason === 'response_context_rejection',
-        compactCandidate: (candidate, stage) => compactOverflowCandidate(candidate, reason, stage),
-        onPlan: ({ stage, inputItems, estimatedInputTokens: stageEstimate, plan }) => {
-          emitDiagnostic(options, {
-            event: 'ws_overflow_recovery',
-            outcome: plan.candidates.length ? 'planned' : 'unavailable',
-            reason,
-            contextWindow,
-            compactThreshold,
-            estimatedInputTokens: stageEstimate,
-            sourceItems: inputItems,
-            candidateCount: plan.candidates.length,
-            rejected: plan.rejected,
-            stage,
-          }, diagnosticCorrelation);
-        },
+        reason,
+        forceInitialCompaction: reason !== 'known_oversized',
       });
-      if (!result.recovered) {
-        emitDiagnostic(options, {
-          event: 'ws_overflow_recovery',
-          outcome: 'exhausted',
-          reason: result.reason,
-          contextWindow,
-          compactThreshold,
-          stage: result.stages,
-          rebasedItems: result.input.length,
-          estimatedRebasedTokens: result.estimatedInputTokens,
-        }, diagnosticCorrelation);
+      compactionUsage = overflowRecovery.usage;
+      if (result.recovered && result.estimatedInputTokens !== undefined) {
+        commitOverflowRebase(result.input, result.estimatedInputTokens);
       }
       return result.recovered;
     };
@@ -2918,7 +2782,18 @@ export function createResponsesWebSocketFetch(
           ? [...triggerEntry.compactedInput, ...selectedDelta]
           : undefined;
         try {
-          const result = await runCompactionTrigger(triggerEntry, selectedDelta);
+          const triggerClaim = overflowRecovery!.claimCompactionCall();
+          if (!triggerClaim.ok) {
+            throw new ResponsesCompactionError(
+              `Overflow recovery budget exhausted: ${triggerClaim.reason}`,
+            );
+          }
+          const result = await runCompactionTrigger(
+            triggerEntry,
+            selectedDelta,
+            triggerClaim.timeoutMs,
+          );
+          overflowRecovery!.recordExternalCompaction(undefined, result.usage);
           const compactedInput = [
             ...retainedUserMessages(inputArray(payload)),
             ...result.output,
@@ -2931,7 +2806,7 @@ export function createResponsesWebSocketFetch(
           selected = undefined;
           continued = false;
           compacted = true;
-          compactionUsage = result.usage;
+          compactionUsage = overflowRecovery!.usage;
           decision = 'compaction_trigger_new_head';
           debug(
             `native compaction trigger produced ${result.output.length} item(s); `
@@ -2954,10 +2829,12 @@ export function createResponsesWebSocketFetch(
             ...(result.usage ?? {}),
           }, diagnosticCorrelation);
         } catch (error) {
-          if (error instanceof ResponsesCompactionError) {
-            failedTriggerUsage = error.usage;
-            compactionUsage = error.usage;
-          }
+          const triggerError = error instanceof ResponsesCompactionError ? error : undefined;
+          // A rejected in-band trigger is a response-create rejection, not a
+          // standalone compact-endpoint rejection. It consumes the global call
+          // budget but must not prevent the dependency-safe fallback itself.
+          overflowRecovery?.recordExternalCompaction(error, triggerError?.usage, false);
+          compactionUsage = overflowRecovery?.usage ?? triggerError?.usage;
           debug('native compaction trigger unavailable; trying standalone compact endpoint');
           emitDiagnostic(options, {
             event: 'ws_compaction',
@@ -2993,14 +2870,21 @@ export function createResponsesWebSocketFetch(
           const compactPayload = canonicalInput
             ? { ...payload, input: canonicalInput }
             : payload;
+          const compactClaim = overflowRecovery!.claimCompactionCall();
+          if (!compactClaim.ok) {
+            throw new ResponsesCompactionError(
+              `Overflow recovery budget exhausted: ${compactClaim.reason}`,
+            );
+          }
           const result = await compactResponsesWindow({
             requestUrl,
             headers,
             payload: compactPayload,
             fetch: options.compactFetch,
             signal: init?.signal ?? undefined,
-            timeoutMs: options.compactTimeoutMs,
+            timeoutMs: compactClaim.timeoutMs,
           });
+          overflowRecovery!.recordExternalCompaction(undefined, result.usage);
           sendPayload = { ...payload, input: result.output };
           delete sendPayload.previous_response_id;
           retryPayload = sendPayload;
@@ -3011,9 +2895,7 @@ export function createResponsesWebSocketFetch(
           selected = undefined;
           continued = false;
           compacted = true;
-          compactionUsage = failedTriggerUsage && result.usage
-            ? addResponseUsage(failedTriggerUsage, result.usage)
-            : result.usage ?? failedTriggerUsage;
+          compactionUsage = overflowRecovery!.usage;
           decision = 'compaction_new_head';
           debug(
             `standalone compact reduced ${inputArray(compactPayload).length} input item(s) `
@@ -3034,11 +2916,8 @@ export function createResponsesWebSocketFetch(
           }, diagnosticCorrelation);
         } catch (error) {
           const compactError = error instanceof ResponsesCompactionError ? error : undefined;
-          if (compactError?.usage) {
-            compactionUsage = compactionUsage
-              ? addResponseUsage(compactionUsage, compactError.usage)
-              : compactError.usage;
-          }
+          overflowRecovery?.recordExternalCompaction(error, compactError?.usage);
+          compactionUsage = overflowRecovery?.usage ?? compactionUsage;
           const contextRejected = compactError?.failureClass === 'context_length';
           debug(contextRejected
             ? 'standalone compaction rejected oversized input; planning dependency-safe prefix recovery'
@@ -3077,7 +2956,7 @@ export function createResponsesWebSocketFetch(
         contextWindow,
         compactThreshold,
         estimatedInputTokens,
-        attemptCount: attemptedOverflowPrefixes.size,
+        attemptCount: overflowRecovery?.attemptCount ?? 0,
       }, diagnosticCorrelation);
       return new Response(JSON.stringify({
         error: {
@@ -3358,7 +3237,7 @@ export function createResponsesWebSocketFetch(
             source: 'overflow_recovery',
             errorCode: 'context_length_exceeded',
             mappedStatusCode: 400,
-            attemptCount: attemptedOverflowPrefixes.size,
+            attemptCount: overflowRecovery?.attemptCount ?? 0,
             contextWindow,
           },
           400,
@@ -3377,7 +3256,7 @@ export function createResponsesWebSocketFetch(
         event: 'ws_overflow_recovery',
         outcome: 'replaying',
         reason: 'response_context_rejection',
-        attemptCount: attemptedOverflowPrefixes.size,
+        attemptCount: overflowRecovery?.attemptCount ?? 0,
         contextWindow,
       });
       deleteEntry(entry);
