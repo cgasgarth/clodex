@@ -38,6 +38,7 @@ export type OverflowRecoveryReason =
 const DEFAULT_MAX_COMPACT_CALLS = 8;
 const DEFAULT_MAX_CONTEXT_REJECTIONS = 2;
 const DEFAULT_RECOVERY_DEADLINE_MS = 30 * 60_000;
+const DEFAULT_FINAL_CREATE_RESERVE_MS = 5 * 60_000;
 const REJECTED_DIAGNOSTIC_LIMIT = 16;
 
 export interface OverflowRecoverySource {
@@ -128,6 +129,10 @@ export type OverflowCompactionClaim =
   | { ok: true; attempt: number; timeoutMs: number }
   | { ok: false; reason: 'compact_call_limit' | 'context_rejection_limit' | 'deadline' };
 
+export type OverflowFinalCreateAdmission =
+  | { ok: true; remainingMs: number }
+  | { ok: false; reason: 'deadline' | 'final_create_reserve'; remainingMs: number };
+
 export interface ResponsesOverflowRecoverySessionOptions {
   requestUrl: string | URL | Request;
   headers: HeadersInit | undefined;
@@ -140,6 +145,7 @@ export interface ResponsesOverflowRecoverySessionOptions {
   maxCompactCalls?: number;
   maxContextRejections?: number;
   deadlineMs?: number;
+  finalCreateReserveMs?: number;
   now?: () => number;
   onDiagnostic?: (event: Record<string, unknown>) => void;
 }
@@ -526,6 +532,18 @@ export class ResponsesOverflowRecoverySession {
     };
   }
 
+  admitFinalCreate(): OverflowFinalCreateAdmission {
+    const remainingMs = this.deadlineAt - this.now();
+    if (remainingMs <= 0) return { ok: false, reason: 'deadline', remainingMs };
+    const reserveMs = Math.max(
+      1,
+      this.options.finalCreateReserveMs ?? DEFAULT_FINAL_CREATE_RESERVE_MS,
+    );
+    return remainingMs < reserveMs
+      ? { ok: false, reason: 'final_create_reserve', remainingMs }
+      : { ok: true, remainingMs };
+  }
+
   recordExternalCompaction(
     error?: unknown,
     usage?: ResponsesCompactionUsage,
@@ -705,6 +723,7 @@ export class ResponsesOverflowRecoverySession {
         errorCode: compactError?.errorCode, providerErrorType: compactError?.errorType,
         errorFingerprint: compactError?.errorFingerprint,
       });
+      if (!compactError || compactError.failureClass !== 'context_length') throw error;
       return undefined;
     }
   }

@@ -41,6 +41,7 @@ export interface ResponsesWebSocketFetchOptions {
   overflowRecoveryMaxCompactCalls?: number;
   overflowRecoveryMaxContextRejections?: number;
   overflowRecoveryDeadlineMs?: number;
+  overflowRecoveryFinalCreateReserveMs?: number;
   /** Private durable store for compacted native-compaction recovery state. */
   checkpointStoreDir?: string;
   now?: () => number;

@@ -128,7 +128,8 @@ export function failContext(
       ...(retryAfterSeconds !== undefined ? { retry_after_seconds: retryAfterSeconds } : {}),
     },
   });
-  retireSupersededEntry(ctx);
+  // A rebased request replaces its source head only after successful
+  // completion. On failure the source is still the last valid continuation.
   deleteEntry(entry);
   closeContext(ctx);
 }
@@ -583,7 +584,7 @@ function handleSocketMessage(entry: ConnectionEntry, data: RawData): void {
       retireSupersededEntry(ctx);
       entry.debug(`chain head updated; socket retained (${ctx.frameCount} frame(s))`);
     } else {
-      retireSupersededEntry(ctx);
+      if (!failed) retireSupersededEntry(ctx);
       deleteEntry(entry);
     }
     if (!entry.persistent) {

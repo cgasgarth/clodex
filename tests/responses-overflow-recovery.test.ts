@@ -314,4 +314,94 @@ describe('Responses oversized-context recovery planner', () => {
     expect(session.claimCompactionCall()).toEqual({ ok: false, reason: 'deadline' });
     expect(session.attemptCount).toBe(1);
   });
+
+  it('reserves recovery time for the final model create', () => {
+    let now = 1_000;
+    const session = new ResponsesOverflowRecoverySession({
+      requestUrl: 'https://example.test/responses',
+      headers: {},
+      payload: { model: 'gpt-5.6-sol', input: [] },
+      compactThreshold: 1_000,
+      contextWindow: 2_000,
+      deadlineMs: 1_000,
+      finalCreateReserveMs: 200,
+      now: () => now,
+    });
+
+    expect(session.admitFinalCreate()).toEqual({ ok: true, remainingMs: 1_000 });
+    now += 801;
+    expect(session.admitFinalCreate()).toEqual({
+      ok: false,
+      reason: 'final_create_reserve',
+      remainingMs: 199,
+    });
+  });
+
+  for (const failure of [
+    { name: 'auth', status: 401, body: { error: { type: 'authentication_error', code: 'invalid_api_key' } } },
+    { name: 'capacity', status: 429, body: { error: { type: 'rate_limit_error', code: 'rate_limit_exceeded' }, usage: { input_tokens: 17, output_tokens: 2 } } },
+    { name: 'server', status: 503, body: { error: { type: 'server_error', code: 'internal_server_error' } } },
+    { name: 'other 4xx', status: 422, body: { error: { type: 'invalid_request_error', code: 'invalid_input' } } },
+    { name: 'invalid output', status: 200, body: {} },
+  ] as const) {
+    it(`does not try alternate prefixes after a ${failure.name} compact failure`, async () => {
+      let calls = 0;
+      const session = new ResponsesOverflowRecoverySession({
+        requestUrl: 'https://example.test/responses',
+        headers: {},
+        payload: { model: 'gpt-5.6-sol', input: [] },
+        compactThreshold: 1_000,
+        contextWindow: 2_000,
+        fetch: (async () => {
+          calls += 1;
+          return new Response(JSON.stringify(failure.body), {
+            status: failure.status,
+            headers: { 'content-type': 'application/json' },
+          });
+        }) as typeof fetch,
+      });
+
+      await expect(session.recover({
+        reason: 'response_context_rejection',
+        input: [user('first'), assistant('second'), user('third')],
+        estimatedInputTokens: 500,
+        forceInitialCompaction: true,
+      })).rejects.toMatchObject({
+        failureClass: failure.name === 'auth'
+          ? 'auth'
+          : failure.name === 'capacity'
+            ? 'rate_limit_or_capacity'
+            : failure.name === 'server'
+              ? 'server'
+              : failure.name === 'other 4xx' ? 'other_4xx' : 'invalid_response',
+      });
+      expect(calls).toBe(1);
+      if (failure.name === 'capacity') {
+        expect(session.usage).toMatchObject({ inputTokens: 17, outputTokens: 2 });
+      }
+    });
+  }
+
+  it('does not try alternate prefixes after a compact transport failure', async () => {
+    let calls = 0;
+    const session = new ResponsesOverflowRecoverySession({
+      requestUrl: 'https://example.test/responses',
+      headers: {},
+      payload: { model: 'gpt-5.6-sol', input: [] },
+      compactThreshold: 1_000,
+      contextWindow: 2_000,
+      fetch: (async () => {
+        calls += 1;
+        throw new Error('socket closed');
+      }) as typeof fetch,
+    });
+
+    await expect(session.recover({
+      reason: 'response_context_rejection',
+      input: [user('first'), assistant('second'), user('third')],
+      estimatedInputTokens: 500,
+      forceInitialCompaction: true,
+    })).rejects.toMatchObject({ failureClass: 'timeout_or_transport' });
+    expect(calls).toBe(1);
+  });
 });

@@ -62,18 +62,17 @@ import {
   continuationMatch,
 } from './responses-websocket/continuation.js';
 import type { ContinuationMatch } from './responses-websocket/continuation.js';
-import { boundedDiagnosticIdentifier, emitContextDiagnostic, closeContext } from './responses-websocket/protocol.js';
+import { boundedDiagnosticIdentifier, closeContext } from './responses-websocket/protocol.js';
 import {
   beginRecycledLineage,
   deleteEntry,
-  failContext,
   cleanupExpiredConnections,
   evictOldestIdleGeneration,
   reusableCacheAffinityHead,
   dispatchContext,
-  resetContextForRetry,
   createConnection,
 } from './responses-websocket/transport.js';
+import { createOverflowRecoveryHandler } from './responses-websocket/overflow/recovery-handler.js';
 import { runCompactionTrigger } from './responses-websocket/compaction/trigger.js';
 import {
   checkpointStoreDirectory,
@@ -233,6 +232,7 @@ export function createResponsesWebSocketFetch(
     let compactionUsage: ResponsesCompactionUsage | undefined;
     let failedTriggerCompactedInput: unknown[] | undefined;
     let terminalOverflowReason: string | undefined;
+    let terminalRecoveryFailure: ResponsesCompactionError | undefined;
     let overflowRebasedEstimate: number | undefined;
     const contextWindow = options.contextWindow;
     const overflowSources = (): OverflowRecoverySource[] => {
@@ -312,6 +312,7 @@ export function createResponsesWebSocketFetch(
         maxCompactCalls: options.overflowRecoveryMaxCompactCalls,
         maxContextRejections: options.overflowRecoveryMaxContextRejections,
         deadlineMs: options.overflowRecoveryDeadlineMs,
+        finalCreateReserveMs: options.overflowRecoveryFinalCreateReserveMs,
         now: resolvedOptions.now,
         onDiagnostic: event => emitDiagnostic(options, event as ResponsesWebSocketDiagnosticEvent, diagnosticCorrelation),
       })
@@ -352,9 +353,31 @@ export function createResponsesWebSocketFetch(
       });
       compactionUsage = overflowRecovery.usage;
       if (result.recovered && result.estimatedInputTokens !== undefined) {
+        const admission = overflowRecovery.admitFinalCreate();
+        if (!admission.ok) {
+          emitDiagnostic(options, {
+            event: 'ws_overflow_recovery',
+            outcome: 'budget_exhausted',
+            reason: admission.reason,
+            remainingMs: admission.remainingMs,
+            attemptCount: overflowRecovery.attemptCount,
+          }, diagnosticCorrelation);
+          return false;
+        }
         commitOverflowRebase(result.input, result.estimatedInputTokens);
       }
       return result.recovered;
+    };
+    const recoverRejectedCompaction = async (): Promise<void> => {
+      try {
+        if (!await runOverflowRecovery('compact_context_rejection')) {
+          terminalOverflowReason =
+            'OpenAI rejected the oversized compact window and no dependency-safe prefix recovery succeeded';
+        }
+      } catch (error) {
+        if (!(error instanceof ResponsesCompactionError)) throw error;
+        terminalRecoveryFailure = error;
+      }
     };
     if (
       compactThreshold !== undefined
@@ -363,8 +386,13 @@ export function createResponsesWebSocketFetch(
       && estimatedInputTokens >= contextWindow
       && !liveContinuationFitsContext
     ) {
-      if (!await runOverflowRecovery('known_oversized')) {
-        terminalOverflowReason = 'No dependency-safe native compaction prefix could recover the oversized request';
+      try {
+        if (!await runOverflowRecovery('known_oversized')) {
+          terminalOverflowReason = 'No dependency-safe native compaction prefix could recover the oversized request';
+        }
+      } catch (error) {
+        if (!(error instanceof ResponsesCompactionError)) throw error;
+        terminalRecoveryFailure = error;
       }
     }
     if (
@@ -558,12 +586,34 @@ export function createResponsesWebSocketFetch(
             providerErrorType: boundedDiagnosticIdentifier(compactError?.errorType),
             errorFingerprint: compactError?.errorFingerprint,
           }, diagnosticCorrelation);
-          if (contextRejected && !await runOverflowRecovery('compact_context_rejection')) {
-            terminalOverflowReason =
-              'OpenAI rejected the oversized compact window and no dependency-safe prefix recovery succeeded';
-          }
+          if (contextRejected) await recoverRejectedCompaction();
         }
       }
+    }
+
+    if (terminalRecoveryFailure) {
+      const status = terminalRecoveryFailure.statusCode
+        ?? (terminalRecoveryFailure.failureClass === 'timeout_or_transport' ? 504 : 502);
+      emitDiagnostic(options, {
+        event: 'ws_overflow_recovery',
+        outcome: 'failed',
+        reason: 'non_context_compaction_failure',
+        statusCode: status,
+        failureClass: terminalRecoveryFailure.failureClass,
+        errorCode: terminalRecoveryFailure.errorCode,
+        providerErrorType: terminalRecoveryFailure.errorType,
+        errorFingerprint: terminalRecoveryFailure.errorFingerprint,
+      }, diagnosticCorrelation);
+      return new Response(JSON.stringify({
+        error: {
+          type: terminalRecoveryFailure.errorType ?? 'compaction_error',
+          code: terminalRecoveryFailure.errorCode ?? terminalRecoveryFailure.failureClass,
+          message: terminalRecoveryFailure.message,
+        },
+      }), {
+        status,
+        headers: { 'content-type': 'application/json' },
+      });
     }
 
     if (terminalOverflowReason) {
@@ -824,65 +874,16 @@ export function createResponsesWebSocketFetch(
       );
     }
 
-    const recoverContextOverflow = async (
-      entry: ConnectionEntry,
-      ctx: RequestContext,
-    ): Promise<void> => {
-      const contextIsClosed = () => ctx.closed;
-      if (ctx.closed || entry.current !== ctx || ctx.emittedModelData || ctx.overflowRetried) return;
-      let recovered = false;
-      try {
-        recovered = await runOverflowRecovery('response_context_rejection');
-      } catch (error) {
-        emitContextDiagnostic(entry, ctx, {
-          event: 'ws_overflow_recovery',
-          outcome: 'internal_failure',
-          reason: 'response_context_rejection',
-          errorType: boundedDiagnosticIdentifier(
-            error instanceof Error ? error.name : typeof error,
-          ),
-        });
-      }
-      if (contextIsClosed() || entry.current !== ctx) return;
-      if (!recovered || !retryPayload || !compactedInputBase) {
-        ctx.overflowRecoveryPending = false;
-        ctx.overflowRetried = true;
-        failContext(
-          entry,
-          ctx,
-          'OpenAI rejected the request for context length and no dependency-safe native recovery succeeded',
-          {
-            source: 'overflow_recovery',
-            errorCode: 'context_length_exceeded',
-            mappedStatusCode: 400,
-            attemptCount: overflowRecovery?.attemptCount ?? 0,
-            contextWindow,
-          },
-          400,
-        );
-        return;
-      }
-
-      ctx.retryPayload = retryPayload;
-      ctx.compactedInputBase = compactedInputBase;
-      ctx.usageOffset = compactionUsage;
-      ctx.supersededEntry = undefined;
-      ctx.overflowRecoveryPending = false;
-      ctx.overflowRetried = true;
-      ctx.retried = true;
-      emitContextDiagnostic(entry, ctx, {
-        event: 'ws_overflow_recovery',
-        outcome: 'replaying',
-        reason: 'response_context_rejection',
+    const recoverContextOverflow = createOverflowRecoveryHandler({
+      contextWindow,
+      recover: () => runOverflowRecovery('response_context_rejection'),
+      retryState: () => ({
+        retryPayload,
+        compactedInputBase,
+        usageOffset: compactionUsage,
         attemptCount: overflowRecovery?.attemptCount ?? 0,
-        contextWindow,
-      });
-      deleteEntry(entry);
-      if (contextIsClosed()) return;
-      resetContextForRetry(ctx);
-      const replacement = ctx.createReplacement();
-      dispatchContext(replacement, ctx);
-    };
+      }),
+    });
 
     let activeContext: RequestContext | undefined;
     const stream = new ReadableStream<Uint8Array>({

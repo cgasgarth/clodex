@@ -14,6 +14,7 @@ import { parseArgs, runCatalogCommand } from './cli/args.js';
 import { claudeHelpText, modelsHelpText, patchHelpText, printHelp, rootHelpText, serverHelpText } from './cli/help.js';
 import { runModelsCommand } from './cli/models-command.js';
 import { runClaudeCommand } from './cli/claude-command.js';
+import { resolveCliRuntimePaths } from './cli/runtime-paths.js';
 
 export { parseArgs } from './cli/args.js';
 export { claudeHelpText, modelsHelpText, patchHelpText, rootHelpText, serverHelpText } from './cli/help.js';
@@ -27,6 +28,7 @@ export async function main(args: string[] = process.argv.slice(2)): Promise<numb
   await installOutboundProxyDispatcher();
 
   const parsed = parseArgs(args);
+  const runtimePaths = resolveCliRuntimePaths(import.meta.url);
 
   if (parsed.error) {
     console.error(pc.red(`\nError: ${parsed.error}\n`));
@@ -45,7 +47,7 @@ export async function main(args: string[] = process.argv.slice(2)): Promise<numb
       printHelp(rootHelpText());
     } else {
       try {
-        await ensureDaemonRunning(realpathSync(fileURLToPath(import.meta.url)));
+        await ensureDaemonRunning(runtimePaths.cliPath);
       } catch (error) {
         console.error(
           pc.red(`Could not start the Clodex daemon: ${error instanceof Error ? error.message : String(error)}`),
@@ -61,7 +63,7 @@ export async function main(args: string[] = process.argv.slice(2)): Promise<numb
   if (parsed.command === 'start') {
     try {
       const runtime = await ensureDaemonRunning(
-        realpathSync(fileURLToPath(import.meta.url)),
+        runtimePaths.cliPath,
       );
       console.log(
         `Clodex daemon ready (pid ${runtime.pid}, endpoint ${runtime.port}).`,
@@ -124,7 +126,7 @@ export async function main(args: string[] = process.argv.slice(2)): Promise<numb
       printHelp(daemonHelpText());
       return 0;
     }
-    return runDaemonCommand(parsed.claudeArgs, realpathSync(fileURLToPath(import.meta.url)));
+    return runDaemonCommand(parsed.claudeArgs, runtimePaths.cliPath);
   }
 
   if (parsed.command === 'accounts') {
@@ -152,7 +154,7 @@ export async function main(args: string[] = process.argv.slice(2)): Promise<numb
       list: parsed.favoritesList,
       alias: parsed.favoritesAlias,
       unalias: parsed.favoritesUnalias,
-    }));
+    }), runtimePaths.cliPath);
   }
 
   if (parsed.command === 'providers') {
@@ -167,7 +169,7 @@ export async function main(args: string[] = process.argv.slice(2)): Promise<numb
     if (parsed.trace) {
       process.env.CLODEX_TRACE = '1';
     }
-    return runCatalogCommand(() => runProvidersCommand(parsed.claudeArgs));
+    return runCatalogCommand(() => runProvidersCommand(parsed.claudeArgs), runtimePaths.cliPath);
   }
 
   if (parsed.command === 'patch') {
@@ -191,7 +193,7 @@ export async function main(args: string[] = process.argv.slice(2)): Promise<numb
     return 0;
   }
 
-  return runClaudeCommand(parsed);
+  return runClaudeCommand(parsed, runtimePaths);
 }
 
 function isCliEntryPoint(): boolean {

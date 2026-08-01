@@ -1,9 +1,9 @@
 import * as p from '@clack/prompts';
-import { readFileSync, realpathSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
+import { readFileSync } from 'node:fs';
 import type { ParsedArgs } from '../types.js';
 import { restartDaemonIfRunning } from '../daemon/index.js';
 import { getConfigPath, getProvidersPath } from '../paths.js';
+import { resolveCliRuntimePaths } from './runtime-paths.js';
 
 const STARTER_CLAUDE_FLAGS = new Set(['--dry-run', '--trace', '--endpoint', '--proxy', '--save-mode', '--help', '-h', '--version', '-v']);
 const CLODEX_LAUNCH_FLAGS = new Set(['--provider', '--model']);
@@ -21,14 +21,13 @@ function daemonCatalogSnapshot(): string {
 
 export async function runCatalogCommand(
   run: () => Promise<number>,
+  cliPath = resolveCliRuntimePaths(import.meta.url).cliPath,
 ): Promise<number> {
   const before = daemonCatalogSnapshot();
   const result = await run();
   if (result !== 0 || daemonCatalogSnapshot() === before) return result;
   try {
-    const restarted = await restartDaemonIfRunning(
-      realpathSync(fileURLToPath(import.meta.url)),
-    );
+    const restarted = await restartDaemonIfRunning(cliPath);
     if (restarted) p.log.info('Reloaded the persistent daemon catalog.');
   } catch (error) {
     p.log.warn(

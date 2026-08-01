@@ -1,9 +1,6 @@
 import pc from 'picocolors';
 import { relayIntro, providerSelectOption } from '../ui.js';
 import * as p from '@clack/prompts';
-import { realpathSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
-import { dirname, join } from 'node:path';
 import { findClaudeBinary, launchClaude } from '../launch.js';
 import { detectConflicts, buildChildEnv } from '../env.js';
 import {
@@ -43,6 +40,8 @@ import { daemonControlRequest } from '../daemon/control-client.js';
 import { LAUNCH_TICKET_HEADER, setAnthropicCustomHeader } from '../wrapper-env.js';
 import { getOrCreateProxyToken } from '../proxy-token.js';
 import { catalogUsesNativeContextOwner, launchClaudeViaCatalog } from './catalog-runtime.js';
+import { resolveCliRuntimePaths } from './runtime-paths.js';
+import type { CliRuntimePaths } from './runtime-paths.js';
 
 function requestedClaudeModel(args: string[]): string | undefined {
   let index = -1;
@@ -90,11 +89,11 @@ async function runClaudeDaemonEndpointCommand(
   parsed: ParsedArgs,
   claudeArgs: string[],
   agentStdout: boolean,
+  runtimePaths: CliRuntimePaths,
 ): Promise<number> {
-  const cliPath = realpathSync(fileURLToPath(import.meta.url));
   let runtime: Awaited<ReturnType<typeof ensureDaemonRunning>>;
   try {
-    runtime = await ensureDaemonRunning(cliPath);
+    runtime = await ensureDaemonRunning(runtimePaths.cliPath);
   } catch (error) {
     p.log.error(`Failed to start the Clodex daemon: ${error instanceof Error ? error.message : String(error)}`);
     return 1;
@@ -146,10 +145,7 @@ async function runClaudeDaemonEndpointCommand(
     setAnthropicCustomHeader(childEnv, LAUNCH_TICKET_HEADER, launchTicket);
   }
   childEnv['CLODEX_REQUIRE_SERVER'] = '1';
-  childEnv['CLAUDE_CODE_PROCESS_WRAPPER'] ??= join(
-    dirname(cliPath),
-    'claude-wrapper.js',
-  );
+  childEnv['CLAUDE_CODE_PROCESS_WRAPPER'] ??= runtimePaths.processWrapperPath;
   if (!agentStdout) {
     p.log.info(
       `Using ${launchModel} through the shared Clodex daemon endpoint on port ${runtime.port}.`,
@@ -164,7 +160,10 @@ async function runClaudeDaemonEndpointCommand(
   return exitCode;
 }
 
-export async function runClaudeCommand(parsed: ParsedArgs): Promise<number> {
+export async function runClaudeCommand(
+  parsed: ParsedArgs,
+  runtimePaths: CliRuntimePaths = resolveCliRuntimePaths(import.meta.url),
+): Promise<number> {
   const { dryRun, trace, launchProvider, launchModel } = parsed;
   const claudeArgs = normalizeClaudeAgentArgs(parsed.claudeArgs);
   const agentStdout = wantsCleanAgentStdout('claude', claudeArgs);
@@ -195,7 +194,7 @@ export async function runClaudeCommand(parsed: ParsedArgs): Promise<number> {
     && !parsed.launchProvider
     && !parsed.launchModel
   ) {
-    return runClaudeDaemonEndpointCommand(parsed, claudeArgs, agentStdout);
+    return runClaudeDaemonEndpointCommand(parsed, claudeArgs, agentStdout, runtimePaths);
   }
 
   const prefs = dryRun ? {} as ReturnType<typeof loadPreferences> : loadPreferences();
