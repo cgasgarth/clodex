@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'bun:test';
 import {
   AgentStreamTransaction,
-  childAgentRetryDelayMs,
-  waitForChildAgentRetry,
+  isResponseStreamRetryEligible,
+  responseStreamRetryDelayMs,
+  waitForResponseStreamRetry,
 } from '../src/agent-stream-transaction.js';
 
 describe('AgentStreamTransaction', () => {
@@ -57,18 +58,24 @@ describe('AgentStreamTransaction', () => {
   });
 });
 
-describe('child-agent retry timing', () => {
+describe('response stream retry timing', () => {
   it('uses bounded exponential delays and honors retry-after', () => {
-    expect(childAgentRetryDelayMs(1)).toBe(250);
-    expect(childAgentRetryDelayMs(2)).toBe(500);
-    expect(childAgentRetryDelayMs(99)).toBe(500);
-    expect(childAgentRetryDelayMs(1, 7)).toBe(7_000);
+    expect(responseStreamRetryDelayMs(1)).toBe(250);
+    expect(responseStreamRetryDelayMs(2)).toBe(500);
+    expect(responseStreamRetryDelayMs(99)).toBe(500);
+    expect(responseStreamRetryDelayMs(1, 7)).toBe(7_000);
+  });
+
+  it('does not hold Claude open for an excessive retry-after delay', () => {
+    expect(isResponseStreamRetryEligible(true, 15)).toBe(true);
+    expect(isResponseStreamRetryEligible(true, 16)).toBe(false);
+    expect(isResponseStreamRetryEligible(false, 1)).toBe(false);
   });
 
   it('cancels retry backoff immediately when Claude disconnects', async () => {
     const controller = new AbortController();
     const startedAt = Date.now();
-    const waiting = waitForChildAgentRetry(10_000, controller.signal);
+    const waiting = waitForResponseStreamRetry(10_000, controller.signal);
     controller.abort();
 
     expect(await waiting).toBe(false);

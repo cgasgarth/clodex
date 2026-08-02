@@ -349,6 +349,36 @@ describe('catalog model aliases', () => {
     restoreTestGlobals();
   });
 
+  it('keeps aliases resolvable across an atomic catalog replacement', async () => {
+    const route: ProxyRoute = {
+      aliasId: 'clodex:test:luna',
+      realModelId: 'gpt-test-luna',
+      displayName: 'Luna',
+      upstreamUrl: 'https://example.test',
+      apiKey: 'provider-key',
+      modelFormat: 'openai',
+      providerId: 'test-provider',
+    };
+    const aliases = [{ name: 'luna', routeId: route.aliasId }];
+    const handle = await startProxyCatalog(
+      [route], route.aliasId, false, undefined, undefined, undefined, aliases,
+    );
+    const lookup = () => new Promise<number>((resolve, reject) => {
+      http.get(
+        { hostname: '127.0.0.1', port: handle.port, path: '/v1/models/luna' },
+        response => { response.resume(); resolve(response.statusCode ?? 0); },
+      ).on('error', reject);
+    });
+
+    try {
+      expect(await lookup()).toBe(200);
+      handle.replaceCatalog([{ ...route }], route.aliasId, [{ ...aliases[0]! }]);
+      expect(await lookup()).toBe(200);
+    } finally {
+      handle.close();
+    }
+  });
+
   it('rejects unresolved configured model ids without using the default route', async () => {
     const route: ProxyRoute = {
       aliasId: 'clodex:test:default-model',
@@ -1156,7 +1186,7 @@ describe('SDK translated error logging', () => {
     }
   }, 20_000);
 
-  it('keeps main-agent partial streaming behavior unchanged', async () => {
+  it('buffers and safely retries a partial transport failure for the main agent', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'clodex-sdk-partial-transport-'));
     const inferenceLogPath = join(dir, 'inference.jsonl');
     let requestCount = 0;
@@ -1165,8 +1195,14 @@ describe('SDK translated error logging', () => {
       req.resume();
       req.once('end', () => {
         res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Connection': 'close' });
-        res.write('data: {"id":"chatcmpl-partial","object":"chat.completion.chunk","created":1,"model":"translated-model","choices":[{"index":0,"delta":{"role":"assistant","content":"partial output"},"finish_reason":null}]}\n\n');
-        res.end('data: {"error":{"type":"transport_error","code":"websocket_transport_error","message":"connection ended"}}\n\n');
+        if (requestCount === 1) {
+          res.write('data: {"id":"chatcmpl-partial","object":"chat.completion.chunk","created":1,"model":"translated-model","choices":[{"index":0,"delta":{"role":"assistant","content":"discarded partial output"},"finish_reason":null}]}\n\n');
+          res.end('data: {"error":{"type":"transport_error","code":"websocket_transport_error","message":"connection ended"}}\n\n');
+          return;
+        }
+        res.write('data: {"id":"chatcmpl-recovered","object":"chat.completion.chunk","created":1,"model":"translated-model","choices":[{"index":0,"delta":{"role":"assistant","content":"recovered main output"},"finish_reason":null}]}\n\n');
+        res.write('data: {"id":"chatcmpl-recovered","object":"chat.completion.chunk","created":1,"model":"translated-model","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\n');
+        res.end('data: [DONE]\n\n');
       });
     });
     await new Promise<void>((resolve, reject) => {
@@ -1197,29 +1233,23 @@ describe('SDK translated error logging', () => {
       }, 'req-partial-transport', '/v1/messages',
       '11111111-1111-4111-8111-111111111111');
 
-      expect(requestCount).toBe(1);
+      expect(requestCount).toBe(2);
       expect(res.status).toBe(200);
-      expect(res.body).toContain('partial output');
-      expect(res.body).toContain('event: error');
-      expect(res.body).toContain('Claude Code can automatically retry');
-      expect(res.body).toContain('Clodex did not replay it server-side');
-      expect(res.body).toContain('"request_id":"req-partial-transport"');
+      expect(res.body).toContain('recovered main output');
+      expect(res.body).not.toContain('discarded partial output');
+      expect(res.body).not.toContain('event: error');
+      expect(res.body).toContain('event: message_stop');
       const entries = readFileSync(inferenceLogPath, 'utf8').trim().split('\n').map(line => JSON.parse(line));
       expect(entries).toContainEqual(expect.objectContaining({
-        event: 'translation_failed',
+        event: 'translation_retrying',
         requestId: 'req-partial-transport',
         claudeSessionId: '11111111-1111-4111-8111-111111111111',
-        partialResponse: true,
-        replaySafe: false,
-        recoveryAction: 'client_auto_retry_turn',
+        retryAttempt: 1,
+        retryLimit: 2,
+        discardedBytes: expect.any(Number),
       }));
-      expect(entries).toContainEqual(expect.objectContaining({
-        event: 'upstream_error',
-        requestId: 'req-partial-transport',
-        partialResponse: true,
-        replaySafe: false,
-        recoveryAction: 'client_auto_retry_turn',
-      }));
+      expect(entries.some(entry => entry.event === 'translation_failed')).toBe(false);
+      expect(entries.some(entry => entry.event === 'upstream_error')).toBe(false);
     } finally {
       handle.close();
       await new Promise<void>(resolve => upstream.close(() => resolve()));

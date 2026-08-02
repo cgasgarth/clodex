@@ -1,5 +1,11 @@
 import { createHash } from 'node:crypto';
 import { IMAGE_INPUT_TOKEN_ESTIMATE } from '../anthropic-endpoints.js';
+import {
+  compactResponsesWindow,
+  RESPONSES_COMPACT_TIMEOUT_MS,
+  ResponsesCompactionError,
+  type ResponsesCompactionUsage,
+} from './responses-compaction.js';
 
 type JsonObject = Record<string, unknown>;
 
@@ -24,6 +30,16 @@ const TOOL_OUTPUT_KINDS = new Set([
 ]);
 
 type OverflowRecoverySourceKind = 'live_head' | 'checkpoint' | 'inferred';
+export type OverflowRecoveryReason =
+  | 'known_oversized'
+  | 'compact_context_rejection'
+  | 'response_context_rejection';
+
+const DEFAULT_MAX_COMPACT_CALLS = 8;
+const DEFAULT_MAX_CONTEXT_REJECTIONS = 2;
+const DEFAULT_RECOVERY_DEADLINE_MS = 30 * 60_000;
+const DEFAULT_FINAL_CREATE_RESERVE_MS = 5 * 60_000;
+const REJECTED_DIAGNOSTIC_LIMIT = 16;
 
 export interface OverflowRecoverySource {
   kind: Exclude<OverflowRecoverySourceKind, 'inferred'>;
@@ -58,6 +74,88 @@ export interface ResponsesOverflowRecoveryPlan {
     source: OverflowRecoverySourceKind;
     reason: string;
   }>;
+}
+
+interface ProgressiveOverflowRecoveryStep {
+  input: unknown[];
+  estimatedInputTokens: number;
+}
+
+interface ProgressiveOverflowRecoveryPlanEvent {
+  stage: number;
+  inputItems: number;
+  estimatedInputTokens?: number;
+  plan: ResponsesOverflowRecoveryPlan;
+}
+
+interface ProgressiveOverflowRecoveryAcceptedEvent {
+  stage: number;
+  previousInputItems: number;
+  inputItems: number;
+  previousEstimatedInputTokens?: number;
+  estimatedInputTokens: number;
+}
+
+export interface ProgressiveOverflowRecoveryOptions {
+  fullInput: unknown[];
+  sources?: OverflowRecoverySource[];
+  compactThreshold: number;
+  contextWindow: number;
+  estimatedInputTokens?: number;
+  forceInitialCompaction?: boolean;
+  maxStages?: number;
+  maxCandidatesPerStage?: number;
+  compactCandidate: (
+    candidate: OverflowRecoveryCandidate,
+    stage: number,
+  ) => Promise<ProgressiveOverflowRecoveryStep | undefined>;
+  onPlan?: (event: ProgressiveOverflowRecoveryPlanEvent) => void;
+  onAccepted?: (event: ProgressiveOverflowRecoveryAcceptedEvent) => void;
+}
+
+export interface ProgressiveOverflowRecoveryResult {
+  recovered: boolean;
+  input: unknown[];
+  estimatedInputTokens?: number;
+  stages: number;
+  reason:
+    | 'target_reached'
+    | 'no_dependency_safe_prefix'
+    | 'non_monotonic_progress'
+    | 'maximum_compaction_stages';
+}
+
+export type OverflowCompactionClaim =
+  | { ok: true; attempt: number; timeoutMs: number }
+  | { ok: false; reason: 'compact_call_limit' | 'context_rejection_limit' | 'deadline' };
+
+export type OverflowFinalCreateAdmission =
+  | { ok: true; remainingMs: number }
+  | { ok: false; reason: 'deadline' | 'final_create_reserve'; remainingMs: number };
+
+export interface ResponsesOverflowRecoverySessionOptions {
+  requestUrl: string | URL | Request;
+  headers: HeadersInit | undefined;
+  payload: JsonObject;
+  compactThreshold: number;
+  contextWindow: number;
+  fetch?: typeof fetch;
+  signal?: AbortSignal;
+  compactTimeoutMs?: number;
+  maxCompactCalls?: number;
+  maxContextRejections?: number;
+  deadlineMs?: number;
+  finalCreateReserveMs?: number;
+  now?: () => number;
+  onDiagnostic?: (event: Record<string, unknown>) => void;
+}
+
+export interface ResponsesOverflowRecoveryRequest {
+  reason: OverflowRecoveryReason;
+  input: unknown[];
+  sources?: OverflowRecoverySource[];
+  estimatedInputTokens?: number;
+  forceInitialCompaction?: boolean;
 }
 
 function record(value: unknown): JsonObject | undefined {
@@ -289,4 +387,352 @@ export function estimatedRebasedInputTokens(
   return fixedPromptTokens(fullInput, estimatedInputTokens)
     + compactTokens
     + approximateResponsesItemsTokens(tail);
+}
+
+/**
+ * Repeatedly fold dependency-closed prefixes into canonical compact output.
+ * Each stage plans from the previous stage's rebase, never the original input.
+ */
+export async function runProgressiveOverflowRecovery(
+  options: ProgressiveOverflowRecoveryOptions,
+): Promise<ProgressiveOverflowRecoveryResult> {
+  let input = options.fullInput;
+  let estimatedInputTokens = options.estimatedInputTokens;
+  let sources = options.sources ?? [];
+  let madeProgress = false;
+  const maxStages = Math.max(1, options.maxStages ?? 8);
+  const maxCandidates = Math.max(1, options.maxCandidatesPerStage ?? 4);
+
+  for (let stage = 1; stage <= maxStages; stage += 1) {
+    if (
+      estimatedInputTokens !== undefined
+      && estimatedInputTokens <= options.compactThreshold
+      && (madeProgress || !options.forceInitialCompaction)
+    ) {
+      return { recovered: madeProgress, input, estimatedInputTokens, stages: stage - 1, reason: 'target_reached' };
+    }
+    const beforeEstimate = estimatedInputTokens;
+    const plan = planResponsesOverflowRecovery({
+      fullInput: input,
+      sources,
+      compactThreshold: options.compactThreshold,
+      contextWindow: options.contextWindow,
+      estimatedInputTokens,
+      maxCandidates,
+    });
+    sources = [];
+    options.onPlan?.({ stage, inputItems: input.length, estimatedInputTokens, plan });
+
+    let step: ProgressiveOverflowRecoveryStep | undefined;
+    for (const candidate of plan.candidates) {
+      step = await options.compactCandidate(candidate, stage);
+      if (step) break;
+    }
+    if (!step) {
+      return {
+        recovered: false,
+        input,
+        estimatedInputTokens,
+        stages: stage - 1,
+        reason: 'no_dependency_safe_prefix',
+      };
+    }
+    if (
+      beforeEstimate !== undefined
+      && step.estimatedInputTokens >= beforeEstimate
+    ) {
+      return {
+        recovered: false,
+        input: step.input,
+        estimatedInputTokens: step.estimatedInputTokens,
+        stages: stage,
+        reason: 'non_monotonic_progress',
+      };
+    }
+    const previousInputItems = input.length;
+    input = step.input;
+    estimatedInputTokens = step.estimatedInputTokens;
+    madeProgress = true;
+    options.onAccepted?.({
+      stage,
+      previousInputItems,
+      inputItems: input.length,
+      previousEstimatedInputTokens: beforeEstimate,
+      estimatedInputTokens,
+    });
+    if (estimatedInputTokens <= options.compactThreshold) {
+      return { recovered: true, input, estimatedInputTokens, stages: stage, reason: 'target_reached' };
+    }
+  }
+
+  return {
+    recovered: false,
+    input,
+    estimatedInputTokens,
+    stages: maxStages,
+    reason: 'maximum_compaction_stages',
+  };
+}
+
+function addUsage(
+  left: ResponsesCompactionUsage | undefined,
+  right: ResponsesCompactionUsage | undefined,
+): ResponsesCompactionUsage | undefined {
+  if (!left) return right;
+  if (!right) return left;
+  return {
+    inputTokens: left.inputTokens + right.inputTokens,
+    cachedTokens: left.cachedTokens + right.cachedTokens,
+    cacheWriteTokens: left.cacheWriteTokens + right.cacheWriteTokens,
+    outputTokens: left.outputTokens + right.outputTokens,
+  };
+}
+
+export class ResponsesOverflowRecoverySession {
+  private readonly options: ResponsesOverflowRecoverySessionOptions;
+  private readonly attemptedPrefixes = new Set<string>();
+  private readonly deadlineAt: number;
+  private compactCalls = 0;
+  private contextRejections = 0;
+  private totalUsage?: ResponsesCompactionUsage;
+
+  constructor(options: ResponsesOverflowRecoverySessionOptions) {
+    this.options = options;
+    this.deadlineAt = this.now() + Math.max(1, options.deadlineMs ?? DEFAULT_RECOVERY_DEADLINE_MS);
+  }
+
+  get usage(): ResponsesCompactionUsage | undefined {
+    return this.totalUsage;
+  }
+
+  get attemptCount(): number {
+    return this.compactCalls;
+  }
+
+  claimCompactionCall(): OverflowCompactionClaim {
+    const maxContextRejections = Math.max(
+      1,
+      this.options.maxContextRejections ?? DEFAULT_MAX_CONTEXT_REJECTIONS,
+    );
+    if (this.contextRejections >= maxContextRejections) {
+      return { ok: false, reason: 'context_rejection_limit' };
+    }
+    const maxCompactCalls = Math.max(1, this.options.maxCompactCalls ?? DEFAULT_MAX_COMPACT_CALLS);
+    if (this.compactCalls >= maxCompactCalls) return { ok: false, reason: 'compact_call_limit' };
+    const remainingMs = this.deadlineAt - this.now();
+    if (remainingMs <= 0) return { ok: false, reason: 'deadline' };
+    this.compactCalls += 1;
+    return {
+      ok: true,
+      attempt: this.compactCalls,
+      timeoutMs: Math.max(
+        1,
+        Math.min(this.options.compactTimeoutMs ?? RESPONSES_COMPACT_TIMEOUT_MS, remainingMs),
+      ),
+    };
+  }
+
+  admitFinalCreate(): OverflowFinalCreateAdmission {
+    const remainingMs = this.deadlineAt - this.now();
+    if (remainingMs <= 0) return { ok: false, reason: 'deadline', remainingMs };
+    const reserveMs = Math.max(
+      1,
+      this.options.finalCreateReserveMs ?? DEFAULT_FINAL_CREATE_RESERVE_MS,
+    );
+    return remainingMs < reserveMs
+      ? { ok: false, reason: 'final_create_reserve', remainingMs }
+      : { ok: true, remainingMs };
+  }
+
+  recordExternalCompaction(
+    error?: unknown,
+    usage?: ResponsesCompactionUsage,
+    countContextRejection = true,
+  ): void {
+    this.totalUsage = addUsage(this.totalUsage, usage);
+    if (
+      countContextRejection
+      && error instanceof ResponsesCompactionError
+      && error.failureClass === 'context_length'
+    ) {
+      this.contextRejections += 1;
+    }
+  }
+
+  async recover(
+    request: ResponsesOverflowRecoveryRequest,
+  ): Promise<ProgressiveOverflowRecoveryResult> {
+    if (
+      request.reason === 'response_context_rejection'
+      && request.forceInitialCompaction
+      && request.estimatedInputTokens !== undefined
+      && request.estimatedInputTokens <= this.options.compactThreshold
+      && request.input.length > 0
+    ) {
+      const directStep = await this.compactCandidate({
+        source: 'inferred',
+        prefix: request.input,
+        tail: [],
+        prefixFingerprint: itemFingerprint(request.input),
+        tailFingerprint: itemFingerprint([]),
+        estimatedPrefixTokens: request.estimatedInputTokens,
+        estimatedTailTokens: fixedPromptTokens(request.input, request.estimatedInputTokens),
+      }, request.reason, 0);
+      if (
+        directStep
+        && directStep.estimatedInputTokens < request.estimatedInputTokens
+        && directStep.estimatedInputTokens <= this.options.compactThreshold
+      ) {
+        this.emit({
+          event: 'ws_overflow_recovery', outcome: 'stage_accepted',
+          reason: request.reason, stage: 0,
+          previousInputItems: request.input.length,
+          inputItems: directStep.input.length,
+          previousEstimatedInputTokens: request.estimatedInputTokens,
+          estimatedInputTokens: directStep.estimatedInputTokens,
+        });
+        return {
+          recovered: true,
+          input: directStep.input,
+          estimatedInputTokens: directStep.estimatedInputTokens,
+          stages: 1,
+          reason: 'target_reached',
+        };
+      }
+      if (directStep) {
+        this.emit({
+          event: 'ws_overflow_recovery', outcome: 'candidate_rejected',
+          reason: 'non_monotonic_progress', stage: 0,
+          previousEstimatedInputTokens: request.estimatedInputTokens,
+          estimatedRebasedTokens: directStep.estimatedInputTokens,
+        });
+      }
+    }
+    const result = await runProgressiveOverflowRecovery({
+      fullInput: request.input,
+      sources: request.sources,
+      compactThreshold: this.options.compactThreshold,
+      contextWindow: this.options.contextWindow,
+      estimatedInputTokens: request.estimatedInputTokens,
+      forceInitialCompaction: request.forceInitialCompaction,
+      compactCandidate: (candidate, stage) => this.compactCandidate(candidate, request.reason, stage),
+      onPlan: event => this.emit({
+        event: 'ws_overflow_recovery',
+        outcome: event.plan.candidates.length ? 'planned' : 'unavailable',
+        reason: request.reason,
+        contextWindow: this.options.contextWindow,
+        compactThreshold: this.options.compactThreshold,
+        estimatedInputTokens: event.estimatedInputTokens,
+        sourceItems: event.inputItems,
+        candidateCount: event.plan.candidates.length,
+        rejected: event.plan.rejected.slice(0, REJECTED_DIAGNOSTIC_LIMIT),
+        rejectedCount: event.plan.rejected.length,
+        stage: event.stage,
+      }),
+      onAccepted: event => this.emit({
+        event: 'ws_overflow_recovery',
+        outcome: 'stage_accepted',
+        reason: request.reason,
+        contextWindow: this.options.contextWindow,
+        compactThreshold: this.options.compactThreshold,
+        ...event,
+      }),
+    });
+    if (!result.recovered) {
+      this.emit({
+        event: 'ws_overflow_recovery',
+        outcome: 'exhausted',
+        reason: result.reason,
+        contextWindow: this.options.contextWindow,
+        compactThreshold: this.options.compactThreshold,
+        stage: result.stages,
+        rebasedItems: result.input.length,
+        estimatedRebasedTokens: result.estimatedInputTokens,
+      });
+    }
+    return result;
+  }
+
+  private async compactCandidate(
+    candidate: OverflowRecoveryCandidate,
+    reason: OverflowRecoveryReason,
+    stage: number,
+  ): Promise<ProgressiveOverflowRecoveryStep | undefined> {
+    if (this.attemptedPrefixes.has(candidate.prefixFingerprint)) return undefined;
+    const claim = this.claimCompactionCall();
+    if (!claim.ok) {
+      this.emit({
+        event: 'ws_overflow_recovery', outcome: 'budget_exhausted', reason: claim.reason,
+        compactCalls: this.compactCalls, contextRejections: this.contextRejections, stage,
+      });
+      return undefined;
+    }
+    this.attemptedPrefixes.add(candidate.prefixFingerprint);
+    this.emit({
+      event: 'ws_overflow_recovery', outcome: 'attempted', reason, source: candidate.source,
+      contextWindow: this.options.contextWindow, compactThreshold: this.options.compactThreshold,
+      prefixItems: candidate.prefix.length, tailItems: candidate.tail.length,
+      estimatedPrefixTokens: candidate.estimatedPrefixTokens,
+      estimatedTailTokens: candidate.estimatedTailTokens,
+      prefixFingerprint: candidate.prefixFingerprint, tailFingerprint: candidate.tailFingerprint,
+      attemptCount: this.attemptedPrefixes.size, compactCallAttempt: claim.attempt, stage,
+    });
+    try {
+      const compacted = await compactResponsesWindow({
+        requestUrl: this.options.requestUrl,
+        headers: this.options.headers,
+        payload: { ...this.options.payload, input: candidate.prefix },
+        fetch: this.options.fetch,
+        signal: this.options.signal,
+        timeoutMs: claim.timeoutMs,
+      });
+      this.totalUsage = addUsage(this.totalUsage, compacted.usage);
+      const input = [...compacted.output, ...candidate.tail];
+      const estimatedInputTokens = candidate.estimatedTailTokens
+        + (compacted.usage?.outputTokens ?? approximateResponsesItemsTokens(compacted.output));
+      this.emit({
+        event: 'ws_overflow_recovery', outcome: 'compact_completed', reason,
+        source: candidate.source, contextWindow: this.options.contextWindow,
+        compactThreshold: this.options.compactThreshold, prefixItems: candidate.prefix.length,
+        compactedItems: compacted.output.length, tailItems: candidate.tail.length,
+        rebasedItems: input.length, estimatedRebasedTokens: estimatedInputTokens,
+        prefixFingerprint: candidate.prefixFingerprint, tailFingerprint: candidate.tailFingerprint,
+        attemptCount: this.attemptedPrefixes.size, compactCallAttempt: claim.attempt, stage,
+        ...(compacted.usage ?? {}),
+      });
+      if (estimatedInputTokens >= this.options.contextWindow) {
+        this.emit({
+          event: 'ws_overflow_recovery', outcome: 'candidate_rejected',
+          reason: 'rebased_input_exceeds_context_window', source: candidate.source,
+          contextWindow: this.options.contextWindow, estimatedRebasedTokens: estimatedInputTokens,
+          prefixFingerprint: candidate.prefixFingerprint, compactCallAttempt: claim.attempt, stage,
+        });
+        return undefined;
+      }
+      return { input, estimatedInputTokens };
+    } catch (error) {
+      const compactError = error instanceof ResponsesCompactionError ? error : undefined;
+      this.recordExternalCompaction(error, compactError?.usage);
+      this.emit({
+        event: 'ws_overflow_recovery', outcome: 'candidate_failed', reason,
+        source: candidate.source, contextWindow: this.options.contextWindow,
+        prefixFingerprint: candidate.prefixFingerprint, attemptCount: this.attemptedPrefixes.size,
+        compactCallAttempt: claim.attempt, stage,
+        errorType: error instanceof Error ? error.name : typeof error,
+        statusCode: compactError?.statusCode, failureClass: compactError?.failureClass,
+        errorCode: compactError?.errorCode, providerErrorType: compactError?.errorType,
+        errorFingerprint: compactError?.errorFingerprint,
+      });
+      if (!compactError || compactError.failureClass !== 'context_length') throw error;
+      return undefined;
+    }
+  }
+
+  private emit(event: Record<string, unknown>): void {
+    this.options.onDiagnostic?.(event);
+  }
+
+  private now(): number {
+    return (this.options.now ?? Date.now)();
+  }
 }

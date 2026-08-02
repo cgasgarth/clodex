@@ -50,7 +50,10 @@ export default tseslint.config(
   {
     // Durable keyring recovery is intentionally explicit: flattening these
     // transaction branches mechanically would make failure semantics harder to audit.
-    files: ['src/credentials/provider-store.ts'],
+    files: [
+      'src/credentials/provider-store.ts',
+      'src/credentials/keyring/**/*.ts',
+    ],
     rules: {
       'max-depth': ['error', 6],
     },

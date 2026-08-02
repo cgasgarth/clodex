@@ -10,9 +10,10 @@ export interface AgentStreamTransactionOptions {
 }
 
 /**
- * Holds child-agent output behind a transaction boundary until the upstream
+ * Holds one Claude turn behind a transaction boundary until the upstream
  * response completes. Until commit(), a transient provider failure can discard
  * the attempt and replay it without duplicating text or tool calls in Claude.
+ * SSE heartbeats are written separately and do not cross this semantic boundary.
  */
 export class AgentStreamTransaction {
   readonly enabled: boolean;
@@ -100,25 +101,36 @@ export function createAgentStreamTransaction(options: CreateAgentStreamTransacti
   return { transaction, ensureHeaders };
 }
 
-export const CHILD_AGENT_STREAM_MAX_RETRIES = 2;
+export const RESPONSE_STREAM_MAX_RETRIES = 2;
+const RESPONSE_STREAM_MAX_RETRY_AFTER_SECONDS = 15;
 
-export function childAgentRetryDelayMs(retryNumber: number, retryAfterSeconds?: number): number {
+export function isResponseStreamRetryEligible(
+  retryable: boolean,
+  retryAfterSeconds?: number,
+): boolean {
+  return retryable && (
+    retryAfterSeconds === undefined
+    || retryAfterSeconds <= RESPONSE_STREAM_MAX_RETRY_AFTER_SECONDS
+  );
+}
+
+export function responseStreamRetryDelayMs(retryNumber: number, retryAfterSeconds?: number): number {
   if (retryAfterSeconds !== undefined) return retryAfterSeconds * 1_000;
-  const boundedRetry = Math.max(1, Math.min(retryNumber, CHILD_AGENT_STREAM_MAX_RETRIES));
+  const boundedRetry = Math.max(1, Math.min(retryNumber, RESPONSE_STREAM_MAX_RETRIES));
   return 250 * (2 ** (boundedRetry - 1));
 }
 
-export function shouldRetryChildAgentStream(
+export function shouldRetryResponseStream(
   transaction: AgentStreamTransaction,
   retryable: boolean,
   retryCount: number,
 ): boolean {
   return transaction.enabled && transaction.replaySafe && retryable
-    && retryCount < CHILD_AGENT_STREAM_MAX_RETRIES;
+    && retryCount < RESPONSE_STREAM_MAX_RETRIES;
 }
 
 /** Wait for retry backoff, resolving false immediately when Claude disconnects. */
-export function waitForChildAgentRetry(delayMs: number, signal: AbortSignal): Promise<boolean> {
+export function waitForResponseStreamRetry(delayMs: number, signal: AbortSignal): Promise<boolean> {
   if (signal.aborted) return Promise.resolve(false);
   return new Promise(resolve => {
     const onAbort = () => {

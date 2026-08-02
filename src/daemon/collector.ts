@@ -192,6 +192,10 @@ export class DaemonInferenceCollector {
     return this.diagnostics.slice(-Math.max(1, Math.min(limit, 200))).reverse();
   }
 
+  recordDiagnostic(diagnostic: DaemonDiagnostic): void {
+    this.pushDiagnostic(diagnostic);
+  }
+
   private finish(
     usage: PendingUsage,
     outcome: 'completed' | 'cancelled' | 'failed',
