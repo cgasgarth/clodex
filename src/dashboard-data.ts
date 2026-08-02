@@ -12,6 +12,7 @@ import type {
   SecondwindSnapshot,
 } from './daemon/secondwind.js';
 import { DASHBOARD_CONTROL_REQUEST_TIMEOUT_MS } from './timeouts.js';
+import type { DiagnosticLogMode } from './types.js';
 
 interface WebSocketStatus {
   total: number;
@@ -117,6 +118,7 @@ export interface DashboardPanelSnapshot {
   status?: DaemonStatus;
   accounts?: Account[];
   diagnostics?: Diagnostic[];
+  diagnosticLogMode?: DiagnosticLogMode;
   secondwind?: SecondwindSnapshot;
   models?: DaemonClaudeModelView[];
   warnings: string[];
@@ -138,7 +140,10 @@ export async function loadDashboardPanels(
   const [status, accounts, diagnostics, secondwind, models] = await Promise.allSettled([
     request<DaemonStatus>('/v1/status', options),
     request<{ accounts: Account[] }>('/v1/accounts', options),
-    request<{ diagnostics: Diagnostic[] }>('/v1/diagnostics?limit=20', options),
+    request<{ diagnostics: Diagnostic[]; mode: DiagnosticLogMode }>(
+      '/v1/diagnostics?limit=20',
+      options,
+    ),
     request<SecondwindSnapshot>('/v1/secondwind', options),
     request<DaemonClaudeModelSnapshot>('/v1/claude/models', options),
   ]);
@@ -170,6 +175,9 @@ export async function loadDashboardPanels(
     accounts: accounts.status === 'fulfilled' ? accounts.value.accounts : undefined,
     diagnostics: diagnostics.status === 'fulfilled'
       ? diagnostics.value.diagnostics
+      : undefined,
+    diagnosticLogMode: diagnostics.status === 'fulfilled'
+      ? diagnostics.value.mode
       : undefined,
     secondwind: secondwind.status === 'fulfilled' ? secondwind.value : undefined,
     models: models.status === 'fulfilled' ? models.value.models : undefined,

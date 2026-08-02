@@ -56,6 +56,7 @@ describe('isolated daemon control plane', () => {
       controlSocketPath: socketPath,
       version: 'test',
     });
+    const setDiagnosticLogMode = vi.fn();
     const handle = await startIsolatedDaemonControlApi({
       socketPath,
       runtime,
@@ -68,6 +69,10 @@ describe('isolated daemon control plane', () => {
       secondwind: {
         snapshot: () => ({ mode: 'on' }) as never,
         setMode: vi.fn(),
+      },
+      diagnosticLogs: {
+        snapshot: () => ({ mode: 'error' }),
+        setMode: setDiagnosticLogMode,
       },
       models: {
         snapshot: () => ({ models: [] }),
@@ -95,6 +100,17 @@ describe('isolated daemon control plane', () => {
       expect(result.durationMs).toBeLessThan(750);
       await expect(daemonControlRequest('/v1/status', { socketPath }))
         .resolves.toMatchObject({ ready: true, port: 17647 });
+      await expect(daemonControlRequest('/v1/diagnostics/mode', {
+        socketPath,
+        method: 'POST',
+        body: { mode: 'all' },
+      })).resolves.toMatchObject({ mode: 'error' });
+      expect(setDiagnosticLogMode).toHaveBeenCalledWith('all');
+      await expect(daemonControlRequest('/v1/diagnostics/mode', {
+        socketPath,
+        method: 'POST',
+        body: { mode: 'verbose' },
+      })).rejects.toThrow('Diagnostic log mode must be all or error');
     } finally {
       await handle.close();
       collector.metrics.close();

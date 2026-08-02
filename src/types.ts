@@ -77,6 +77,7 @@ export interface ModelAlias extends FavoriteModel {
 
 export type BridgeMode = 'endpoint' | 'proxy';
 export type SecondwindMode = 'off' | 'shadow' | 'on';
+export type DiagnosticLogMode = 'all' | 'error';
 
 export interface UserPreferences {
   lastModel?: string;
@@ -93,6 +94,8 @@ export interface UserPreferences {
   recentLaunchFolders?: string[];
   /** Daemon-wide Secondwind tool-output optimization mode. */
   secondwindMode?: SecondwindMode;
+  /** Structured WebSocket diagnostics retained by the daemon. */
+  diagnosticLogMode?: DiagnosticLogMode;
   server?: {
     savedPassword?: string;
     /** Provider ids exposed by `clodex server`. */

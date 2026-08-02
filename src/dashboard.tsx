@@ -14,7 +14,7 @@ import {
   API_PRICING_SOURCE,
 } from './daemon/api-pricing.js';
 import type { SecondwindModeMetrics, SecondwindSnapshot } from './daemon/secondwind.js';
-import type { SecondwindMode } from './types.js';
+import type { DiagnosticLogMode, SecondwindMode } from './types.js';
 import type { DaemonClaudeModelSnapshot, DaemonClaudeModelView } from './daemon/model-service.js';
 import {
   accountDisplayName,
@@ -159,6 +159,7 @@ function Dashboard(): React.ReactNode {
   const [metrics, setMetrics] = useState<MetricBucket[]>([]);
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [diagnostics, setDiagnostics] = useState<Diagnostic[]>([]);
+  const [diagnosticLogMode, setDiagnosticLogMode] = useState<DiagnosticLogMode>('error');
   const [secondwind, setSecondwind] = useState<SecondwindSnapshot | null>(null);
   const [models, setModels] = useState<DaemonClaudeModelView[]>([]);
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -195,6 +196,7 @@ function Dashboard(): React.ReactNode {
         if (current >= 0) setSelectedIndex(current);
       }
       if (snapshot.diagnostics) setDiagnostics(snapshot.diagnostics);
+      if (snapshot.diagnosticLogMode) setDiagnosticLogMode(snapshot.diagnosticLogMode);
       if (snapshot.secondwind) setSecondwind(snapshot.secondwind);
       if (snapshot.models) {
         setModels(snapshot.models);
@@ -558,7 +560,20 @@ function Dashboard(): React.ReactNode {
       daemonControlRequest('/v1/service/restart', { method: 'POST' })
         .then(() => setMessage('Restart requested; reconnecting…'))
         .catch(error => setMessage(error instanceof Error ? error.message : String(error)));
-
+      return;
+    }
+    if (view === 'diagnostics' && (input === 'a' || input === 'e')) {
+      const mode: DiagnosticLogMode = input === 'a' ? 'all' : 'error';
+      daemonControlRequest<{ mode: DiagnosticLogMode }>('/v1/diagnostics/mode', {
+        method: 'POST',
+        body: { mode },
+      }).then(
+        result => {
+          setDiagnosticLogMode(result.mode);
+          setMessage(`Diagnostic logging set to ${result.mode}.`);
+        },
+        error => setMessage(error instanceof Error ? error.message : String(error)),
+      );
     }
   });
 
@@ -791,10 +806,12 @@ function Dashboard(): React.ReactNode {
       </>
     );
   } else if (view === 'diagnostics') {
-    controls = `R R restart daemon · ${VIEW_SWITCH_HINT} · r refresh · q quit`;
+    controls = `a all · e errors · R R restart daemon · ${VIEW_SWITCH_HINT} · r refresh · q quit`;
     content = (
       <Box borderStyle="round" paddingX={1} flexDirection="column">
         <Text bold>Recent diagnostics</Text>
+        <Text>Log mode: <Text color="cyan">{diagnosticLogMode}</Text></Text>
+        <Text dimColor>all records lifecycle detail; error retains actionable failures only.</Text>
         {diagnostics.length === 0
           ? <Text dimColor>No recent failures or compaction warnings.</Text>
           : diagnostics.map((diagnostic, index) => (
