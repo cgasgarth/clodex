@@ -10,6 +10,7 @@ import {
   secondwindSessionSummary,
   secondwindTokenSummary,
   usageRange,
+  usagePeriodLabel,
   VIEW_SWITCH_HINT,
   type DashboardRequest,
 } from '../src/dashboard-data.js';
@@ -25,7 +26,7 @@ describe('dashboard usage chart', () => {
   });
 
   it('uses a zero y-axis for an empty range', () => {
-    const range = usageRange('month', -1, new Date(2026, 6, 29, 12));
+    const range = usageRange('last30', -1, new Date(2026, 6, 29, 12));
     const chart = lineChart([], range, {
       width: 3,
       height: 3,
@@ -35,13 +36,20 @@ describe('dashboard usage chart', () => {
     expect(chart.join('\n')).not.toContain('$1.00');
   });
 
-  it('navigates calendar day, week, and month ranges', () => {
+  it('navigates day and rolling 7-day and 30-day ranges', () => {
     const now = new Date(2026, 6, 29, 12);
     expect(usageRange('day', -1, now).start.getDate()).toBe(28);
-    expect(usageRange('week', 0, now).start.getDay()).toBe(1);
-    expect(usageRange('month', -1, now).start.getMonth()).toBe(5);
-    expect(cyclePeriod('day', 1)).toBe('week');
-    expect(cyclePeriod('day', -1)).toBe('month');
+    expect(usageRange('last7', 0, now).start.getDate()).toBe(23);
+    expect(usageRange('last7', 0, now).end.getDate()).toBe(30);
+    expect(usageRange('last7', -1, now).start.getDate()).toBe(16);
+    expect(usageRange('last30', 0, now).start.getMonth()).toBe(5);
+    expect(usageRange('last30', 0, now).start.getDate()).toBe(30);
+    expect(usageRange('last30', -1, now).start.getMonth()).toBe(4);
+    expect(usageRange('last30', -1, now).start.getDate()).toBe(31);
+    expect(cyclePeriod('day', 1)).toBe('last7');
+    expect(cyclePeriod('day', -1)).toBe('last30');
+    expect(usagePeriodLabel('last7')).toBe('LAST 7 DAYS');
+    expect(usagePeriodLabel('last30')).toBe('LAST 30 DAYS');
   });
 
   it('formats small API-equivalent costs without rounding them away', () => {

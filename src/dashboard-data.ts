@@ -97,7 +97,7 @@ export interface DeviceCodePrompt {
   userCode: string;
 }
 
-export type UsagePeriod = 'day' | 'week' | 'month';
+export type UsagePeriod = 'day' | 'last7' | 'last30';
 
 export interface UsageRange {
   period: UsagePeriod;
@@ -124,7 +124,7 @@ export interface DashboardPanelSnapshot {
   warnings: string[];
 }
 
-const PERIODS: UsagePeriod[] = ['day', 'week', 'month'];
+const PERIODS: UsagePeriod[] = ['day', 'last7', 'last30'];
 const CHART_WIDTH = 56;
 const CHART_HEIGHT = 6;
 export const VIEW_SWITCH_HINT = 'Press 1–6 to switch views';
@@ -242,13 +242,6 @@ function startOfDay(date: Date): Date {
   return new Date(date.getFullYear(), date.getMonth(), date.getDate());
 }
 
-function startOfWeek(date: Date): Date {
-  const day = startOfDay(date);
-  const mondayOffset = (day.getDay() + 6) % 7;
-  day.setDate(day.getDate() - mondayOffset);
-  return day;
-}
-
 export function usageRange(
   period: UsagePeriod,
   offset = 0,
@@ -267,28 +260,28 @@ export function usageRange(
     });
     return { period, offset, start, end, label, bucketMinutes: 60 };
   }
-  if (period === 'week') {
-    const start = startOfWeek(now);
-    start.setDate(start.getDate() + offset * 7);
-    const end = new Date(start);
-    end.setDate(end.getDate() + 7);
-    const inclusiveEnd = new Date(end);
-    inclusiveEnd.setDate(inclusiveEnd.getDate() - 1);
-    const label = `${start.toLocaleDateString(undefined, {
-      month: 'short',
-      day: 'numeric',
-    })} – ${inclusiveEnd.toLocaleDateString(undefined, {
-      month: 'short',
-      day: 'numeric',
-      year: 'numeric',
-    })}`;
-    return { period, offset, start, end, label, bucketMinutes: 60 };
-  }
-
-  const start = new Date(now.getFullYear(), now.getMonth() + offset, 1);
-  const end = new Date(start.getFullYear(), start.getMonth() + 1, 1);
-  const label = start.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+  const windowDays = period === 'last7' ? 7 : 30;
+  const end = startOfDay(now);
+  end.setDate(end.getDate() + 1 + offset * windowDays);
+  const start = new Date(end);
+  start.setDate(start.getDate() - windowDays);
+  const inclusiveEnd = new Date(end);
+  inclusiveEnd.setDate(inclusiveEnd.getDate() - 1);
+  const label = `${start.toLocaleDateString(undefined, {
+    month: 'short',
+    day: 'numeric',
+  })} – ${inclusiveEnd.toLocaleDateString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  })}`;
   return { period, offset, start, end, label, bucketMinutes: 60 };
+}
+
+export function usagePeriodLabel(period: UsagePeriod): string {
+  if (period === 'last7') return 'LAST 7 DAYS';
+  if (period === 'last30') return 'LAST 30 DAYS';
+  return 'DAY';
 }
 
 export function cyclePeriod(period: UsagePeriod, direction: 1 | -1): UsagePeriod {
