@@ -181,7 +181,7 @@ clodex stop                 # stop the daemon
 
 Bare `clodex` starts the daemon if needed and opens six views: Overview, Usage,
 Accounts, Diagnostics, Secondwind, and Models. Press `1`–`6` to switch views. Usage
-supports day/week/month navigation with `Tab`, `Shift+Tab`, `←`, `→`, and `0`.
+supports day/last-7-days/last-30-days navigation with `Tab`, `Shift+Tab`, `←`, `→`, and `0`.
 Secondwind mode changes require confirmation. The Models view enables or disables OpenAI
 models in the live route catalog and the patched picker used by new Claude launches.
 The Diagnostics view switches between compact error-only logs and full lifecycle logs;

@@ -29,6 +29,7 @@ import {
   secondwindSessionSummary,
   secondwindTokenSummary,
   usageRange,
+  usagePeriodLabel,
   VIEW_SWITCH_HINT,
   type Account,
   type DaemonStatus,
@@ -703,7 +704,7 @@ function Dashboard(): React.ReactNode {
       </>
     );
   } else if (view === 'usage') {
-    controls = `Tab/Shift+Tab day·week·month · ←/→ period · 0 current · ${VIEW_SWITCH_HINT} · r refresh · q quit`;
+    controls = `Tab/Shift+Tab day · last 7 days · last 30 days · ←/→ period · 0 current · ${VIEW_SWITCH_HINT} · r refresh · q quit`;
     const tokenValues = metrics.map(bucket =>
       bucket.inputTokens
       + bucket.cachedInputTokens
@@ -715,7 +716,7 @@ function Dashboard(): React.ReactNode {
       <>
         <Box justifyContent="space-between">
           <Text>
-            <Text bold color="cyan">{period.toUpperCase()}</Text> · {range.label}
+            <Text bold color="cyan">{usagePeriodLabel(period)}</Text> · {range.label}
           </Text>
           <Text>{activeAccount ? accountDisplayName(activeAccount) : 'No active account'}</Text>
         </Box>
