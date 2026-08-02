@@ -107,7 +107,7 @@ async function runClaudeDaemonEndpointCommand(
         ? { accountId: process.env['CLODEX_ACCOUNT'] }
         : {},
       socketPath: runtime.controlSocketPath,
-      timeoutMs: 1_000,
+      timeoutMs: 5_000,
     });
     launchTicket = attached?.ticket;
   } catch (error) {
@@ -227,7 +227,7 @@ export async function runClaudeCommand(
 
   if (!agentStdout) relayIntro('Claude Code');
 
-  if (!dryRun && await needsFirstRunSetup()) {
+  if (!dryRun && needsFirstRunSetup()) {
     const firstRun = await runFirstRunWizard(trace);
     if (firstRun === 'cancel') return 0;
   }

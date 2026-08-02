@@ -129,8 +129,8 @@ async function runCredentialHelper(
     child.kill(9);
     throw new Error(`credential helper ${operation} could not start`);
   }
-  if (input !== undefined) stdin.write(input);
-  stdin.end();
+  if (input !== undefined) await stdin.write(input);
+  await stdin.end();
 
   const readOutput = async (): Promise<string> => {
     const reader = stdout.getReader();
