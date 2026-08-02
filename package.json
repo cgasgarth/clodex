@@ -83,20 +83,5 @@
   "homepage": "https://github.com/cgasgarth/clodex#readme",
   "bugs": {
     "url": "https://github.com/cgasgarth/clodex/issues"
-  },
-  "knip": {
-    "ignoreUnresolved": [
-      "/bin/launchctl"
-    ],
-    "entry": [
-      "scripts/*.ts",
-      "tests/**/*.test.ts",
-      "tests/fixtures/*.ts"
-    ],
-    "project": [
-      "src/**/*.{ts,tsx}",
-      "scripts/**/*.ts",
-      "tests/**/*.ts"
-    ]
   }
 }

@@ -95,7 +95,7 @@ describe('Secondwind daemon service', () => {
     expect(service.snapshot()).toMatchObject({
       mode: 'on',
       loaded: true,
-      sessions: 1,
+      sessions: 0,
       applied: { requests: 1, blocksRewritten: 1 },
       latency: { samples: 2, medianMs: 5, p95Ms: 5 },
     });
@@ -121,7 +121,7 @@ describe('Secondwind daemon service', () => {
     expect(rewrite).toHaveBeenCalledTimes(3);
 
     service.close();
-    expect(close).toHaveBeenCalledOnce();
+    expect(close).toHaveBeenCalledTimes(3);
   });
 
   it('rewrites count requests without booking savings metrics', async () => {
@@ -435,7 +435,7 @@ describe('Secondwind daemon service', () => {
     expect(service.snapshot().applied.estimatedSavingsUsd).toBe(0);
   });
 
-  it('shares one optimizer session across concurrent requests for a conversation', async () => {
+  it('uses request-local optimizer sessions while tracking active conversations', async () => {
     let release!: () => void;
     const gate = new Promise<void>(resolve => {
       release = resolve;
@@ -468,11 +468,12 @@ describe('Secondwind daemon service', () => {
       sessionId: 'shared',
       modelId: 'gpt-5.6-sol',
     });
+    expect(service.snapshot().sessions).toBe(1);
     release();
     await Promise.all([first, second]);
 
-    expect(createSession).toHaveBeenCalledOnce();
-    expect(service.snapshot().sessions).toBe(1);
+    expect(createSession).toHaveBeenCalledTimes(2);
+    expect(service.snapshot().sessions).toBe(0);
   });
 
   it('keeps missing-session requests ephemeral and isolates conversation keys', async () => {
@@ -507,8 +508,8 @@ describe('Secondwind daemon service', () => {
     });
 
     expect(createSession).toHaveBeenCalledTimes(4);
-    expect(close).toHaveBeenCalledTimes(2);
-    expect(service.snapshot().sessions).toBe(2);
+    expect(close).toHaveBeenCalledTimes(4);
+    expect(service.snapshot().sessions).toBe(0);
   });
 
   it('loads the real native package and compresses structured Anthropic tool output', async () => {
@@ -527,12 +528,16 @@ describe('Secondwind daemon service', () => {
     const result = JSON.parse(stdout) as {
       originalBytes: number;
       rewrittenBytes: number;
+      repeatedBytes: number;
+      repeatStable: boolean;
       snapshot: ReturnType<SecondwindService['snapshot']>;
     };
     expect(result.rewrittenBytes).toBeLessThan(result.originalBytes);
+    expect(result.repeatedBytes).toBe(result.rewrittenBytes);
+    expect(result.repeatStable).toBe(true);
     expect(result.snapshot.applied).toMatchObject({
-      requests: 1,
-      blocksRewritten: 1,
+      requests: 2,
+      blocksRewritten: 2,
       estimatedTokenRequests: 0,
     });
     expect(result.snapshot.applied.tokensReduced).toBeGreaterThan(0);

@@ -10,8 +10,8 @@ import {
   type SecondwindSavingsEvent,
 } from './metrics.js';
 import type { SecondwindMode } from '../types.js';
+import { SecondwindWorkerPool } from './secondwind-worker-pool.js';
 
-const MAX_SESSIONS = 256;
 const MAX_PENDING_SAVINGS = 2_048;
 const MAX_LATENCY_SAMPLES = 10_000;
 
@@ -26,11 +26,14 @@ interface SecondwindSession {
   rewrite(request: Record<string, unknown>): {
     request: Record<string, unknown>;
     stats?: SecondwindRewriteStats;
-  };
+  } | Promise<{
+    request: Record<string, unknown>;
+    stats?: SecondwindRewriteStats;
+  }>;
   close(): void;
 }
 
-type SecondwindSessionFactory = () => Promise<SecondwindSession>;
+type SecondwindSessionFactory = (key?: string) => Promise<SecondwindSession>;
 
 export interface SecondwindRewriteRequest {
   requestId?: string;
@@ -125,6 +128,7 @@ interface SecondwindServiceOptions {
   createSession?: SecondwindSessionFactory;
   metrics?: SecondwindMetricsPersistence;
   now?: () => number;
+  closeBackend?: () => void;
 }
 
 function emptyMetrics(): SecondwindModeMetrics {
@@ -362,8 +366,8 @@ export class SecondwindService {
   readonly #persistMode: (mode: SecondwindMode) => void;
   readonly #createSession: SecondwindSessionFactory;
   readonly #now: () => number;
-  readonly #sessions = new Map<string, SecondwindSession>();
-  readonly #pendingSessions = new Map<string, Promise<SecondwindSession>>();
+  readonly #closeBackend: () => void;
+  readonly #activeSessions = new Map<string, number>();
   readonly #pendingSavings = new Map<string, PendingSecondwindSavings>();
   readonly #sessionSavings = new Map<string, SecondwindSessionSavings>();
   readonly #latencySamples: number[] = [];
@@ -391,6 +395,7 @@ export class SecondwindService {
     this.#metrics = options.metrics;
     this.#lifetime = loadLifetimeMetrics(options.metrics);
     this.#now = options.now ?? performance.now.bind(performance);
+    this.#closeBackend = options.closeBackend ?? (() => {});
   }
 
   setMode(mode: SecondwindMode): void {
@@ -404,7 +409,7 @@ export class SecondwindService {
       mode: this.#mode,
       since: this.#since,
       loaded: this.#loaded,
-      sessions: this.#sessions.size,
+      sessions: this.#activeSessions.size,
       applied: { ...this.#applied },
       shadow: { ...this.#shadow },
       lifetime: { ...this.#lifetime },
@@ -477,13 +482,15 @@ export class SecondwindService {
     if (mode === 'off') return input.body;
 
     const startedAt = this.#now();
-    let ephemeral: SecondwindSession | undefined;
+    const sessionKey = input.sessionId
+      ? `${input.modelId}:${input.sessionId}`
+      : undefined;
+    let session: SecondwindSession | undefined;
     try {
-      const session = input.sessionId
-        ? await this.#sessionFor(`${input.modelId}:${input.sessionId}`)
-        : (ephemeral = await this.#createSession());
+      if (sessionKey) this.#markSessionActive(sessionKey);
+      session = await this.#createSession(sessionKey);
       this.#loaded = true;
-      const rawResult: unknown = session.rewrite(input.request);
+      const rawResult: unknown = await session.rewrite(input.request);
       if (!rawResult || typeof rawResult !== 'object') {
         throw new Error('Secondwind returned an invalid rewritten request');
       }
@@ -564,7 +571,8 @@ export class SecondwindService {
       this.#lastError = error instanceof Error ? error.message : String(error);
       return input.body;
     } finally {
-      ephemeral?.close();
+      session?.close();
+      if (sessionKey) this.#markSessionFinished(sessionKey);
       const latencyMs = Math.max(0, this.#now() - startedAt);
       this.#latencySamples.push(latencyMs);
       if (this.#latencySamples.length > MAX_LATENCY_SAMPLES) {
@@ -574,9 +582,9 @@ export class SecondwindService {
   }
 
   close(): void {
-    for (const session of this.#sessions.values()) session.close();
-    this.#sessions.clear();
+    this.#activeSessions.clear();
     this.#pendingSavings.clear();
+    this.#closeBackend();
   }
 
   #recordAppliedSavings(
@@ -661,42 +669,40 @@ export class SecondwindService {
     }
   }
 
-  async #sessionFor(key: string): Promise<SecondwindSession> {
-    const existing = this.#sessions.get(key);
-    if (existing) {
-      this.#sessions.delete(key);
-      this.#sessions.set(key, existing);
-      return existing;
-    }
-    const pending = this.#pendingSessions.get(key);
-    if (pending) return pending;
-    const creation = this.#createSession();
-    this.#pendingSessions.set(key, creation);
-    let created: SecondwindSession;
-    try {
-      created = await creation;
-    } finally {
-      this.#pendingSessions.delete(key);
-    }
-    this.#sessions.set(key, created);
-    if (this.#sessions.size > MAX_SESSIONS) {
-      const oldestKey = this.#sessions.keys().next().value;
-      if (oldestKey) {
-        const oldest = this.#sessions.get(oldestKey);
-        this.#sessions.delete(oldestKey);
-        oldest?.close();
-      }
-    }
-    return created;
+  #markSessionActive(key: string): void {
+    this.#activeSessions.set(key, (this.#activeSessions.get(key) ?? 0) + 1);
+  }
+
+  #markSessionFinished(key: string): void {
+    const remaining = (this.#activeSessions.get(key) ?? 1) - 1;
+    if (remaining <= 0) this.#activeSessions.delete(key);
+    else this.#activeSessions.set(key, remaining);
   }
 }
 
 export function createDaemonSecondwindService(
   metrics?: SecondwindMetricsPersistence,
 ): SecondwindService {
+  const workers = new SecondwindWorkerPool();
   return new SecondwindService({
     initialMode: loadPreferences().secondwindMode,
     metrics,
     persistMode: mode => savePreferences({ secondwindMode: mode }),
+    createSession: async key => {
+      const workerKey = key ?? `ephemeral:${process.pid}:${crypto.randomUUID()}`;
+      return {
+        rewrite: async request => {
+          const result = await workers.rewrite(workerKey, request);
+          return {
+            request: JSON.parse(
+              new TextDecoder().decode(result.body),
+            ) as Record<string, unknown>,
+            stats: result.stats,
+          };
+        },
+        close: () => {},
+      };
+    },
+    closeBackend: () => workers.close(),
   });
 }
