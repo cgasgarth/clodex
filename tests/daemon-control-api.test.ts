@@ -40,7 +40,15 @@ describe('daemon control API', () => {
       await expect(daemonControlRequest('/v1/status', {
         socketPath: '/tmp/clodex-test.sock',
         timeoutMs: 1,
-      })).rejects.toThrow('Clodex daemon request timed out: GET /v1/status');
+      })).rejects.toThrow(
+        /Clodex daemon request timed out after \d+ms \(budget 1ms\): GET \/v1\/status/,
+      );
+      await expect(daemonControlRequest(
+        '/v1/metrics?accountId=private-account&start=private-date',
+        { socketPath: '/tmp/clodex-test.sock', timeoutMs: 1 },
+      )).rejects.toThrow(
+        /GET \/v1\/metrics\?accountId&start$/,
+      );
     } finally {
       fetchMock.mockRestore();
     }

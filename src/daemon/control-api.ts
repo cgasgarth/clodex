@@ -10,6 +10,7 @@ import type { SecondwindMode } from '../types.js';
 import type {
   DaemonClaudeModelSnapshot,
 } from './model-service.js';
+import { ControlRequestDiagnostics } from './control-diagnostics.js';
 
 const MAX_CONTROL_BODY_BYTES = 64 * 1024;
 const MAX_METRICS_RANGE_MS = 32 * 24 * 60 * 60_000;
@@ -87,13 +88,16 @@ export async function startDaemonControlApi(
   rmSync(options.socketPath, { force: true });
   mkdirSync(dirname(options.socketPath), { recursive: true, mode: 0o700 });
 
+  const diagnostics = new ControlRequestDiagnostics({
+    emit: diagnostic => options.collector.recordDiagnostic(diagnostic),
+  });
   const server = Bun.serve({
     unix: options.socketPath,
     maxRequestBodySize: MAX_CONTROL_BODY_BYTES,
     async fetch(request, bunServer) {
       bunServer.timeout(request, DAEMON_CONTROL_IDLE_TIMEOUT_SECONDS);
-      const url = new URL(request.url);
-      try {
+      return diagnostics.track(request, async () => {
+        const url = new URL(request.url);
       if (request.method === 'GET' && url.pathname === '/v1/health') {
         return sendJson(200, {
           ok: true,
@@ -226,17 +230,16 @@ export async function startDaemonControlApi(
         return sendJson(202, { ok: true, action: 'stop' });
       }
         return sendJson(404, { error: 'Unknown daemon control endpoint' });
-      } catch (error) {
-        return sendJson(400, {
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
+      }).catch(error => sendJson(400, {
+        error: error instanceof Error ? error.message : String(error),
+      }));
     },
   });
 
   chmodSync(options.socketPath, 0o600);
   return {
     close: async () => {
+      diagnostics.close();
       await server.stop(true);
       rmSync(options.socketPath, { force: true });
     },
