@@ -668,6 +668,7 @@ export class ResponsesOverflowRecoverySession {
       return undefined;
     }
     this.attemptedPrefixes.add(candidate.prefixFingerprint);
+    const startedAt = this.now();
     this.emit({
       event: 'ws_overflow_recovery', outcome: 'attempted', reason, source: candidate.source,
       contextWindow: this.options.contextWindow, compactThreshold: this.options.compactThreshold,
@@ -676,6 +677,18 @@ export class ResponsesOverflowRecoverySession {
       estimatedTailTokens: candidate.estimatedTailTokens,
       prefixFingerprint: candidate.prefixFingerprint, tailFingerprint: candidate.tailFingerprint,
       attemptCount: this.attemptedPrefixes.size, compactCallAttempt: claim.attempt, stage,
+    });
+    this.emit({
+      event: 'ws_compaction', outcome: 'started',
+      transport: 'responses_compact_endpoint', mode: 'overflow_recovery',
+      reason, source: candidate.source, stage,
+      contextWindow: this.options.contextWindow,
+      compactThreshold: this.options.compactThreshold,
+      prefixItems: candidate.prefix.length,
+      tailItems: candidate.tail.length,
+      estimatedPrefixTokens: candidate.estimatedPrefixTokens,
+      estimatedTailTokens: candidate.estimatedTailTokens,
+      compactCallAttempt: claim.attempt,
     });
     try {
       const compacted = await compactResponsesWindow({
@@ -700,6 +713,18 @@ export class ResponsesOverflowRecoverySession {
         attemptCount: this.attemptedPrefixes.size, compactCallAttempt: claim.attempt, stage,
         ...(compacted.usage ?? {}),
       });
+      this.emit({
+        event: 'ws_compaction', outcome: 'completed',
+        transport: 'responses_compact_endpoint', mode: 'overflow_recovery',
+        reason, source: candidate.source, stage,
+        durationMs: Math.max(0, this.now() - startedAt),
+        prefixItems: candidate.prefix.length,
+        compactedItems: compacted.output.length,
+        tailItems: candidate.tail.length,
+        estimatedRebasedTokens: estimatedInputTokens,
+        compactCallAttempt: claim.attempt,
+        ...(compacted.usage ?? {}),
+      });
       if (estimatedInputTokens >= this.options.contextWindow) {
         this.emit({
           event: 'ws_overflow_recovery', outcome: 'candidate_rejected',
@@ -721,6 +746,18 @@ export class ResponsesOverflowRecoverySession {
         errorType: error instanceof Error ? error.name : typeof error,
         statusCode: compactError?.statusCode, failureClass: compactError?.failureClass,
         errorCode: compactError?.errorCode, providerErrorType: compactError?.errorType,
+        errorFingerprint: compactError?.errorFingerprint,
+      });
+      this.emit({
+        event: 'ws_compaction', outcome: 'failed',
+        transport: 'responses_compact_endpoint', mode: 'overflow_recovery',
+        reason, source: candidate.source, stage,
+        durationMs: Math.max(0, this.now() - startedAt),
+        compactCallAttempt: claim.attempt,
+        statusCode: compactError?.statusCode,
+        failureClass: compactError?.failureClass,
+        errorCode: compactError?.errorCode,
+        providerErrorType: compactError?.errorType,
         errorFingerprint: compactError?.errorFingerprint,
       });
       if (!compactError || compactError.failureClass !== 'context_length') throw error;

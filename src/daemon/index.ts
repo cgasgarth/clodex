@@ -39,6 +39,11 @@ import {
 import { createDaemonAccountController } from './account-service.js';
 import { createDaemonSecondwindService } from './secondwind.js';
 import { createDaemonClaudeModelController } from './model-service.js';
+import { loadPreferences, savePreferences } from '../config.js';
+import {
+  diagnosticLogMode,
+  shouldWriteDiagnosticEvent,
+} from '../diagnostic-log-mode.js';
 
 interface DaemonStatusResponse {
   running: boolean;
@@ -275,6 +280,14 @@ async function runDaemonProcess(): Promise<number> {
   const collector = new DaemonInferenceCollector();
   const accounts = createDaemonAccountController();
   const secondwind = createDaemonSecondwindService(collector.metrics);
+  let activeDiagnosticLogMode = diagnosticLogMode(loadPreferences().diagnosticLogMode);
+  const diagnosticLogs = {
+    snapshot: () => ({ mode: activeDiagnosticLogMode }),
+    setMode: (mode: typeof activeDiagnosticLogMode) => {
+      activeDiagnosticLogMode = mode;
+      savePreferences({ diagnosticLogMode: mode });
+    },
+  };
   const unsubscribeTrace = subscribeInferenceTrace(event => {
     collector.handle(event);
     secondwind.handleTrace(event);
@@ -332,6 +345,7 @@ async function runDaemonProcess(): Promise<number> {
         processingMode: context.processingMode,
         recordMetrics: context.endpoint === 'messages',
       }),
+      event => shouldWriteDiagnosticEvent(activeDiagnosticLogMode, event),
     );
     const models = createDaemonClaudeModelController(endpoint);
     runtime = createDaemonRuntimeState({
@@ -358,6 +372,7 @@ async function runDaemonProcess(): Promise<number> {
       collector,
       accounts,
       secondwind,
+      diagnosticLogs,
       models,
       requestRestart,
       requestStop: requestShutdown,

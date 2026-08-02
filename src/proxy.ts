@@ -32,6 +32,7 @@ import {
   selectBetaFlags,
 } from './oauth/claude-identity.js';
 import { createLanguageModel, isSdkMigratedNpm, maxToolsForNpm } from './provider-factory.js';
+import type { ResponsesWebSocketDiagnosticEvent } from './oauth/responses-websocket/types.js';
 import { randomUUID } from 'node:crypto';
 import {
   translateRequest as sdkTranslateRequest,
@@ -74,18 +75,39 @@ import {
 
 type ProxyLog = (message: string | (() => string)) => void;
 
-// Claude Code aborts a streaming response after ~180s without a single SSE byte.
-// When an OpenAI model streams a large tool-call argument, the SDK delivers
-// thousands of `tool-input-delta` parts that Relay must buffer (they are only
-// flushed as one `input_json_delta` once the call completes so the input can be
-// sanitized) — so the client sees dead air and disconnects mid-argument. While
-// upstream is still actively delivering parts but no real output has been
-// written, emit an Anthropic `ping` SSE event to keep the client's read-idle
-// timer warm. Gated on recent upstream activity so a genuine upstream stall is
-// still surfaced by the SDK idle watchdog rather than masked by pings forever.
+// Claude Code aborts after several minutes without an SSE byte. Native
+// compaction and buffered tool arguments can both produce a long pre-output gap.
 const STREAM_KEEPALIVE_INTERVAL_MS = 20_000;
 const STREAM_KEEPALIVE_PING = 'event: ping\ndata: {"type":"ping"}\n\n';
 const INTERNAL_ADAPTER_KEEPALIVE_TIMEOUT_MS = 60_000;
+
+function startStreamKeepAlive(options: {
+  response: ServerResponse;
+  transactionEnabled: boolean;
+  ensureHeaders: () => void;
+  lastDownstreamWriteAt: { lastDownstreamWriteAt: number };
+  lastUpstreamPartAt: () => number;
+  intervalMs: number;
+  log: ProxyLog;
+}): ReturnType<typeof setInterval> {
+  const keepAlive = setInterval(() => {
+    if (options.response.writableEnded || options.response.destroyed) return;
+    const now = Date.now();
+    const outputIdleMs = now - options.lastDownstreamWriteAt.lastDownstreamWriteAt;
+    if (outputIdleMs < options.intervalMs) return;
+    if (!options.response.headersSent && !options.transactionEnabled) return;
+    options.ensureHeaders();
+    options.lastDownstreamWriteAt.lastDownstreamWriteAt = now;
+    options.response.write(STREAM_KEEPALIVE_PING);
+    const upstreamIdleMs = now - options.lastUpstreamPartAt();
+    options.log(() => (
+      `stream keepalive ping: output idle ${outputIdleMs}ms, `
+      + `${upstreamIdleMs}ms since last upstream part`
+    ));
+  }, options.intervalMs);
+  keepAlive.unref();
+  return keepAlive;
+}
 
 function createTranslationLifecycle(
   logPath: string | undefined,
@@ -486,6 +508,7 @@ export async function startProxyCatalog(
   resolveRouteForRequest?: ProxyRouteRequestResolver,
   port = 0,
   optimizeRequest?: ProxyRequestOptimizer,
+  shouldLogWebSocketDiagnostic?: (event: ResponsesWebSocketDiagnosticEvent) => boolean,
 ): Promise<ProxyHandle> {
   const proxyToken = getOrCreateProxyToken();
   silenceSdkWarnings();
@@ -847,7 +870,10 @@ export async function startProxyCatalog(
               : undefined,
             onDebug: (msg: string) => plog(() => msg),
             onWebSocketDiagnostic: webSocketDiagnosticsLogPath
-              ? event => writeWebSocketDiagnosticLog(webSocketDiagnosticsLogPath, event)
+              ? event => {
+                  if (shouldLogWebSocketDiagnostic?.(event) === false) return;
+                  writeWebSocketDiagnosticLog(webSocketDiagnosticsLogPath, event);
+                }
               : undefined,
           });
           translationLifecycle?.dispatched();
@@ -860,26 +886,16 @@ export async function startProxyCatalog(
             const writeStreamChunk = (chunk: string) => {
               streamTransaction.write(chunk);
             };
-            // Heartbeat: while upstream keeps delivering parts but nothing has
-            // been written downstream for a full interval (a large tool-call
-            // argument being buffered), emit a ping so Claude Code's ~180s
-            // read-idle timeout does not fire mid-argument. Deliberately does
-            // NOT go through translationLifecycle.onOutput so diagnostic
-            // outputIdleMs still reflects the real buffering gap.
-            const keepAlive = setInterval(() => {
-              if (res.writableEnded) return;
-              const now = Date.now();
-              const outputIdleMs = now - streamState.lastDownstreamWriteAt;
-              const upstreamIdleMs = now - lastUpstreamPartAt;
-              if (outputIdleMs >= keepAliveMs && upstreamIdleMs < keepAliveMs) {
-                if (!res.headersSent && !streamTransaction.enabled) return;
-                ensureStreamHeaders();
-                streamState.lastDownstreamWriteAt = now;
-                res.write(STREAM_KEEPALIVE_PING);
-                plog(() => `stream keepalive ping: output idle ${outputIdleMs}ms, upstream active (${upstreamIdleMs}ms since last part)`);
-              }
-            }, keepAliveMs);
-            keepAlive.unref();
+            // Protocol pings bypass model-output accounting and replay gates.
+            const keepAlive = startStreamKeepAlive({
+              response: res,
+              transactionEnabled: streamTransaction.enabled,
+              ensureHeaders: ensureStreamHeaders,
+              lastDownstreamWriteAt: streamState,
+              lastUpstreamPartAt: () => lastUpstreamPartAt,
+              intervalMs: keepAliveMs,
+              log: plog,
+            });
             let finalUsage: {
               input_tokens: number;
               output_tokens: number;

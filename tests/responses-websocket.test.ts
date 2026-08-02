@@ -1761,6 +1761,14 @@ describe('createResponsesWebSocketFetch', () => {
 
     expect(diagnostics).toContainEqual(expect.objectContaining({
       event: 'ws_compaction',
+      outcome: 'started',
+      reason: 'measured_threshold',
+      transport: 'previous_response_compaction_trigger',
+      sourceItems: secondInput.length,
+      incrementalItems: 1,
+    }));
+    expect(diagnostics).toContainEqual(expect.objectContaining({
+      event: 'ws_compaction',
       outcome: 'completed',
       reason: 'measured_threshold',
       threshold: 900,
@@ -1769,6 +1777,7 @@ describe('createResponsesWebSocketFetch', () => {
       cachedTokens: 950,
       cacheWriteTokens: 25,
       outputTokens: 25,
+      durationMs: expect.any(Number),
     }));
     expect(diagnostics).toContainEqual(expect.objectContaining({
       event: 'ws_head_decision',
@@ -6072,6 +6081,106 @@ describe('createResponsesWebSocketFetch', () => {
     })));
     await readAll(terminal);
     expect(compactFetch).toHaveBeenCalledOnce();
+  });
+
+  it('admits an oversized raw resume from its smaller durable checkpoint after restart', async () => {
+    mkdirSync(process.env.CLODEX_HOME!, { recursive: true });
+    const checkpointStoreDir = mkdtempSync(join(
+      process.env.CLODEX_HOME!,
+      'oversized-raw-resume-checkpoints-',
+    ));
+    const canonical = [{ type: 'compaction', encrypted_content: 'durable-resume' }];
+    const compactBodies: unknown[][] = [];
+    const compactFetch = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body));
+      compactBodies.push(body.input);
+      return new Response(JSON.stringify({ output: canonical }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    });
+    const options = {
+      accountId: 'acct-oversized-raw-resume',
+      compactThreshold: 265_000,
+      contextWindow: 1_000_000,
+      checkpointStoreDir,
+      compactFetch: compactFetch as typeof fetch,
+    };
+    const root = [{
+      role: 'user',
+      content: [{ type: 'input_text', text: 'r'.repeat(400_000) }],
+    }];
+    const beforeRestartFetch = createResponsesWebSocketFetch(WS_URL, undefined, options);
+    const first = await withResponsesWebSocketDiagnosticContext(
+      { estimatedInputTokens: 270_000, claudeAgentId: 'oversized-raw-resume' },
+      () => beforeRestartFetch('https://example.test/responses', {
+        method: 'POST',
+        headers: {},
+        body: JSON.stringify(sessionPayload(root, { model: 'gpt-5.6-luna' })),
+      }),
+    );
+    const firstSocket = lastSocket();
+    firstSocket.emit('open');
+    const assistant = {
+      type: 'function_call',
+      id: 'fc_durable_resume',
+      call_id: 'call_durable_resume',
+      name: 'Bash',
+      arguments: '{"command":"pwd"}',
+      status: 'completed',
+    };
+    firstSocket.emit('message', Buffer.from(JSON.stringify({
+      type: 'response.created', response: { id: 'resp_durable_resume' },
+    })));
+    firstSocket.emit('message', Buffer.from(JSON.stringify({
+      type: 'response.output_item.done', output_index: 0, item: assistant,
+    })));
+    firstSocket.emit('message', Buffer.from(JSON.stringify({
+      type: 'response.completed',
+      response: {
+        id: 'resp_durable_resume',
+        usage: { input_tokens: 220_000, output_tokens: 5 },
+      },
+    })));
+    await readAll(first);
+    expect(compactBodies).toEqual([root]);
+    expect(readdirSync(checkpointStoreDir)).toHaveLength(1);
+
+    resetResponsesWebSocketConnectionsForTests();
+    fakeSockets.length = 0;
+    const afterRestartFetch = createResponsesWebSocketFetch(WS_URL, undefined, options);
+    const echoedCall = {
+      type: 'function_call',
+      call_id: 'call_durable_resume',
+      name: 'Bash',
+      arguments: '{"command":"pwd"}',
+    };
+    const toolOutput = {
+      type: 'function_call_output',
+      call_id: 'call_durable_resume',
+      output: 'continued after restart',
+    };
+    const resumed = await withResponsesWebSocketDiagnosticContext(
+      { estimatedInputTokens: 1_100_000, claudeAgentId: 'oversized-raw-resume' },
+      () => afterRestartFetch('https://example.test/responses', {
+        method: 'POST',
+        headers: {},
+        body: JSON.stringify(sessionPayload(
+          [...root, echoedCall, toolOutput],
+          { model: 'gpt-5.6-luna' },
+        )),
+      }),
+    );
+
+    expect(compactBodies).toHaveLength(1);
+    const resumedSocket = lastSocket();
+    resumedSocket.emit('open');
+    const sent = JSON.parse(resumedSocket.send.mock.calls[0]![0] as string);
+    expect(sent.previous_response_id).toBeUndefined();
+    expect(sent.input).toEqual([canonical[0], echoedCall, toolOutput]);
+    emitTextResponse(resumedSocket, 'resp_durable_resume_done', 'done');
+    await readAll(resumed);
+    rmSync(checkpointStoreDir, { recursive: true, force: true });
   });
 
   it('recovers an oversized Workflow tool tail from its durable checkpoint after restart', async () => {

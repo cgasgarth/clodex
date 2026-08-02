@@ -821,6 +821,8 @@ describe('translated request cancellation', () => {
       baseURL: `http://127.0.0.1:${address.port}/v1`,
       providerId: 'test-provider',
     };
+    const previousKeepAlive = process.env.CLODEX_STREAM_KEEPALIVE_INTERVAL_MS;
+    process.env.CLODEX_STREAM_KEEPALIVE_INTERVAL_MS = '50';
     const handle = await startProxyCatalog([route], route.aliasId, false, inferenceLogPath);
 
     try {
@@ -846,8 +848,18 @@ describe('translated request cancellation', () => {
         },
       });
       request.on('error', () => {});
+      let downstreamBody = '';
+      let responseStartedResolve!: () => void;
+      const responseStarted = new Promise<void>(resolve => { responseStartedResolve = resolve; });
+      request.on('response', response => {
+        responseStartedResolve();
+        response.on('data', chunk => { downstreamBody += chunk.toString(); });
+      });
       request.end(payload);
       await upstreamReceived;
+      await responseStarted;
+      await new Promise(resolve => setTimeout(resolve, 120));
+      expect(downstreamBody).toContain('event: ping');
       controller.abort();
 
       await waitForCondition(() => {
@@ -861,7 +873,12 @@ describe('translated request cancellation', () => {
         expect(entries.some(entry => entry.event === 'translation_failed')).toBe(false);
         expect(entries.some(entry => entry.event === 'upstream_error')).toBe(false);
       });
+      const pingsAfterAbort = downstreamBody.split('event: ping').length - 1;
+      await new Promise(resolve => setTimeout(resolve, 120));
+      expect(downstreamBody.split('event: ping').length - 1).toBe(pingsAfterAbort);
     } finally {
+      if (previousKeepAlive === undefined) delete process.env.CLODEX_STREAM_KEEPALIVE_INTERVAL_MS;
+      else process.env.CLODEX_STREAM_KEEPALIVE_INTERVAL_MS = previousKeepAlive;
       handle.close();
       upstream.closeAllConnections();
       await new Promise<void>(resolve => upstream.close(() => resolve()));
@@ -1735,6 +1752,83 @@ describe('SDK translated error logging', () => {
     } finally {
       if (prevKeepAlive === undefined) delete process.env.CLODEX_STREAM_KEEPALIVE_INTERVAL_MS;
       else process.env.CLODEX_STREAM_KEEPALIVE_INTERVAL_MS = prevKeepAlive;
+      handle.close();
+      upstream.closeAllConnections();
+      await new Promise<void>(resolve => upstream.close(() => resolve()));
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 20_000);
+
+  it('keeps a pre-output compaction-style wait alive beyond the client idle boundary', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'clodex-sdk-pre-output-keepalive-'));
+    const inferenceLogPath = join(dir, 'inference.jsonl');
+    const upstream = http.createServer((req, res) => {
+      req.resume();
+      req.once('end', () => {
+        setTimeout(() => {
+          res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Connection': 'close' });
+          res.end([
+            'data: {"id":"delayed","object":"chat.completion.chunk","created":1,"model":"translated-model","choices":[{"index":0,"delta":{"role":"assistant","content":"done"},"finish_reason":null}]}',
+            '',
+            'data: {"id":"delayed","object":"chat.completion.chunk","created":1,"model":"translated-model","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}',
+            '',
+            'data: [DONE]',
+            '',
+          ].join('\n'));
+        }, 350);
+      });
+    });
+    await new Promise<void>((resolve, reject) => {
+      upstream.once('error', reject);
+      upstream.listen(0, '127.0.0.1', () => resolve());
+    });
+    const address = upstream.address();
+    if (!address || typeof address === 'string') throw new Error('test upstream did not bind');
+    const route: ProxyRoute = {
+      aliasId: 'clodex:test:delayed-model',
+      realModelId: 'translated-model',
+      displayName: 'Delayed Model',
+      upstreamUrl: '',
+      apiKey: 'provider-key',
+      modelFormat: 'openai',
+      npm: '@ai-sdk/openai-compatible',
+      baseURL: `http://127.0.0.1:${address.port}/v1`,
+      providerId: 'test-provider',
+    };
+    const previousKeepAlive = process.env.CLODEX_STREAM_KEEPALIVE_INTERVAL_MS;
+    process.env.CLODEX_STREAM_KEEPALIVE_INTERVAL_MS = '50';
+    const handle = await startProxyCatalog([route], route.aliasId, false, inferenceLogPath);
+
+    try {
+      const response = await postToProxy(handle.port, handle.token, {
+        model: route.aliasId,
+        max_tokens: 100,
+        messages: [{ role: 'user', content: 'wait through native compaction' }],
+        stream: true,
+      }, 'req-pre-output-keepalive', '/v1/messages',
+      '44444444-4444-4444-8444-444444444444', 'workflow-compaction-wait');
+
+      expect(response.status).toBe(200);
+      const pingCount = response.body.split('event: ping').length - 1;
+      expect(pingCount).toBeGreaterThanOrEqual(5);
+      expect(response.body).toContain('event: message_stop');
+      const messageDeltaBlock = response.body
+        .split('\n\n')
+        .find(block => block.startsWith('event: message_delta'))!;
+      const messageDelta = JSON.parse(messageDeltaBlock.split('\n')[1]!.replace('data: ', ''));
+      expect(messageDelta.usage.input_tokens).toBeGreaterThan(0);
+      const entries = readFileSync(inferenceLogPath, 'utf8')
+        .trim().split('\n').map(line => JSON.parse(line));
+      const completed = entries.find(entry => entry.event === 'translation_completed');
+      expect(completed).toMatchObject({
+        requestId: 'req-pre-output-keepalive',
+        lastPartType: 'finish',
+      });
+      expect(completed.translatedChunks).toBeGreaterThan(0);
+      expect(entries.some(entry => entry.event === 'translation_cancelled')).toBe(false);
+    } finally {
+      if (previousKeepAlive === undefined) delete process.env.CLODEX_STREAM_KEEPALIVE_INTERVAL_MS;
+      else process.env.CLODEX_STREAM_KEEPALIVE_INTERVAL_MS = previousKeepAlive;
       handle.close();
       upstream.closeAllConnections();
       await new Promise<void>(resolve => upstream.close(() => resolve()));

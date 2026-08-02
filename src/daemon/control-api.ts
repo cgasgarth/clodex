@@ -6,7 +6,7 @@ import { DAEMON_CONTROL_IDLE_TIMEOUT_SECONDS } from '../timeouts.js';
 import type { DaemonRuntimeState } from './runtime.js';
 import type { DaemonInferenceCollector } from './collector.js';
 import type { SecondwindSnapshot } from './secondwind.js';
-import type { SecondwindMode } from '../types.js';
+import type { DiagnosticLogMode, SecondwindMode } from '../types.js';
 import type {
   DaemonClaudeModelSnapshot,
 } from './model-service.js';
@@ -40,6 +40,11 @@ interface DaemonSecondwindController {
   setMode(mode: SecondwindMode): void;
 }
 
+interface DaemonDiagnosticLogController {
+  snapshot(): { mode: DiagnosticLogMode };
+  setMode(mode: DiagnosticLogMode): void;
+}
+
 interface DaemonClaudeModelController {
   snapshot(): DaemonClaudeModelSnapshot;
   setEnabled(modelId: string, enabled: boolean): Promise<DaemonClaudeModelSnapshot>;
@@ -51,6 +56,7 @@ export interface DaemonControlApiOptions {
   collector: DaemonInferenceCollector;
   accounts: DaemonAccountController;
   secondwind: DaemonSecondwindController;
+  diagnosticLogs: DaemonDiagnosticLogController;
   models: DaemonClaudeModelController;
   requestRestart: () => void;
   requestStop: () => void;
@@ -150,7 +156,19 @@ export async function dispatchDaemonControlRequest(
         const limit = Number(url.searchParams.get('limit') ?? 50);
         return sendJson(200, {
           diagnostics: options.collector.recentDiagnostics(limit),
+          ...options.diagnosticLogs.snapshot(),
         });
+      }
+      if (request.method === 'POST' && url.pathname === '/v1/diagnostics/mode') {
+        const body = await readJsonBody(request);
+        const mode = body && typeof body === 'object'
+          ? (body as { mode?: unknown }).mode
+          : undefined;
+        if (mode !== 'all' && mode !== 'error') {
+          return sendJson(400, { error: 'Diagnostic log mode must be all or error' });
+        }
+        options.diagnosticLogs.setMode(mode);
+        return sendJson(200, options.diagnosticLogs.snapshot());
       }
       if (request.method === 'GET' && url.pathname === '/v1/secondwind') {
         return sendJson(200, options.secondwind.snapshot());

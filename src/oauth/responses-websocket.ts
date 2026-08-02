@@ -294,10 +294,34 @@ export function createResponsesWebSocketFetch(
         ...selectedMatch.delta,
       ])
       : undefined;
-    const liveContinuationFitsContext = (
+    const checkpointContinuationInput = selectedCheckpoint && checkpointMatch
+      ? [...selectedCheckpoint.compactedInput, ...checkpointMatch.delta]
+      : undefined;
+    const checkpointContinuationEstimatedTokens = (
+      selectedCheckpoint
+      && checkpointMatch
+      && selectedCheckpoint.lastInputTokens !== undefined
+    )
+      ? selectedCheckpoint.lastInputTokens + approximateResponsesItemsTokens([
+        ...selectedCheckpoint.compactedInput.slice(
+          Math.max(
+            0,
+            selectedCheckpoint.compactedInput.length
+              - selectedCheckpoint.expectedAssistantHashes.length,
+          ),
+        ),
+        ...checkpointMatch.delta,
+      ])
+      : undefined;
+    const matchedCanonicalInput = selected?.compactedInput && selectedDelta
+      ? [...selected.compactedInput, ...selectedDelta]
+      : checkpointContinuationInput;
+    const matchedCanonicalEstimatedTokens = liveContinuationEstimatedTokens
+      ?? checkpointContinuationEstimatedTokens;
+    const matchedCanonicalFitsContext = (
       contextWindow !== undefined
-      && liveContinuationEstimatedTokens !== undefined
-      && liveContinuationEstimatedTokens < contextWindow
+      && matchedCanonicalEstimatedTokens !== undefined
+      && matchedCanonicalEstimatedTokens < contextWindow
     );
     const overflowRecovery = compactThreshold !== undefined
       ? new ResponsesOverflowRecoverySession({
@@ -333,7 +357,12 @@ export function createResponsesWebSocketFetch(
       reason: OverflowRecoveryReason,
     ): Promise<boolean> => {
       if (!overflowRecovery || contextWindow === undefined || contextWindow <= 0) return false;
-      const recoveryInput = compactedInputBase ?? inputArray(payload);
+      const recoverFromMatchedCanonical = reason !== 'known_oversized'
+        ? matchedCanonicalInput
+        : undefined;
+      const recoveryInput = compactedInputBase
+        ?? recoverFromMatchedCanonical
+        ?? inputArray(payload);
       const recoveryEstimate = compactedInputBase
         ? overflowRebasedEstimate ?? estimatedRebasedInputTokens(
           recoveryInput,
@@ -341,12 +370,14 @@ export function createResponsesWebSocketFetch(
           inputArray(payload),
           estimatedInputTokens,
         )
+        : recoverFromMatchedCanonical && matchedCanonicalEstimatedTokens !== undefined
+          ? matchedCanonicalEstimatedTokens
         : sourceEstimatedInputTokens === undefined
           ? estimatedInputTokens
           : Math.max(estimatedInputTokens ?? 0, sourceEstimatedInputTokens);
       const result = await overflowRecovery.recover({
         input: recoveryInput,
-        sources: compactedInputBase ? [] : recoverySources,
+        sources: compactedInputBase || recoverFromMatchedCanonical ? [] : recoverySources,
         estimatedInputTokens: recoveryEstimate,
         reason,
         forceInitialCompaction: reason !== 'known_oversized',
@@ -384,7 +415,7 @@ export function createResponsesWebSocketFetch(
       && contextWindow !== undefined
       && estimatedInputTokens !== undefined
       && estimatedInputTokens >= contextWindow
-      && !liveContinuationFitsContext
+      && !matchedCanonicalFitsContext
     ) {
       try {
         if (!await runOverflowRecovery('known_oversized')) {
@@ -404,6 +435,7 @@ export function createResponsesWebSocketFetch(
     ) {
       if (selected && selectedDelta) {
         const triggerEntry = selected;
+        let triggerStartedAt: number | undefined;
         failedTriggerCompactedInput = triggerEntry.compactedInput
           ? [...triggerEntry.compactedInput, ...selectedDelta]
           : undefined;
@@ -414,6 +446,20 @@ export function createResponsesWebSocketFetch(
               `Overflow recovery budget exhausted: ${triggerClaim.reason}`,
             );
           }
+          triggerStartedAt = resolvedOptions.now();
+          emitDiagnostic(options, {
+            event: 'ws_compaction',
+            outcome: 'started',
+            transport: 'previous_response_compaction_trigger',
+            reason: compactionReason,
+            threshold: compactThreshold,
+            measuredInputTokens,
+            estimatedInputTokens,
+            canonicalEstimatedInputTokens: matchedCanonicalEstimatedTokens,
+            sourceItems: inputArray(payload).length,
+            incrementalItems: selectedDelta.length,
+            compactCallAttempt: triggerClaim.attempt,
+          }, diagnosticCorrelation);
           const result = await runCompactionTrigger({
             entry: triggerEntry,
             delta: selectedDelta,
@@ -464,6 +510,7 @@ export function createResponsesWebSocketFetch(
             outcome: 'completed',
             transport: 'previous_response_compaction_trigger',
             reason: compactionReason,
+            durationMs: Math.max(0, resolvedOptions.now() - triggerStartedAt),
             threshold: compactThreshold,
             measuredInputTokens,
             estimatedInputTokens,
@@ -487,6 +534,9 @@ export function createResponsesWebSocketFetch(
             outcome: 'fallback',
             transport: 'previous_response_compaction_trigger',
             reason: compactionReason,
+            durationMs: triggerStartedAt === undefined
+              ? undefined
+              : Math.max(0, resolvedOptions.now() - triggerStartedAt),
             threshold: compactThreshold,
             measuredInputTokens,
             estimatedInputTokens,
@@ -503,6 +553,7 @@ export function createResponsesWebSocketFetch(
       }
 
       if (!compacted) {
+        let standaloneStartedAt: number | undefined;
         try {
           const checkpointInput = selectedCheckpoint && checkpointMatch
             ? [...selectedCheckpoint.compactedInput, ...checkpointMatch.delta]
@@ -522,6 +573,23 @@ export function createResponsesWebSocketFetch(
               `Overflow recovery budget exhausted: ${compactClaim.reason}`,
             );
           }
+          standaloneStartedAt = resolvedOptions.now();
+          emitDiagnostic(options, {
+            event: 'ws_compaction',
+            outcome: 'started',
+            transport: 'responses_compact_endpoint',
+            mode: 'routine',
+            reason: compactionReason,
+            threshold: compactThreshold,
+            contextWindow,
+            measuredInputTokens,
+            estimatedInputTokens,
+            canonicalEstimatedInputTokens: matchedCanonicalEstimatedTokens,
+            rawReplayItems: inputArray(payload).length,
+            sourceItems: inputArray(compactPayload).length,
+            source: canonicalInput ? 'canonical' : 'raw',
+            compactCallAttempt: compactClaim.attempt,
+          }, diagnosticCorrelation);
           const result = await compactResponsesWindow({
             requestUrl,
             headers,
@@ -553,6 +621,7 @@ export function createResponsesWebSocketFetch(
             outcome: 'completed',
             transport: 'responses_compact_endpoint',
             reason: compactionReason,
+            durationMs: Math.max(0, resolvedOptions.now() - standaloneStartedAt),
             threshold: compactThreshold,
             measuredInputTokens,
             estimatedInputTokens,
@@ -573,6 +642,9 @@ export function createResponsesWebSocketFetch(
             outcome: contextRejected ? 'overflow_recovery' : 'fallback',
             transport: 'responses_compact_endpoint',
             reason: compactionReason,
+            durationMs: standaloneStartedAt === undefined
+              ? undefined
+              : Math.max(0, resolvedOptions.now() - standaloneStartedAt),
             threshold: compactThreshold,
             contextWindow,
             measuredInputTokens,

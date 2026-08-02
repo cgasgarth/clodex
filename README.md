@@ -184,6 +184,8 @@ Accounts, Diagnostics, Secondwind, and Models. Press `1`–`6` to switch views. 
 supports day/week/month navigation with `Tab`, `Shift+Tab`, `←`, `→`, and `0`.
 Secondwind mode changes require confirmation. The Models view enables or disables OpenAI
 models in the live route catalog and the patched picker used by new Claude launches.
+The Diagnostics view switches between compact error-only logs and full lifecycle logs;
+full mode records native compaction start, completion, duration, and recovery details.
 
 ### Usage, caching, and API-equivalent cost
 
