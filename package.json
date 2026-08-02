@@ -36,6 +36,7 @@
   "scripts": {
     "build": "bun run scripts/build.ts",
     "dev": "bun run scripts/build.ts --watch",
+    "install:global": "bun run scripts/install-global.ts",
     "test": "bun test --isolate --parallel=8 --timeout=30000 --only-failures",
     "test:file": "bun test --timeout=30000",
     "lint": "eslint src scripts",

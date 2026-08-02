@@ -24,6 +24,10 @@ children. Anthropic models can still use Claude Code's normal Anthropic login.
 
 Contributions are welcome — see [CONTRIBUTING.md](./CONTRIBUTING.md) for how to scope a PR and what the quality bar is.
 
+When installing a local checkout, use `bun run install:global`. It replaces an
+older global tarball cleanly, retains one stable package archive, and verifies
+that every runtime artifact matches the checkout.
+
 ## Quick start
 
 Install clodex, sign in to OpenAI, choose the Codex models you want Claude to
