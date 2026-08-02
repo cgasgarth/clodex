@@ -25,10 +25,18 @@ const rewritten = await service.rewrite({
   sessionId: 'native-smoke',
   modelId: 'gpt-5.6-sol',
 });
+const repeated = await service.rewrite({
+  body,
+  request,
+  sessionId: 'native-smoke',
+  modelId: 'gpt-5.6-sol',
+});
 
 console.log(JSON.stringify({
   originalBytes: body.length,
   rewrittenBytes: rewritten.length,
+  repeatedBytes: repeated.length,
+  repeatStable: rewritten.equals(repeated),
   snapshot: service.snapshot(),
 }));
 service.close();

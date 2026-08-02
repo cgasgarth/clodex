@@ -924,7 +924,7 @@ function Dashboard(): React.ReactNode {
             {' · '}{secondwind?.latency.samples ?? 0} samples
           </Text>
           <Text dimColor>
-            {secondwind?.sessions ?? 0} conversation sessions · {secondwind?.errors ?? 0} fail-open errors
+            {secondwind?.sessions ?? 0} active optimizer conversations · {secondwind?.errors ?? 0} fail-open errors
             {secondwind?.loaded ? ' · native optimizer loaded' : ' · optimizer not loaded'}
           </Text>
           {secondwind?.lastError && <Text color="yellow">Last error: {secondwind.lastError}</Text>}

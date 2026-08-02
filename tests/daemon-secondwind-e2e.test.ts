@@ -221,7 +221,7 @@ describe('single-endpoint daemon Secondwind integration', () => {
       expect(active).toMatchObject({
         mode: 'on',
         loaded: true,
-        sessions: 1,
+        sessions: 0,
         applied: {
           requests: 1,
           blocksRewritten: 1,

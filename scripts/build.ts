@@ -11,7 +11,7 @@ const { values } = parseArgs({
 
 async function build(): Promise<boolean> {
   const result = await Bun.build({
-    entrypoints: ['src/cli.ts', 'src/claude-wrapper.ts'],
+    entrypoints: ['src/cli.ts', 'src/claude-wrapper.ts', 'src/daemon/secondwind-worker.ts'],
     outdir: 'dist',
     target: 'bun',
     format: 'esm',
