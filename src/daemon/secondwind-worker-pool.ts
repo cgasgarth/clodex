@@ -42,6 +42,7 @@ export interface SecondwindWorkerPoolOptions {
   workerCount?: number;
   workerUrl?: URL;
   recycleAfterRequests?: number;
+  random?: () => number;
 }
 
 function defaultWorkerUrl(): URL {
@@ -49,29 +50,22 @@ function defaultWorkerUrl(): URL {
   return new URL(`./secondwind-worker.${extension}`, import.meta.url);
 }
 
-function secondwindWorkerCount(parallelism = availableParallelism()): number {
-  return Math.min(4, Math.max(2, parallelism - 1));
-}
-
-export function secondwindWorkerShard(key: string, count: number): number {
-  let hash = 2_166_136_261;
-  for (let index = 0; index < key.length; index += 1) {
-    hash ^= key.charCodeAt(index);
-    hash = Math.imul(hash, 16_777_619);
-  }
-  return (hash >>> 0) % count;
+export function secondwindWorkerCount(parallelism = availableParallelism()): number {
+  return Math.min(8, Math.max(2, parallelism - 2));
 }
 
 export class SecondwindWorkerPool {
   private readonly slots: WorkerSlot[];
   private readonly workerUrl: URL;
   private readonly recycleAfterRequests: number;
+  private readonly random: () => number;
   private nextRequestId = 1;
   private closed = false;
 
   constructor(options: SecondwindWorkerPoolOptions = {}) {
     this.workerUrl = options.workerUrl ?? defaultWorkerUrl();
     this.recycleAfterRequests = Math.max(1, options.recycleAfterRequests ?? 500);
+    this.random = options.random ?? Math.random;
     const count = Math.max(1, Math.min(16, options.workerCount ?? secondwindWorkerCount()));
     this.slots = Array.from({ length: count }, (_, index) => {
       return {
@@ -125,11 +119,13 @@ export class SecondwindWorkerPool {
     return slot.worker;
   }
 
-  rewrite(sessionKey: string, request: Record<string, unknown>): Promise<WorkerRewriteResult> {
+  rewrite(request: Record<string, unknown>): Promise<WorkerRewriteResult> {
     if (this.closed) return Promise.reject(new Error('Secondwind worker pool is closed'));
     const id = this.nextRequestId++;
     const encoded = new TextEncoder().encode(JSON.stringify(request));
-    const slot = this.slots[secondwindWorkerShard(sessionKey, this.slots.length)]!;
+    const sample = Math.max(0, Math.min(1, this.random()));
+    const slotIndex = Math.min(this.slots.length - 1, Math.floor(sample * this.slots.length));
+    const slot = this.slots[slotIndex]!;
     const message: WorkerRequest & { type: 'rewrite' } = {
       type: 'rewrite',
       id,
