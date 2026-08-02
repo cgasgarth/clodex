@@ -10,6 +10,10 @@ function decode(body: Uint8Array): { workerId: string } {
   return JSON.parse(new TextDecoder().decode(body)) as { workerId: string };
 }
 
+function encode(request: Record<string, unknown>): Uint8Array {
+  return new TextEncoder().encode(JSON.stringify(request));
+}
+
 describe('Secondwind worker pool', () => {
   it('uses up to eight workers based on machine parallelism', () => {
     expect(secondwindWorkerCount(2)).toBe(2);
@@ -38,8 +42,8 @@ describe('Secondwind worker pool', () => {
       }],
     };
     try {
-      const first = await pool.rewrite(request);
-      const second = await pool.rewrite(request);
+      const first = await pool.rewrite(encode(request));
+      const second = await pool.rewrite(encode(request));
       expect(first.body).toEqual(second.body);
       expect(first.body.byteLength).toBeLessThan(JSON.stringify(request).length);
     } finally {
@@ -61,8 +65,8 @@ describe('Secondwind worker pool', () => {
     const startedAt = performance.now();
     try {
       const results = await Promise.all([
-        pool.rewrite({ delayMs: 250 }),
-        pool.rewrite({ delayMs: 250 }),
+        pool.rewrite(encode({ delayMs: 250 })),
+        pool.rewrite(encode({ delayMs: 250 })),
       ]);
       expect(decode(results[0]!.body).workerId).not.toBe(decode(results[1]!.body).workerId);
     } finally {
@@ -84,8 +88,8 @@ describe('Secondwind worker pool', () => {
     const startedAt = performance.now();
     try {
       await Promise.all([
-        pool.rewrite({ delayMs: 175 }),
-        pool.rewrite({ delayMs: 175 }),
+        pool.rewrite(encode({ delayMs: 175 })),
+        pool.rewrite(encode({ delayMs: 175 })),
       ]);
     } finally {
       pool.close();
@@ -101,8 +105,8 @@ describe('Secondwind worker pool', () => {
       recycleAfterRequests: 1,
     });
     try {
-      const first = decode((await pool.rewrite({})).body);
-      const second = decode((await pool.rewrite({})).body);
+      const first = decode((await pool.rewrite(encode({}))).body);
+      const second = decode((await pool.rewrite(encode({}))).body);
       expect(second.workerId).not.toBe(first.workerId);
     } finally {
       pool.close();

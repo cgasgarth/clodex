@@ -6,8 +6,8 @@ import {
   mkdirSync,
   readFileSync,
   unlinkSync,
-  writeFileSync,
 } from 'node:fs';
+import { appendFile, chmod } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import pc from 'picocolors';
@@ -17,6 +17,62 @@ import type { ApiProcessingMode } from './daemon/api-pricing.js';
 
 const DIR_MODE = 0o700;
 const FILE_MODE = 0o600;
+const LOG_FLUSH_INTERVAL_MS = 50;
+const LOG_BATCH_BYTES = 64 * 1024;
+
+interface PendingLogWrites {
+  lines: string[];
+  bytes: number;
+  timer?: ReturnType<typeof setTimeout>;
+  writing: Promise<void>;
+  prepared: boolean;
+}
+
+const pendingLogWrites = new Map<string, PendingLogWrites>();
+
+function pendingLog(path: string): PendingLogWrites {
+  let pending = pendingLogWrites.get(path);
+  if (!pending) {
+    pending = { lines: [], bytes: 0, writing: Promise.resolve(), prepared: false };
+    pendingLogWrites.set(path, pending);
+  }
+  return pending;
+}
+
+async function flushPendingLog(path: string, pending: PendingLogWrites): Promise<void> {
+  if (pending.timer) {
+    clearTimeout(pending.timer);
+    pending.timer = undefined;
+  }
+  if (pending.lines.length > 0) {
+    const batch = pending.lines.join('');
+    pending.lines = [];
+    pending.bytes = 0;
+    pending.writing = pending.writing.then(async () => {
+      await appendFile(path, batch, { encoding: 'utf8', mode: FILE_MODE });
+      if (!pending.prepared) {
+        await chmod(path, FILE_MODE);
+        pending.prepared = true;
+      }
+    }).catch(() => {
+      // Logging must never alter inference behavior.
+    });
+  }
+  await pending.writing;
+  if (pending.lines.length > 0) await flushPendingLog(path, pending);
+}
+
+/** Flush queued trace records. Daemon shutdown and tests use this durability boundary. */
+export async function flushTraceLogs(path?: string): Promise<void> {
+  if (path) {
+    const pending = pendingLogWrites.get(path);
+    if (pending) await flushPendingLog(path, pending);
+    return;
+  }
+  await Promise.all(
+    [...pendingLogWrites].map(([logPath, pending]) => flushPendingLog(logPath, pending)),
+  );
+}
 
 const CLAUDE_DEBUG_LOG = 'claude-debug.log';
 const PROXY_DEBUG_LOG = 'proxy-debug.log';
@@ -650,6 +706,9 @@ export function makeTraceLogger(logPath: string): (message: string) => void {
 /** Remove prior session log so --trace shows only the latest run. */
 export function resetTraceLog(path: string): void {
   ensureLogsDir();
+  const pending = pendingLogWrites.get(path);
+  if (pending?.timer) clearTimeout(pending.timer);
+  pendingLogWrites.delete(path);
   if (existsSync(path)) {
     try {
       unlinkSync(path);
@@ -700,13 +759,18 @@ export function redactTraceLog(content: string): string {
 }
 
 export function writeSecureLogLine(path: string, line: string): void {
-  ensureLogsDir();
   const redacted = redactTraceLine(line);
-  try {
-    writeFileSync(path, `${redacted}\n`, { flag: 'a', mode: FILE_MODE });
-    chmodSync(path, FILE_MODE);
-  } catch {
-    // ignore
+  const value = `${redacted}\n`;
+  const pending = pendingLog(path);
+  pending.lines.push(value);
+  pending.bytes += Buffer.byteLength(value);
+  if (pending.bytes >= LOG_BATCH_BYTES) {
+    void flushPendingLog(path, pending);
+  } else if (!pending.timer) {
+    pending.timer = setTimeout(() => {
+      pending.timer = undefined;
+      void flushPendingLog(path, pending);
+    }, LOG_FLUSH_INTERVAL_MS);
   }
 }
 

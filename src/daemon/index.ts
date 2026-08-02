@@ -17,6 +17,7 @@ import {
   unregisterServerRuntimeState,
 } from '../server-runtime.js';
 import {
+  flushTraceLogs,
   getInferenceRequestLogPath,
   getSessionLogPath,
   subscribeInferenceTrace,
@@ -410,6 +411,7 @@ async function runDaemonProcess(): Promise<number> {
       port: endpoint?.port,
       reason: shouldRestart() ? 'daemon restart requested' : 'daemon shutdown',
     });
+    await flushTraceLogs();
   }
   return shouldRestart() ? 75 : 0;
 }

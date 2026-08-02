@@ -11,10 +11,16 @@ import { PassThrough } from 'node:stream';
 import { gzipSync } from 'node:zlib';
 import { ensureHttpProxyCaBundle, ensureHttpProxyCertificates } from '../src/http-proxy/ca.js';
 import { shouldInterceptConnect, startHttpProxy } from '../src/http-proxy/server.js';
+import { flushTraceLogs } from '../src/trace-log.js';
 
 const testHome = mkdtempSync(join(tmpdir(), 'clodex-http-proxy-'));
 const previousRelayHome = process.env['CLODEX_HOME'];
 const rawMitmSockets = new WeakMap<tls.TLSSocket, net.Socket>();
+
+async function readFlushedLog(path: string): Promise<string> {
+  await flushTraceLogs(path);
+  return readFileSync(path, 'utf8');
+}
 
 async function listen(server: http.Server | https.Server): Promise<number> {
   server.listen(0, '127.0.0.1');
@@ -231,7 +237,7 @@ async function adapterResponseFailureEntries(
     await waitForSocketResponseEnd(secure).catch(() => {});
     await new Promise(resolve => setImmediate(resolve));
 
-    return readFileSync(inferenceLogPath, 'utf8')
+    return (await readFlushedLog(inferenceLogPath))
       .trim()
       .split('\n')
       .map(line => JSON.parse(line) as Record<string, unknown>);
@@ -504,7 +510,7 @@ describe('selective HTTP proxy', () => {
       // asynchronous paths. Wait for every asserted lifecycle event instead of
       // assuming that response_completed is always recorded last.
       const logDeadline = Date.now() + 5000;
-      let inferenceLog = readFileSync(inferenceLogPath, 'utf8');
+      let inferenceLog = await readFlushedLog(inferenceLogPath);
       let entries = inferenceLog.trim().split('\n').map(line => JSON.parse(line));
       while (
         (!entries.some(entry => entry.event === 'response_completed') ||
@@ -513,7 +519,7 @@ describe('selective HTTP proxy', () => {
         Date.now() < logDeadline
       ) {
         await new Promise(resolve => setTimeout(resolve, 20));
-        inferenceLog = readFileSync(inferenceLogPath, 'utf8');
+        inferenceLog = await readFlushedLog(inferenceLogPath);
         entries = inferenceLog.trim().split('\n').map(line => JSON.parse(line));
       }
       expect(entries[0]).toMatchObject({
@@ -568,7 +574,7 @@ describe('selective HTTP proxy', () => {
       });
       expect(inferenceLog).not.toContain('private-image-data');
       expect(inferenceLog).not.toContain('private response text');
-      const diagnosticRaw = readFileSync(webSocketDiagnosticsLogPath, 'utf8');
+      const diagnosticRaw = await readFlushedLog(webSocketDiagnosticsLogPath);
       const diagnostic = JSON.parse(diagnosticRaw.trim());
       expect(diagnostic).toMatchObject({
         event: 'request_diagnostic',
@@ -687,7 +693,7 @@ describe('selective HTTP proxy', () => {
       await waitForSocketResponseEnd(secure);
 
       expect(response).toContain('529');
-      const entries = readFileSync(inferenceLogPath, 'utf8').trim().split('\n').map(line => JSON.parse(line));
+      const entries = (await readFlushedLog(inferenceLogPath)).trim().split('\n').map(line => JSON.parse(line));
       expect(entries[0]).toMatchObject({
         modelId: 'claude-haiku-4-5',
         provider: 'anthropic',
@@ -709,7 +715,7 @@ describe('selective HTTP proxy', () => {
         requestId: entries[0].requestId,
         statusCode: 529,
       }));
-      expect(readFileSync(inferenceLogPath, 'utf8')).not.toContain('private tool output');
+      expect(await readFlushedLog(inferenceLogPath)).not.toContain('private tool output');
     } finally {
       if (previousRequestPreview === undefined) delete process.env['CLODEX_LOG_REQUEST_PREVIEW'];
       else process.env['CLODEX_LOG_REQUEST_PREVIEW'] = previousRequestPreview;
@@ -762,7 +768,7 @@ describe('selective HTTP proxy', () => {
       ].join('\r\n') + body);
       await waitForSocketResponseEnd(secure).catch(() => {});
 
-      const entries = readFileSync(inferenceLogPath, 'utf8').trim().split('\n').map(line => JSON.parse(line));
+      const entries = (await readFlushedLog(inferenceLogPath)).trim().split('\n').map(line => JSON.parse(line));
       const upstreamError = entries.find(entry => entry.event === 'upstream_error');
       expect(upstreamError).toMatchObject({
         event: 'upstream_error',
@@ -822,7 +828,7 @@ describe('selective HTTP proxy', () => {
       await waitForSocketResponseEnd(secure);
 
       expect(response).toContain('502');
-      const entries = readFileSync(inferenceLogPath, 'utf8').trim().split('\n').map(line => JSON.parse(line));
+      const entries = (await readFlushedLog(inferenceLogPath)).trim().split('\n').map(line => JSON.parse(line));
       const requestEntry = entries.find(entry => !entry.event);
       expect(entries).toContainEqual(expect.objectContaining({
         event: 'response_failed',
@@ -949,7 +955,7 @@ describe('selective HTTP proxy', () => {
       expect(adapterApiKey).toBe('adapter-local-token');
       expect(adapterClaudeSessionId).toBe('11111111-1111-4111-8111-111111111111');
       expect(adapterBody).toBe(body);
-      const relayEntries = readFileSync(inferenceLogPath, 'utf8').trim().split('\n').map(line => JSON.parse(line));
+      const relayEntries = (await readFlushedLog(inferenceLogPath)).trim().split('\n').map(line => JSON.parse(line));
       const requestEntry = relayEntries.find(entry => !entry.event);
       expect(requestEntry).toMatchObject({
         modelId: 'clodex:groq:llama-3.3-70b',
@@ -1009,7 +1015,7 @@ describe('selective HTTP proxy', () => {
         model: 'llama',
         messages: [],
       });
-      const aliasEntries = readFileSync(inferenceLogPath, 'utf8').trim().split('\n').map(line => JSON.parse(line));
+      const aliasEntries = (await readFlushedLog(inferenceLogPath)).trim().split('\n').map(line => JSON.parse(line));
       expect(aliasEntries.find(entry => !entry.event && entry.modelId === 'llama')).toMatchObject({
         provider: 'groq',
         route: 'translated',
@@ -1091,7 +1097,7 @@ describe('selective HTTP proxy', () => {
       expect(anthropicRequests).toBe(0);
       expect(fallbackAuth).toBeUndefined();
 
-      const unavailableAliasEntries = readFileSync(inferenceLogPath, 'utf8')
+      const unavailableAliasEntries = (await readFlushedLog(inferenceLogPath))
         .trim()
         .split('\n')
         .map(line => JSON.parse(line));
@@ -1277,7 +1283,7 @@ describe('selective HTTP proxy', () => {
         }),
       ]);
 
-      const entries = readFileSync(inferenceLogPath, 'utf8').trim().split('\n').map(line => JSON.parse(line));
+      const entries = (await readFlushedLog(inferenceLogPath)).trim().split('\n').map(line => JSON.parse(line));
       const requestEntry = entries.find(entry => !entry.event);
       expect(requestEntry.claudeSessionId).toBe(claudeSessionId);
       expect(entries).toContainEqual(expect.objectContaining({
@@ -1377,7 +1383,7 @@ describe('selective HTTP proxy', () => {
       ]);
       await new Promise(resolve => setImmediate(resolve));
 
-      const entries = readFileSync(inferenceLogPath, 'utf8').trim().split('\n').map(line => JSON.parse(line));
+      const entries = (await readFlushedLog(inferenceLogPath)).trim().split('\n').map(line => JSON.parse(line));
       const requestEntry = entries.find(entry => !entry.event);
       expect(entries).toContainEqual(expect.objectContaining({
         event: 'response_client_disconnected',
@@ -1430,7 +1436,7 @@ describe('selective HTTP proxy', () => {
       );
 
       expect(response).toContain('502');
-      const entries = readFileSync(inferenceLogPath, 'utf8').trim().split('\n').map(line => JSON.parse(line));
+      const entries = (await readFlushedLog(inferenceLogPath)).trim().split('\n').map(line => JSON.parse(line));
       const requestEntry = entries.find(entry => !entry.event);
       expect(entries).toContainEqual(expect.objectContaining({
         event: 'response_failed',
@@ -1578,7 +1584,7 @@ describe('selective HTTP proxy', () => {
       );
 
       expect(response).toContain('502');
-      const entries = readFileSync(inferenceLogPath, 'utf8').trim().split('\n').map(line => JSON.parse(line));
+      const entries = (await readFlushedLog(inferenceLogPath)).trim().split('\n').map(line => JSON.parse(line));
       const requestEntry = entries.find(entry => !entry.event);
       expect(entries).toContainEqual(expect.objectContaining({
         event: 'response_failed',
@@ -1652,7 +1658,7 @@ describe('selective HTTP proxy', () => {
       ].join('\r\n') + body);
       await waitForSocketResponseEnd(secure).catch(() => {});
 
-      const entries = readFileSync(inferenceLogPath, 'utf8').trim().split('\n').map(line => JSON.parse(line));
+      const entries = (await readFlushedLog(inferenceLogPath)).trim().split('\n').map(line => JSON.parse(line));
       const requestEntry = entries.find(entry => !entry.event);
       expect(entries).toContainEqual(expect.objectContaining({
         event: 'response_started',

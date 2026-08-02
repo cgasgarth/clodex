@@ -12,7 +12,13 @@ import { generateAnthropicResponse, streamAnthropicResponse } from '../src/sdk-a
 import { generateOpenAiResponse, streamOpenAiResponse } from '../src/openai-adapter.js';
 import { resolveProviderCredential } from '../src/env.js';
 import { withResponsesWebSocketDiagnosticContext } from '../src/oauth/responses-websocket.js';
+import { flushTraceLogs } from '../src/trace-log.js';
 import { asMocked, waitForCondition } from './test-helpers.js';
+
+async function readFlushedLog(path: string): Promise<string> {
+  await flushTraceLogs(path);
+  return readFileSync(path, 'utf8');
+}
 
 const TEST_HELPER_REF = `helper:v1:${'a'.repeat(64)}:oauth:provider:oauth-provider`;
 const ORIGINAL_COMPACTION_FLAG = process.env.CLODEX_OPENAI_COMPACTION;
@@ -271,12 +277,12 @@ describe('server router', () => {
         expect(response.status).toBe(200);
       }
 
-      const entries = readFileSync(inferenceLogPath, 'utf8').trim().split('\n').map(line => JSON.parse(line));
+      const entries = (await readFlushedLog(inferenceLogPath)).trim().split('\n').map(line => JSON.parse(line));
       expect(entries).toEqual([
         expect.objectContaining({ modelId: 'claude-native', effort: 'high', provider: 'zen', route: 'passthrough' }),
         expect.objectContaining({ modelId: 'anthropic-groq__llama-test', effort: 'medium', provider: 'groq', route: 'translated' }),
       ]);
-      expect(readFileSync(inferenceLogPath, 'utf8')).not.toContain('private prompt');
+      expect(await readFlushedLog(inferenceLogPath)).not.toContain('private prompt');
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

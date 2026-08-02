@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fetchTemplateModels } from '../src/registry/fetch-template-models.js';
 import type { ProviderTemplate } from '../src/provider-templates.js';
-import { clearTraceSecrets, getProviderDebugLogPath } from '../src/trace-log.js';
+import { clearTraceSecrets, flushTraceLogs, getProviderDebugLogPath } from '../src/trace-log.js';
 import { asMocked, restoreTestGlobals, stubTestGlobal } from './test-helpers.js';
 
 function template(partial: Partial<ProviderTemplate> & Pick<ProviderTemplate, 'id' | 'name' | 'npm'>): ProviderTemplate {
@@ -29,6 +29,11 @@ const openaiCompatTemplate = template({
   npm: '@ai-sdk/openai-compatible',
   defaultBaseUrl: 'https://api.compat.example/v1',
 });
+
+async function readFlushedLog(path: string): Promise<string> {
+  await flushTraceLogs(path);
+  return readFileSync(path, 'utf8');
+}
 
 describe('fetchTemplateModels', () => {
   beforeEach(() => {
@@ -101,7 +106,7 @@ describe('fetchTemplateModels', () => {
     try {
       await fetchTemplateModels(openaiCompatTemplate, secret);
 
-      const trace = readFileSync(getProviderDebugLogPath(), 'utf8');
+      const trace = await readFlushedLog(getProviderDebugLogPath());
       expect(trace).toContain('{"echo":"[REDACTED]"}');
       expect(trace).not.toContain(secret);
     } finally {

@@ -1,9 +1,10 @@
 import { afterEach, describe, it, expect } from 'bun:test';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   clearTraceSecrets,
+  flushTraceLogs,
   getInferenceSessionLogPath,
   getLatestMessagePreview,
   redactTraceLine,
@@ -14,8 +15,14 @@ import {
   writeInferenceResponseLifecycleLog,
   writeInferenceResponseErrorLog,
   writeProxyLifecycleLog,
+  writeSecureLogLine,
   writeWebSocketDiagnosticRequestLog,
 } from '../src/trace-log.js';
+
+async function readLog(path: string): Promise<string> {
+  await flushTraceLogs(path);
+  return readFileSync(path, 'utf8');
+}
 
 describe('trace log redaction', () => {
   afterEach(() => {
@@ -53,7 +60,26 @@ describe('trace log redaction', () => {
 });
 
 describe('inference request log', () => {
-  it('logs diagnostic request envelopes while redacting credentials and hashing conversation content', () => {
+  it('flushes queued records in order with private file permissions', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'clodex-batched-log-'));
+    const path = join(dir, 'batched.jsonl');
+    try {
+      for (let index = 0; index < 100; index += 1) {
+        writeSecureLogLine(path, JSON.stringify({ index }));
+      }
+
+      const entries = (await readLog(path)).trim().split('\n').map(line => JSON.parse(line));
+      expect(entries).toHaveLength(100);
+      expect(entries.map(entry => entry.index)).toEqual(
+        Array.from({ length: 100 }, (_, index) => index),
+      );
+      expect(statSync(path).mode & 0o777).toBe(0o600);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('logs diagnostic request envelopes while redacting credentials and hashing conversation content', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'clodex-ws-diagnostic-'));
     const path = join(dir, 'diagnostics.jsonl');
     try {
@@ -79,7 +105,7 @@ describe('inference request log', () => {
         },
       });
 
-      const raw = readFileSync(path, 'utf8');
+      const raw = await readLog(path);
       const entry = JSON.parse(raw.trim());
       expect(entry).toMatchObject({
         event: 'request_diagnostic',
@@ -114,7 +140,7 @@ describe('inference request log', () => {
     }
   });
 
-  it('creates a separate private log path for each proxy session', () => {
+  it('creates a separate private log path for each proxy session', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'clodex-session-log-'));
     const previousHome = process.env['CLODEX_HOME'];
     process.env['CLODEX_HOME'] = dir;
@@ -133,7 +159,7 @@ describe('inference request log', () => {
         port: 58985,
         inheritedProxyPort: 58972,
       });
-      expect(JSON.parse(readFileSync(first, 'utf8').trim())).toMatchObject({
+      expect(JSON.parse((await readLog(first)).trim())).toMatchObject({
         event: 'proxy_started',
         pid: process.pid,
         parentPid: process.ppid,
@@ -148,7 +174,7 @@ describe('inference request log', () => {
     }
   });
 
-  it('writes only structured routing metadata', () => {
+  it('writes only structured routing metadata', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'clodex-inference-log-'));
     const path = join(dir, 'requests.jsonl');
     try {
@@ -159,7 +185,7 @@ describe('inference request log', () => {
         provider: 'openai',
         route: 'translated',
       });
-      const entry = JSON.parse(readFileSync(path, 'utf8').trim());
+      const entry = JSON.parse((await readLog(path)).trim());
       expect(entry).toMatchObject({
         modelId: 'clodex:openai:gpt-test[1m]',
         claudeSessionId: '927b8642-15d2-4535-ab27-1430ae54c4aa',
@@ -176,7 +202,7 @@ describe('inference request log', () => {
     }
   });
 
-  it('adds only the latest message text when request previews are enabled', () => {
+  it('adds only the latest message text when request previews are enabled', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'clodex-inference-preview-'));
     const path = join(dir, 'requests.jsonl');
     const previous = process.env['CLODEX_LOG_REQUEST_PREVIEW'];
@@ -208,7 +234,7 @@ describe('inference request log', () => {
         requestPreview,
       });
 
-      const raw = readFileSync(path, 'utf8');
+      const raw = await readLog(path);
       const entries = raw.trim().split('\n').map(line => JSON.parse(line));
       expect(entries[0]).not.toHaveProperty('requestPreview');
       expect(entries[1]).toMatchObject({
@@ -235,7 +261,7 @@ describe('inference request log', () => {
     }
   });
 
-  it('logs upstream status always and redacted error content only when previews are enabled', () => {
+  it('logs upstream status always and redacted error content only when previews are enabled', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'clodex-inference-error-'));
     const path = join(dir, 'requests.jsonl');
     const previous = process.env['CLODEX_LOG_REQUEST_PREVIEW'];
@@ -268,7 +294,7 @@ describe('inference request log', () => {
         errorContent: 'x'.repeat(3_000),
       });
 
-      const entries = readFileSync(path, 'utf8').trim().split('\n').map(line => JSON.parse(line));
+      const entries = (await readLog(path)).trim().split('\n').map(line => JSON.parse(line));
       expect(entries[0]).toMatchObject({
         event: 'upstream_error',
         statusCode: 429,
@@ -288,7 +314,7 @@ describe('inference request log', () => {
     }
   });
 
-  it('records local route rejection without upstream attribution', () => {
+  it('records local route rejection without upstream attribution', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'clodex-route-unavailable-'));
     const path = join(dir, 'requests.jsonl');
     try {
@@ -298,7 +324,7 @@ describe('inference request log', () => {
         statusCode: 400,
       });
 
-      const entry = JSON.parse(readFileSync(path, 'utf8').trim());
+      const entry = JSON.parse((await readLog(path)).trim());
       expect(entry).toMatchObject({
         event: 'route_unavailable',
         requestId: 'request-1',
@@ -312,7 +338,7 @@ describe('inference request log', () => {
     }
   });
 
-  it('writes correlated response lifecycle metadata without response content', () => {
+  it('writes correlated response lifecycle metadata without response content', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'clodex-inference-lifecycle-'));
     const path = join(dir, 'requests.jsonl');
     try {
@@ -363,7 +389,7 @@ describe('inference request log', () => {
         terminationSource: 'local_shutdown',
       });
 
-      const [entry, failure, disconnect, shutdown] = readFileSync(path, 'utf8').trim().split('\n').map(line => JSON.parse(line));
+      const [entry, failure, disconnect, shutdown] = (await readLog(path)).trim().split('\n').map(line => JSON.parse(line));
       expect(entry).toMatchObject({
         event: 'translation_progress',
         requestId: 'req-123',
