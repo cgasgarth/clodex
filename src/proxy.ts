@@ -64,11 +64,12 @@ import { getOrCreateProxyToken } from './proxy-token.js';
 import { BunHttpResponse } from './bun-http-response.js';
 import type { ApiProcessingMode } from './daemon/api-pricing.js';
 import {
-  CHILD_AGENT_STREAM_MAX_RETRIES,
-  childAgentRetryDelayMs,
+  RESPONSE_STREAM_MAX_RETRIES,
+  responseStreamRetryDelayMs,
   createAgentStreamTransaction,
-  shouldRetryChildAgentStream,
-  waitForChildAgentRetry,
+  isResponseStreamRetryEligible,
+  shouldRetryResponseStream,
+  waitForResponseStreamRetry,
 } from './agent-stream-transaction.js';
 
 type ProxyLog = (message: string | (() => string)) => void;
@@ -455,21 +456,20 @@ async function runSdkRequestWithRecovery(
 
 function prepareAgentStreamTransaction(
   clientWantsStream: boolean,
-  claudeAgentId: string | undefined,
   response: ServerResponse,
   lifecycle: ReturnType<typeof createTranslationLifecycle>,
   plog: ProxyLog,
 ) {
   const state = { lastDownstreamWriteAt: Date.now() };
   const prepared = createAgentStreamTransaction({
-    enabled: clientWantsStream && claudeAgentId !== undefined,
+    enabled: clientWantsStream,
     response,
     onOutput: chunk => {
       state.lastDownstreamWriteAt = Date.now();
       lifecycle?.onOutput(chunk);
     },
     onBufferLimitExceeded: bufferedBytes => {
-      plog(() => `child-agent stream transaction exceeded ${bufferedBytes} bytes; switching to passthrough`);
+      plog(() => `response stream transaction exceeded ${bufferedBytes} bytes; switching to passthrough`);
     },
   });
   return { ...prepared, state };
@@ -801,10 +801,10 @@ export async function startProxyCatalog(
         const cancelTranslation = () => translationLifecycle?.cancel('downstream_client_abort');
         if (clientAbort.signal.aborted) cancelTranslation();
         else clientAbort.signal.addEventListener('abort', cancelTranslation, { once: true });
-        let childAgentRetryCount = 0;
+        let responseStreamRetryCount = 0;
         const { transaction: streamTransaction, ensureHeaders: ensureStreamHeaders, state: streamState } =
           prepareAgentStreamTransaction(
-            clientWantsStream, claudeAgentIdHeader, res, translationLifecycle, plog,
+            clientWantsStream, res, translationLifecycle, plog,
           );
         const runSdkRequest = async (): Promise<void> => {
           const estimatedInputTokens = estimateAnthropicInputTokens(anthropicBody);
@@ -983,16 +983,23 @@ export async function startProxyCatalog(
           }
           const clientRetryable = details?.isRetryable
             ?? isTransientUpstreamStatus(upstreamStatus);
-          if (shouldRetryChildAgentStream(
-            streamTransaction, clientRetryable, childAgentRetryCount,
+          const daemonRetryable = isResponseStreamRetryEligible(
+            clientRetryable,
+            details?.retryAfterSeconds,
+          );
+          if (shouldRetryResponseStream(
+            streamTransaction, daemonRetryable, responseStreamRetryCount,
           )) {
-            childAgentRetryCount += 1;
+            responseStreamRetryCount += 1;
             translationLifecycle?.retry(
-              childAgentRetryCount, CHILD_AGENT_STREAM_MAX_RETRIES,
+              responseStreamRetryCount, RESPONSE_STREAM_MAX_RETRIES,
               streamTransaction.discard() ?? 0, details?.transportCode,
             );
-            const retryDelayMs = childAgentRetryDelayMs(childAgentRetryCount, details?.retryAfterSeconds);
-            if (!await waitForChildAgentRetry(retryDelayMs, clientAbort.signal)) {
+            const retryDelayMs = responseStreamRetryDelayMs(
+              responseStreamRetryCount,
+              details?.retryAfterSeconds,
+            );
+            if (!await waitForResponseStreamRetry(retryDelayMs, clientAbort.signal)) {
               translationLifecycle?.cancel();
               return 'cancelled';
             }
