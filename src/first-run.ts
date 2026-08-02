@@ -9,7 +9,7 @@ import { runProvidersAdd, runProvidersAuth } from './providers-command.js';
 export type FirstRunResult = 'continue' | 'cancel';
 
 /** True when the user has no registry entries configured. */
-export async function needsFirstRunSetup(): Promise<boolean> {
+export function needsFirstRunSetup(): boolean {
   const registry = loadRegistry();
   return registry.providers.length === 0;
 }
@@ -43,7 +43,7 @@ export async function runFirstRunWizard(_trace = false): Promise<FirstRunResult>
     : await runProvidersAdd();
   if (code !== 0) return 'cancel';
 
-  if ((await needsFirstRunSetup())) return 'cancel';
+  if (needsFirstRunSetup()) return 'cancel';
   p.log.success('OpenAI provider ready — picking a model next.');
   return 'continue';
 }

@@ -23,7 +23,7 @@ import {
   writeProxyLifecycleLog,
 } from '../trace-log.js';
 import { DaemonInferenceCollector } from './collector.js';
-import { startDaemonControlApi } from './control-api.js';
+import { startIsolatedDaemonControlApi } from './control/isolated.js';
 import { daemonControlRequest } from './control-client.js';
 import {
   createDaemonRuntimeState,
@@ -106,11 +106,17 @@ function daemonIsAlive(): boolean {
   return Boolean(runtime && isPidAlive(runtime.pid));
 }
 
-async function waitForDaemon(timeoutMs = 5_000): Promise<boolean> {
+async function waitForDaemon(
+  timeoutMs = 5_000,
+  socketPath = getDaemonControlSocketPath(),
+): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   do {
     try {
-      await daemonControlRequest('/v1/health', { timeoutMs: 500 });
+      await daemonControlRequest('/v1/health', {
+        socketPath,
+        timeoutMs: Math.max(100, Math.min(750, deadline - Date.now())),
+      });
       return true;
     } catch {
       await new Promise(resolve => setTimeout(resolve, 100));
@@ -133,13 +139,15 @@ export async function ensureDaemonRunning(
   cliPath: string,
   timeoutMs = 5_000,
 ): Promise<DaemonRuntimeState> {
-  try {
-    await daemonControlRequest<DaemonHealthResponse>('/v1/health', { timeoutMs: 500 });
-    const running = readDaemonRuntimeState();
-    if (running && isPidAlive(running.pid) && runtimeMatchesInstall(running, cliPath)) {
-      return running;
+  const running = readDaemonRuntimeState();
+  if (running && isPidAlive(running.pid)) {
+    if (runtimeMatchesInstall(running, cliPath)) {
+      if (await waitForDaemon(timeoutMs, running.controlSocketPath)) return running;
+      throw new Error(
+        `Clodex daemon pid ${running.pid} remained unavailable for ${timeoutMs}ms`,
+      );
     }
-    if (running && isPidAlive(running.pid)) {
+    if (await waitForDaemon(Math.min(timeoutMs, 2_000), running.controlSocketPath)) {
       await daemonControlRequest('/v1/service/stop', {
         method: 'POST',
         body: { instanceId: running.instanceId },
@@ -153,9 +161,11 @@ export async function ensureDaemonRunning(
       if (isPidAlive(running.pid)) {
         throw new Error(`old Clodex daemon pid ${running.pid} did not stop during upgrade`);
       }
+    } else {
+      throw new Error(
+        `old Clodex daemon pid ${running.pid} is alive but its isolated control plane is unavailable`,
+      );
     }
-  } catch {
-    // Start below.
   }
 
   const stale = readDaemonRuntimeState();
@@ -271,7 +281,7 @@ async function runDaemonProcess(): Promise<number> {
   });
 
   let endpoint: ProxyHandle | undefined;
-  let control: Awaited<ReturnType<typeof startDaemonControlApi>> | undefined;
+  let control: Awaited<ReturnType<typeof startIsolatedDaemonControlApi>> | undefined;
   let runtime: ReturnType<typeof createDaemonRuntimeState> | undefined;
   let restartRequested = false;
   const shouldRestart = () => restartRequested;
@@ -342,7 +352,7 @@ async function runDaemonProcess(): Promise<number> {
     });
 
     const readyRuntime = { ...runtime, ready: true };
-    control = await startDaemonControlApi({
+    control = await startIsolatedDaemonControlApi({
       socketPath: runtime.controlSocketPath,
       runtime: readyRuntime,
       collector,

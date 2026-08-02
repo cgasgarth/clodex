@@ -76,7 +76,7 @@ export interface ProviderDisplayEntry {
   inRegistry: boolean;
 }
 
-export async function resolveProvidersForDisplay(): Promise<ProviderDisplayEntry[]> {
+export function resolveProvidersForDisplay(): ProviderDisplayEntry[] {
   const reg = loadRegistry();
   const entries: ProviderDisplayEntry[] = [];
 

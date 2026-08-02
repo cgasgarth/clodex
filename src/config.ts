@@ -183,12 +183,12 @@ export async function getSavedServerPassword(): Promise<string | null> {
   const keyring = await getServerPasswordKeyring();
   if (!keyring) return readConfig().server?.savedPassword ?? null;
 
-  const savedPassword = await updateConfigAsync(async config => {
+  const savedPassword = await updateConfigAsync(config => {
     const server = config.server;
     const password = server?.savedPassword;
     if (!password) return { result: null, write: false };
     try {
-      await keyring.setPassword(password);
+      keyring.setPassword(password);
       delete server.savedPassword;
       if (Object.keys(server).length === 0) delete config.server;
       return { result: password, write: true };
@@ -200,7 +200,7 @@ export async function getSavedServerPassword(): Promise<string | null> {
   if (savedPassword) return savedPassword;
 
   try {
-    return await keyring.getPassword();
+    return keyring.getPassword();
   } catch {
     return null;
   }
@@ -210,7 +210,7 @@ export async function setSavedServerPassword(password: string): Promise<void> {
   const keyring = await getServerPasswordKeyring();
   if (keyring) {
     try {
-      await keyring.setPassword(password);
+      keyring.setPassword(password);
       return;
     } catch {
       // Fallback
@@ -229,7 +229,7 @@ export async function clearSavedServerPassword(): Promise<void> {
   const keyring = await getServerPasswordKeyring();
   if (keyring) {
     try {
-      await keyring.deletePassword();
+      keyring.deletePassword();
     } catch {
       // Ignore
     }

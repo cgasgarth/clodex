@@ -33,7 +33,9 @@ interface SecondwindSession {
   close(): void;
 }
 
-type SecondwindSessionFactory = (key?: string) => Promise<SecondwindSession>;
+type SecondwindSessionFactory = (
+  key?: string,
+) => SecondwindSession | Promise<SecondwindSession>;
 
 export interface SecondwindRewriteRequest {
   requestId?: string;
@@ -688,7 +690,7 @@ export function createDaemonSecondwindService(
     initialMode: loadPreferences().secondwindMode,
     metrics,
     persistMode: mode => savePreferences({ secondwindMode: mode }),
-    createSession: async key => {
+    createSession: key => {
       const workerKey = key ?? `ephemeral:${process.pid}:${crypto.randomUUID()}`;
       return {
         rewrite: async request => {

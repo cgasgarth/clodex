@@ -259,8 +259,8 @@ async function runProvidersRefreshModels(providerId?: string): Promise<number> {
   return failed.length > 0 ? 1 : 0;
 }
 
-async function runProvidersList(): Promise<number> {
-  const entries = await resolveProvidersForDisplay();
+function runProvidersList(): number {
+  const entries = resolveProvidersForDisplay();
   if (entries.length === 0) {
     p.log.info('No providers configured. Run clodex providers add or clodex providers auth openai.');
     return 0;
@@ -499,7 +499,7 @@ async function runProviderDetail(id: string): Promise<'back' | 'removed'> {
 
 async function runProvidersHub(): Promise<number> {
   while (true) {
-    const entries = await resolveProvidersForDisplay();
+    const entries = resolveProvidersForDisplay();
     const options: Array<{ value: string; label: string; hint?: string }> = [
       { value: 'add', label: pc.bold('+ Add a provider'), hint: '' },
     ];

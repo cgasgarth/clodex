@@ -181,7 +181,7 @@ async function main(): Promise<void> {
         method: 'POST',
         body: requestedAccount ? { accountId: requestedAccount } : {},
         socketPath: daemon.controlSocketPath,
-        timeoutMs: 500,
+        timeoutMs: 5_000,
       });
       launchTicket = attached?.ticket;
     } catch (error) {

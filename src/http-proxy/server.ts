@@ -984,11 +984,10 @@ export async function startHttpProxy(options: HttpProxyOptions): Promise<HttpPro
     return `${endpoint.remoteAddress ?? ''}:${endpoint.remotePort ?? 0}`;
   };
 
-  const mitmServer = https.createServer({
-    key: certificates.serverKey,
-    cert: certificates.serverCert,
-    minVersion: 'TLSv1.2',
-  }, async (req, res) => {
+  const handleMitmRequest = async (
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> => {
     options.onMitmResponse?.(res);
     // Bun's node:https compatibility layer does not always turn an inbound
     // `Connection: close` into a full TLS close after ServerResponse finishes.
@@ -1192,6 +1191,20 @@ export async function startHttpProxy(options: HttpProxyOptions): Promise<HttpPro
       anthropicOrigin,
       options.anthropicRejectUnauthorized ?? true,
     );
+  };
+  const mitmServer = https.createServer({
+    key: certificates.serverKey,
+    cert: certificates.serverCert,
+    minVersion: 'TLSv1.2',
+  }, (req, res) => {
+    void handleMitmRequest(req, res).catch(error => {
+      if (res.headersSent) {
+        res.destroy(error instanceof Error ? error : new Error(String(error)));
+        return;
+      }
+      res.writeHead(500, { 'Content-Type': 'text/plain' });
+      res.end(error instanceof Error ? error.message : String(error));
+    });
   });
 
   const sockets = new Set<Socket>();

@@ -82,22 +82,11 @@ function sendJson(status: number, value: unknown): Response {
   });
 }
 
-export async function startDaemonControlApi(
+export async function dispatchDaemonControlRequest(
   options: DaemonControlApiOptions,
-): Promise<DaemonControlApiHandle> {
-  rmSync(options.socketPath, { force: true });
-  mkdirSync(dirname(options.socketPath), { recursive: true, mode: 0o700 });
-
-  const diagnostics = new ControlRequestDiagnostics({
-    emit: diagnostic => options.collector.recordDiagnostic(diagnostic),
-  });
-  const server = Bun.serve({
-    unix: options.socketPath,
-    maxRequestBodySize: MAX_CONTROL_BODY_BYTES,
-    async fetch(request, bunServer) {
-      bunServer.timeout(request, DAEMON_CONTROL_IDLE_TIMEOUT_SECONDS);
-      return diagnostics.track(request, async () => {
-        const url = new URL(request.url);
+  request: Request,
+): Promise<Response> {
+  const url = new URL(request.url);
       if (request.method === 'GET' && url.pathname === '/v1/health') {
         return sendJson(200, {
           ok: true,
@@ -229,8 +218,27 @@ export async function startDaemonControlApi(
         setTimeout(options.requestStop, 25).unref();
         return sendJson(202, { ok: true, action: 'stop' });
       }
-        return sendJson(404, { error: 'Unknown daemon control endpoint' });
-      }).catch(error => sendJson(400, {
+  return sendJson(404, { error: 'Unknown daemon control endpoint' });
+}
+
+export function startDaemonControlApi(
+  options: DaemonControlApiOptions,
+): DaemonControlApiHandle {
+  rmSync(options.socketPath, { force: true });
+  mkdirSync(dirname(options.socketPath), { recursive: true, mode: 0o700 });
+
+  const diagnostics = new ControlRequestDiagnostics({
+    emit: diagnostic => options.collector.recordDiagnostic(diagnostic),
+  });
+  const server = Bun.serve({
+    unix: options.socketPath,
+    maxRequestBodySize: MAX_CONTROL_BODY_BYTES,
+    async fetch(request, bunServer) {
+      bunServer.timeout(request, DAEMON_CONTROL_IDLE_TIMEOUT_SECONDS);
+      return diagnostics.track(
+        request,
+        () => dispatchDaemonControlRequest(options, request),
+      ).catch(error => sendJson(400, {
         error: error instanceof Error ? error.message : String(error),
       }));
     },

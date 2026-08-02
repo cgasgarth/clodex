@@ -5,6 +5,9 @@
     "/bin/launchctl"
   ],
   "entry": [
+    // Bun Worker entrypoint built separately from the CLI bundle. Keep this
+    // explicit: its URL is selected dynamically for source and dist runs.
+    "src/daemon/control/worker.ts",
     "src/daemon/secondwind-worker.ts",
     "scripts/*.ts",
     "tests/**/*.test.ts",
