@@ -1,29 +1,23 @@
 import { describe, expect, it } from 'bun:test';
 import {
   SecondwindWorkerPool,
-  secondwindWorkerShard,
+  secondwindWorkerCount,
 } from '../src/daemon/secondwind-worker-pool.js';
 
 const workerUrl = new URL('./fixtures/secondwind-pool-worker.ts', import.meta.url);
-
-function keysOnDifferentShards(): [string, string] {
-  for (let left = 0; left < 100; left += 1) {
-    for (let right = left + 1; right < 100; right += 1) {
-      const leftKey = `session-${left}`;
-      const rightKey = `session-${right}`;
-      if (secondwindWorkerShard(leftKey, 2) !== secondwindWorkerShard(rightKey, 2)) {
-        return [leftKey, rightKey];
-      }
-    }
-  }
-  throw new Error('Could not find keys on different worker shards');
-}
 
 function decode(body: Uint8Array): { workerId: string } {
   return JSON.parse(new TextDecoder().decode(body)) as { workerId: string };
 }
 
 describe('Secondwind worker pool', () => {
+  it('uses up to eight workers based on machine parallelism', () => {
+    expect(secondwindWorkerCount(2)).toBe(2);
+    expect(secondwindWorkerCount(6)).toBe(4);
+    expect(secondwindWorkerCount(18)).toBe(8);
+    expect(secondwindWorkerCount(64)).toBe(8);
+  });
+
   it('runs native stateless rewrites with stable bytes across repeated requests', async () => {
     const pool = new SecondwindWorkerPool({ workerCount: 1 });
     const records = Array.from({ length: 400 }, (_, index) => ({
@@ -44,8 +38,8 @@ describe('Secondwind worker pool', () => {
       }],
     };
     try {
-      const first = await pool.rewrite('native-session', request);
-      const second = await pool.rewrite('native-session', request);
+      const first = await pool.rewrite(request);
+      const second = await pool.rewrite(request);
       expect(first.body).toEqual(second.body);
       expect(first.body.byteLength).toBeLessThan(JSON.stringify(request).length);
     } finally {
@@ -53,19 +47,24 @@ describe('Secondwind worker pool', () => {
     }
   });
 
-  it('keeps the daemon event loop responsive and runs separate agents in parallel', async () => {
-    const pool = new SecondwindWorkerPool({ workerCount: 2, workerUrl });
-    const [leftKey, rightKey] = keysOnDifferentShards();
+  it('keeps the daemon responsive and randomly distributes concurrent rewrites', async () => {
+    const selections = [0, 0.99];
+    const pool = new SecondwindWorkerPool({
+      workerCount: 2,
+      workerUrl,
+      random: () => selections.shift() ?? 0,
+    });
     let heartbeat = 0;
     const timer = setInterval(() => {
       heartbeat += 1;
     }, 10);
     const startedAt = performance.now();
     try {
-      await Promise.all([
-        pool.rewrite(leftKey, { delayMs: 250 }),
-        pool.rewrite(rightKey, { delayMs: 250 }),
+      const results = await Promise.all([
+        pool.rewrite({ delayMs: 250 }),
+        pool.rewrite({ delayMs: 250 }),
       ]);
+      expect(decode(results[0]!.body).workerId).not.toBe(decode(results[1]!.body).workerId);
     } finally {
       clearInterval(timer);
       pool.close();
@@ -75,19 +74,24 @@ describe('Secondwind worker pool', () => {
     expect(heartbeat).toBeGreaterThan(5);
   });
 
-  it('serializes rewrites for the same logical agent session', async () => {
-    const pool = new SecondwindWorkerPool({ workerCount: 2, workerUrl });
+  it('does not pin concurrent requests from one logical session to one worker', async () => {
+    const selections = [0, 0.99];
+    const pool = new SecondwindWorkerPool({
+      workerCount: 2,
+      workerUrl,
+      random: () => selections.shift() ?? 0,
+    });
     const startedAt = performance.now();
     try {
       await Promise.all([
-        pool.rewrite('same-session', { delayMs: 175 }),
-        pool.rewrite('same-session', { delayMs: 175 }),
+        pool.rewrite({ delayMs: 175 }),
+        pool.rewrite({ delayMs: 175 }),
       ]);
     } finally {
       pool.close();
     }
 
-    expect(performance.now() - startedAt).toBeGreaterThan(320);
+    expect(performance.now() - startedAt).toBeLessThan(320);
   });
 
   it('periodically recycles a stateless worker so allocator state is released', async () => {
@@ -97,8 +101,8 @@ describe('Secondwind worker pool', () => {
       recycleAfterRequests: 1,
     });
     try {
-      const first = decode((await pool.rewrite('finished-session', {})).body);
-      const second = decode((await pool.rewrite('new-session', {})).body);
+      const first = decode((await pool.rewrite({})).body);
+      const second = decode((await pool.rewrite({})).body);
       expect(second.workerId).not.toBe(first.workerId);
     } finally {
       pool.close();

@@ -690,11 +690,10 @@ export function createDaemonSecondwindService(
     initialMode: loadPreferences().secondwindMode,
     metrics,
     persistMode: mode => savePreferences({ secondwindMode: mode }),
-    createSession: key => {
-      const workerKey = key ?? `ephemeral:${process.pid}:${crypto.randomUUID()}`;
+    createSession: () => {
       return {
         rewrite: async request => {
-          const result = await workers.rewrite(workerKey, request);
+          const result = await workers.rewrite(request);
           return {
             request: JSON.parse(
               new TextDecoder().decode(result.body),
