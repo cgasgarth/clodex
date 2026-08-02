@@ -7,11 +7,16 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { aliasModelId, startProxy, startProxyCatalog, type ProxyRoute } from '../src/proxy.js';
 import { makeRouteResolver, resolveCatalogModelAliases } from '../src/catalog.js';
-import { getProxyDebugLogPath } from '../src/trace-log.js';
+import { flushTraceLogs, getProxyDebugLogPath } from '../src/trace-log.js';
 import { anthropicMessagesEndpoint, estimateAnthropicInputTokens } from '../src/anthropic-endpoints.js';
 import { withResponsesWebSocketDiagnosticContext } from '../src/oauth/responses-websocket.js';
 import type { LocalProvider, ModelAlias } from '../src/types.js';
 import { asMocked, restoreTestGlobals, stubTestGlobal, waitForCondition } from './test-helpers.js';
+
+async function readFlushedLog(path: string): Promise<string> {
+  await flushTraceLogs(path);
+  return readFileSync(path, 'utf8');
+}
 
 vi.mock('../src/oauth/responses-websocket.js', () => {
   const importOriginal = <T>() => importActual<T>('../src/oauth/responses-websocket.js', import.meta.url);
@@ -862,8 +867,8 @@ describe('translated request cancellation', () => {
       expect(downstreamBody).toContain('event: ping');
       controller.abort();
 
-      await waitForCondition(() => {
-        const entries = readFileSync(inferenceLogPath, 'utf8').trim().split('\n').map(line => JSON.parse(line));
+      await waitForCondition(async () => {
+        const entries = (await readFlushedLog(inferenceLogPath)).trim().split('\n').map(line => JSON.parse(line));
         expect(entries).toContainEqual(expect.objectContaining({
           event: 'translation_cancelled',
           requestId: 'req-cancel-1',
@@ -914,7 +919,7 @@ describe('SDK translated error logging', () => {
 
       expect(res.status).toBe(502);
       expect(res.body).toContain('error');
-      const entries = readFileSync(inferenceLogPath, 'utf8').trim().split('\n').map(line => JSON.parse(line));
+      const entries = (await readFlushedLog(inferenceLogPath)).trim().split('\n').map(line => JSON.parse(line));
       expect(entries).toContainEqual(expect.objectContaining({
         event: 'translation_failed',
         requestId: 'req-translate-error',
@@ -969,7 +974,7 @@ describe('SDK translated error logging', () => {
       expect(res.status).toBe(400);
       expect(res.headers['retry-after']).toBeUndefined();
       expect(res.body).toContain('translated request rejected');
-      const entries = readFileSync(inferenceLogPath, 'utf8').trim().split('\n').map(line => JSON.parse(line));
+      const entries = (await readFlushedLog(inferenceLogPath)).trim().split('\n').map(line => JSON.parse(line));
       const errorEntry = entries.find(entry => entry.event === 'upstream_error');
       expect(errorEntry).toMatchObject({
         event: 'upstream_error',
@@ -1103,7 +1108,7 @@ describe('SDK translated error logging', () => {
       }, 'req-transport-error');
 
       expect(res.status).toBe(400);
-      const entries = readFileSync(inferenceLogPath, 'utf8').trim().split('\n').map(line => JSON.parse(line));
+      const entries = (await readFlushedLog(inferenceLogPath)).trim().split('\n').map(line => JSON.parse(line));
       expect(entries).toContainEqual(expect.objectContaining({
         event: 'translation_failed',
         requestId: 'req-transport-error',
@@ -1182,7 +1187,7 @@ describe('SDK translated error logging', () => {
       expect(res.body).not.toContain('discarded partial output');
       expect(res.body).not.toContain('event: error');
       expect(res.body).toContain('event: message_stop');
-      const entries = readFileSync(inferenceLogPath, 'utf8').trim().split('\n').map(line => JSON.parse(line));
+      const entries = (await readFlushedLog(inferenceLogPath)).trim().split('\n').map(line => JSON.parse(line));
       expect(entries.some(entry => entry.event === 'translation_failed')).toBe(false);
       expect(entries.some(entry => entry.event === 'upstream_error')).toBe(false);
       expect(entries).toContainEqual(expect.objectContaining({
@@ -1256,7 +1261,7 @@ describe('SDK translated error logging', () => {
       expect(res.body).not.toContain('discarded partial output');
       expect(res.body).not.toContain('event: error');
       expect(res.body).toContain('event: message_stop');
-      const entries = readFileSync(inferenceLogPath, 'utf8').trim().split('\n').map(line => JSON.parse(line));
+      const entries = (await readFlushedLog(inferenceLogPath)).trim().split('\n').map(line => JSON.parse(line));
       expect(entries).toContainEqual(expect.objectContaining({
         event: 'translation_retrying',
         requestId: 'req-partial-transport',
@@ -1322,7 +1327,7 @@ describe('SDK translated error logging', () => {
         type: 'error',
         error: { type: 'invalid_request_error' },
       });
-      const entries = readFileSync(inferenceLogPath, 'utf8').trim().split('\n').map(line => JSON.parse(line));
+      const entries = (await readFlushedLog(inferenceLogPath)).trim().split('\n').map(line => JSON.parse(line));
       expect(entries).toContainEqual(expect.objectContaining({
         event: 'upstream_error',
         requestId: 'req-partial-terminal',
@@ -1417,7 +1422,7 @@ describe('SDK translated error logging', () => {
       expect(res.body.split('"type":"tool_use"')).toHaveLength(2);
       expect(res.body).not.toContain('event: error');
       expect(res.body).toContain('event: message_stop');
-      const entries = readFileSync(inferenceLogPath, 'utf8').trim().split('\n').map(line => JSON.parse(line));
+      const entries = (await readFlushedLog(inferenceLogPath)).trim().split('\n').map(line => JSON.parse(line));
       expect(entries.some(entry => entry.event === 'translation_failed')).toBe(false);
       expect(entries.some(entry => entry.event === 'upstream_error')).toBe(false);
     } finally {
@@ -1477,7 +1482,7 @@ describe('SDK translated error logging', () => {
         error: { type: 'api_error' },
       });
       expect(res.body).not.toContain('"type":"message_stop"');
-      const entries = readFileSync(inferenceLogPath, 'utf8').trim().split('\n').map(line => JSON.parse(line));
+      const entries = (await readFlushedLog(inferenceLogPath)).trim().split('\n').map(line => JSON.parse(line));
       expect(entries).toContainEqual(expect.objectContaining({
         event: 'upstream_error',
         requestId: 'req-partial-tool',
@@ -1636,7 +1641,7 @@ describe('SDK translated error logging', () => {
         cache_creation_input_tokens: 0,
         cache_read_input_tokens: 0,
       });
-      const entries = readFileSync(inferenceLogPath, 'utf8').trim().split('\n').map(line => JSON.parse(line));
+      const entries = (await readFlushedLog(inferenceLogPath)).trim().split('\n').map(line => JSON.parse(line));
       expect(entries).toContainEqual(expect.objectContaining({
         event: 'translation_dispatched',
         requestId: 'req-success-1',
@@ -1745,7 +1750,7 @@ describe('SDK translated error logging', () => {
       // one `event:` line, and the surplus over translatedChunks is exactly the
       // pings — keeping diagnostic outputIdleMs honest about real buffering.
       const totalEventFrames = res.body.split('event: ').length - 1;
-      const entries = readFileSync(inferenceLogPath, 'utf8').trim().split('\n').map(line => JSON.parse(line));
+      const entries = (await readFlushedLog(inferenceLogPath)).trim().split('\n').map(line => JSON.parse(line));
       const completed = entries.find(entry => entry.event === 'translation_completed');
       expect(completed?.lastPartType).toBe('finish');
       expect(totalEventFrames - completed.translatedChunks).toBe(pingCount);
@@ -1817,7 +1822,7 @@ describe('SDK translated error logging', () => {
         .find(block => block.startsWith('event: message_delta'))!;
       const messageDelta = JSON.parse(messageDeltaBlock.split('\n')[1]!.replace('data: ', ''));
       expect(messageDelta.usage.input_tokens).toBeGreaterThan(0);
-      const entries = readFileSync(inferenceLogPath, 'utf8')
+      const entries = (await readFlushedLog(inferenceLogPath))
         .trim().split('\n').map(line => JSON.parse(line));
       const completed = entries.find(entry => entry.event === 'translation_completed');
       expect(completed).toMatchObject({
@@ -1879,7 +1884,7 @@ describe('SDK translated error logging', () => {
       }, 'req-nonstream-1');
 
       expect(res.status).toBe(200);
-      const entries = readFileSync(inferenceLogPath, 'utf8').trim().split('\n').map(line => JSON.parse(line));
+      const entries = (await readFlushedLog(inferenceLogPath)).trim().split('\n').map(line => JSON.parse(line));
       expect(entries).toContainEqual(expect.objectContaining({
         event: 'translation_dispatched',
         requestId: 'req-nonstream-1',
@@ -1934,7 +1939,7 @@ describe('anthropic passthrough debug logging', () => {
 
     handle.close();
     expect(res.status).toBe(429);
-    const log = readFileSync(getProxyDebugLogPath(), 'utf8');
+    const log = await readFlushedLog(getProxyDebugLogPath());
     expect(log).toContain('anthropic upstream 429');
     expect(log).toContain('rate limit exceeded');
   });

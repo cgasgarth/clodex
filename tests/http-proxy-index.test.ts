@@ -13,8 +13,13 @@ import {
   type LoadedHttpProxyRoutes,
 } from '../src/http-proxy/index.js';
 import type { ProxyRoute } from '../src/proxy.js';
-import { getInferenceRequestLogPath } from '../src/trace-log.js';
+import { flushTraceLogs, getInferenceRequestLogPath } from '../src/trace-log.js';
 import { waitForCondition } from './test-helpers.js';
+
+async function readFlushedLog(path: string): Promise<string> {
+  await flushTraceLogs(path);
+  return readFileSync(path, 'utf8');
+}
 
 describe('HTTP proxy startup model list', () => {
   it('prints the available context beside the full model name', () => {
@@ -56,7 +61,7 @@ describe('HTTP proxy startup model list', () => {
       process.emit('SIGTERM');
       await expect(result).resolves.toBe(0);
 
-      const entries = readFileSync(logPath, 'utf8').trim().split('\n').map(line => JSON.parse(line));
+      const entries = (await readFlushedLog(logPath)).trim().split('\n').map(line => JSON.parse(line));
       expect(entries.map(entry => entry.event)).toEqual([
         'proxy_started',
         'proxy_stopping',

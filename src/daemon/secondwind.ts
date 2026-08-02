@@ -23,11 +23,13 @@ interface SecondwindRewriteStats {
 }
 
 interface SecondwindSession {
-  rewrite(request: Record<string, unknown>): {
-    request: Record<string, unknown>;
+  rewrite(request: Record<string, unknown>, body?: Uint8Array): {
+    request?: Record<string, unknown>;
+    body?: Uint8Array;
     stats?: SecondwindRewriteStats;
   } | Promise<{
-    request: Record<string, unknown>;
+    request?: Record<string, unknown>;
+    body?: Uint8Array;
     stats?: SecondwindRewriteStats;
   }>;
   close(): void;
@@ -203,7 +205,7 @@ function nonNegativeInteger(value: unknown): number | undefined {
 function tokenAccounting(
   stats: SecondwindRewriteStats | undefined,
   originalRequest: Record<string, unknown>,
-  optimizedRequest: Record<string, unknown>,
+  optimizedRequest: () => Record<string, unknown>,
   blocksRewritten: number,
 ): {
   originalTokens: number;
@@ -239,7 +241,7 @@ function tokenAccounting(
 
   const estimatedInput = estimateAnthropicInputTokens(originalRequest);
   const estimatedOutput = blocksRewritten > 0
-    ? estimateAnthropicInputTokens(optimizedRequest)
+    ? estimateAnthropicInputTokens(optimizedRequest())
     : estimatedInput;
   return {
     originalTokens: estimatedInput,
@@ -492,15 +494,15 @@ export class SecondwindService {
       if (sessionKey) this.#markSessionActive(sessionKey);
       session = await this.#createSession(sessionKey);
       this.#loaded = true;
-      const rawResult: unknown = await session.rewrite(input.request);
+      const rawResult: unknown = await session.rewrite(input.request, input.body);
       if (!rawResult || typeof rawResult !== 'object') {
         throw new Error('Secondwind returned an invalid rewritten request');
       }
-      const result = rawResult as { request?: unknown; stats?: SecondwindRewriteStats };
-      if (!result.request || typeof result.request !== 'object') {
-        throw new Error('Secondwind returned an invalid rewritten request');
-      }
-      const rewrittenRequest = result.request as Record<string, unknown>;
+      const result = rawResult as {
+        request?: unknown;
+        body?: unknown;
+        stats?: SecondwindRewriteStats;
+      };
 
       const blocksRewritten = Math.max(
         0,
@@ -508,14 +510,29 @@ export class SecondwindService {
       );
       // Preserve the exact inbound bytes when Secondwind made no change. Besides
       // avoiding needless serialization, this keeps prompt-cache prefixes stable.
+      let rewrittenRequest: Record<string, unknown> | undefined;
+      const readRewrittenRequest = (): Record<string, unknown> => {
+        if (rewrittenRequest) return rewrittenRequest;
+        if (result.request && typeof result.request === 'object') {
+          rewrittenRequest = result.request as Record<string, unknown>;
+          return rewrittenRequest;
+        }
+        if (result.body instanceof Uint8Array) {
+          rewrittenRequest = JSON.parse(new TextDecoder().decode(result.body)) as Record<string, unknown>;
+          return rewrittenRequest;
+        }
+        throw new Error('Secondwind returned an invalid rewritten request');
+      };
       const optimizedBody = blocksRewritten > 0
-        ? Buffer.from(JSON.stringify(rewrittenRequest))
+        ? result.body instanceof Uint8Array
+          ? Buffer.from(result.body.buffer, result.body.byteOffset, result.body.byteLength)
+          : Buffer.from(JSON.stringify(readRewrittenRequest()))
         : input.body;
       if (input.recordMetrics !== false) {
         const accounting = tokenAccounting(
           result.stats,
           input.request,
-          rewrittenRequest,
+          blocksRewritten > 0 ? readRewrittenRequest : () => input.request,
           blocksRewritten,
         );
         const metrics = mode === 'on' ? this.#applied : this.#shadow;
@@ -692,12 +709,11 @@ export function createDaemonSecondwindService(
     persistMode: mode => savePreferences({ secondwindMode: mode }),
     createSession: () => {
       return {
-        rewrite: async request => {
-          const result = await workers.rewrite(request);
+        rewrite: async (_request, body) => {
+          if (!body) throw new Error('Secondwind worker rewrite requires serialized request bytes');
+          const result = await workers.rewrite(body);
           return {
-            request: JSON.parse(
-              new TextDecoder().decode(result.body),
-            ) as Record<string, unknown>,
+            body: result.body,
             stats: result.stats,
           };
         },

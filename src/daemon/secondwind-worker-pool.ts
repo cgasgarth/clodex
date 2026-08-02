@@ -119,10 +119,13 @@ export class SecondwindWorkerPool {
     return slot.worker;
   }
 
-  rewrite(request: Record<string, unknown>): Promise<WorkerRewriteResult> {
+  rewrite(body: Uint8Array): Promise<WorkerRewriteResult> {
     if (this.closed) return Promise.reject(new Error('Secondwind worker pool is closed'));
     const id = this.nextRequestId++;
-    const encoded = new TextEncoder().encode(JSON.stringify(request));
+    // Transfer request bytes directly. The proxy already owns the serialized
+    // body, so serializing its parsed copy here would walk and allocate the
+    // entire transcript again before the worker immediately parses it.
+    const encoded = body.slice();
     const sample = Math.max(0, Math.min(1, this.random()));
     const slotIndex = Math.min(this.slots.length - 1, Math.floor(sample * this.slots.length));
     const slot = this.slots[slotIndex]!;

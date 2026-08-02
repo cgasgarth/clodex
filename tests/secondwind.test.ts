@@ -198,6 +198,44 @@ describe('Secondwind daemon service', () => {
     })).toBe(body);
   });
 
+  it('forwards optimized worker bytes without parsing or serializing them again', async () => {
+    const request = toolRequest('large original output');
+    const originalBody = Buffer.from(JSON.stringify(request));
+    const optimizedBody = new TextEncoder().encode('worker-owned-wire-bytes');
+    const service = new SecondwindService({
+      initialMode: 'on',
+      createSession: async () => ({
+        rewrite: (_request, body) => {
+          expect(body).toBe(originalBody);
+          return {
+            body: optimizedBody,
+            stats: {
+              blocks_rewritten: 1,
+              input_tokens: 100,
+              output_tokens: 40,
+              tokens_saved: 60,
+            },
+          };
+        },
+        close: () => {},
+      }),
+    });
+
+    const rewritten = await service.rewrite({
+      body: originalBody,
+      request,
+      modelId: 'gpt-5.6-sol',
+    });
+
+    expect(rewritten.toString()).toBe('worker-owned-wire-bytes');
+    expect(service.snapshot().applied).toMatchObject({
+      blocksRewritten: 1,
+      inputTokensConsidered: 100,
+      tokensReduced: 60,
+      estimatedTokenRequests: 0,
+    });
+  });
+
   it('fails open and reports optimizer errors', async () => {
     const service = new SecondwindService({
       initialMode: 'on',
