@@ -74,6 +74,7 @@ export interface ResponsesOverflowRecoveryPlan {
     source: OverflowRecoverySourceKind;
     reason: string;
   }>;
+  rejectedCount: number;
 }
 
 interface ProgressiveOverflowRecoveryStep {
@@ -217,15 +218,6 @@ function fixedPromptTokens(fullInput: unknown[], estimatedInputTokens?: number):
   return Math.max(0, estimatedInputTokens - approximateResponsesItemsTokens(fullInput));
 }
 
-function estimatedRequestTokens(
-  items: unknown[],
-  fullInput: unknown[],
-  estimatedInputTokens?: number,
-): number {
-  return fixedPromptTokens(fullInput, estimatedInputTokens)
-    + approximateResponsesItemsTokens(items);
-}
-
 function dependencyViolation(
   prefix: unknown[],
   tail: unknown[],
@@ -265,45 +257,141 @@ function dependencyViolation(
   return undefined;
 }
 
-function inferredBoundaries(input: unknown[]): number[] {
-  const starts: number[] = [];
-  let inOutputGroup = false;
-  for (let index = 0; index < input.length; index += 1) {
-    const output = isModelOutput(input[index]);
-    if (output && !inOutputGroup && index > 0) starts.push(index);
-    inOutputGroup = output;
-  }
-  return starts.reverse();
+interface DependencyCounts {
+  prefixCalls: number;
+  prefixOutputs: number;
+  tailCalls: number;
+  tailOutputs: number;
 }
 
-function sourceCandidates(
-  fullInput: unknown[],
-  sources: OverflowRecoverySource[],
-): Array<{
-  source: OverflowRecoverySourceKind;
+function isToolCall(value: unknown): boolean {
+  const kind = responsesItemKind(value);
+  return kind.endsWith('_call') || kind === 'function_call' || kind === 'custom_tool_call';
+}
+
+function isToolOutput(value: unknown): boolean {
+  const kind = responsesItemKind(value);
+  return TOOL_OUTPUT_KINDS.has(kind) || kind.endsWith('_call_output');
+}
+
+/**
+ * Tracks whether a moving prefix/tail cut preserves tool dependencies.
+ *
+ * The old planner rebuilt four sets for every inferred boundary. A resumed
+ * workflow can contain thousands of boundaries, turning recovery into an
+ * O(n²) main-thread scan. This tracker initializes once and updates only the
+ * call id crossing each cut.
+ */
+function inferredDependencyTracker(input: unknown[]): {
+  moveToTail: (value: unknown) => void;
+  violation: () => string | undefined;
+} {
+  const counts = new Map<string, DependencyCounts>();
+  const crossing = new Set<string>();
+  const missingTailProducer = new Set<string>();
+  const missingPrefixProducer = new Set<string>();
+
+  const classify = (id: string, state: DependencyCounts): void => {
+    crossing.delete(id);
+    missingTailProducer.delete(id);
+    missingPrefixProducer.delete(id);
+    if (state.tailOutputs > 0 && state.prefixCalls > 0) crossing.add(id);
+    if (state.tailOutputs > 0 && state.tailCalls === 0) missingTailProducer.add(id);
+    if (state.prefixOutputs > 0 && state.prefixCalls === 0) missingPrefixProducer.add(id);
+  };
+  const stateFor = (id: string): DependencyCounts => {
+    const existing = counts.get(id);
+    if (existing) return existing;
+    const created = { prefixCalls: 0, prefixOutputs: 0, tailCalls: 0, tailOutputs: 0 };
+    counts.set(id, created);
+    return created;
+  };
+
+  for (const item of input) {
+    const id = callId(item);
+    if (!id) continue;
+    const state = stateFor(id);
+    if (isToolCall(item)) state.prefixCalls += 1;
+    if (isToolOutput(item)) state.prefixOutputs += 1;
+  }
+  for (const [id, state] of counts) classify(id, state);
+
+  return {
+    moveToTail: item => {
+      const id = callId(item);
+      if (!id) return;
+      const state = stateFor(id);
+      if (isToolCall(item)) {
+        state.prefixCalls -= 1;
+        state.tailCalls += 1;
+      }
+      if (isToolOutput(item)) {
+        state.prefixOutputs -= 1;
+        state.tailOutputs += 1;
+      }
+      classify(id, state);
+    },
+    violation: () => {
+      if (crossing.size > 0) return 'tool_dependency_crosses_cut';
+      if (missingTailProducer.size > 0) return 'tail_tool_output_has_no_tail_producer';
+      if (missingPrefixProducer.size > 0) return 'prefix_tool_output_has_no_prefix_producer';
+      return undefined;
+    },
+  };
+}
+
+function inferredBoundary(input: unknown[], cut: number): boolean {
+  return cut > 0 && isModelOutput(input[cut]) && !isModelOutput(input[cut - 1]);
+}
+
+function sumItemTokens(input: unknown[]): { itemTokens: number[]; total: number } {
+  const itemTokens = input.map(approximateItemTokens);
+  return {
+    itemTokens,
+    total: itemTokens.reduce((sum, tokens) => sum + tokens, 0),
+  };
+}
+
+function fixedPromptTokensFromTotal(total: number, estimatedInputTokens?: number): number {
+  if (estimatedInputTokens === undefined) return 0;
+  return Math.max(0, estimatedInputTokens - total);
+}
+
+function sourceCandidate(source: OverflowRecoverySource): {
+  source: Exclude<OverflowRecoverySourceKind, 'inferred'>;
   prefix: unknown[];
   tail: unknown[];
   prefixInputTokens?: number;
-}> {
-  const candidates: Array<{
-    source: OverflowRecoverySourceKind;
-    prefix: unknown[];
-    tail: unknown[];
-    prefixInputTokens?: number;
-  }> = sources.map(source => ({
+} {
+  return {
     source: source.kind,
     prefix: source.prefix,
     tail: source.tail,
     prefixInputTokens: source.prefixInputTokens,
-  }));
-  for (const cut of inferredBoundaries(fullInput)) {
-    candidates.push({
-      source: 'inferred',
-      prefix: fullInput.slice(0, cut),
-      tail: fullInput.slice(cut),
-    });
-  }
-  return candidates;
+  };
+}
+
+function candidateTokenEstimate(
+  items: unknown[],
+  fixedTokens: number,
+): number {
+  return fixedTokens + approximateResponsesItemsTokens(items);
+}
+
+function boundedRejectionRecorder(
+  rejected: ResponsesOverflowRecoveryPlan['rejected'],
+): {
+  reject: (source: OverflowRecoverySourceKind, reason: string) => void;
+  count: () => number;
+} {
+  let rejectedCount = 0;
+  return {
+    reject: (source, reason) => {
+      rejectedCount += 1;
+      if (rejected.length < REJECTED_DIAGNOSTIC_LIMIT) rejected.push({ source, reason });
+    },
+    count: () => rejectedCount,
+  };
 }
 
 /**
@@ -318,13 +406,17 @@ export function planResponsesOverflowRecovery(
 ): ResponsesOverflowRecoveryPlan {
   const candidates: OverflowRecoveryCandidate[] = [];
   const rejected: ResponsesOverflowRecoveryPlan['rejected'] = [];
+  const rejection = boundedRejectionRecorder(rejected);
   const seen = new Set<string>();
   const maxCandidates = Math.max(1, options.maxCandidates ?? 2);
+  const { itemTokens, total: totalItemTokens } = sumItemTokens(options.fullInput);
+  const fixedTokens = fixedPromptTokensFromTotal(totalItemTokens, options.estimatedInputTokens);
 
-  for (const candidate of sourceCandidates(options.fullInput, options.sources ?? [])) {
+  for (const source of options.sources ?? []) {
+    const candidate = sourceCandidate(source);
     if (candidates.length >= maxCandidates) break;
     if (candidate.prefix.length === 0 || candidate.tail.length === 0) {
-      rejected.push({ source: candidate.source, reason: 'empty_prefix_or_tail' });
+      rejection.reject(candidate.source, 'empty_prefix_or_tail');
       continue;
     }
     const prefixFingerprint = itemFingerprint(candidate.prefix);
@@ -334,30 +426,22 @@ export function planResponsesOverflowRecovery(
     const violation = dependencyViolation(
       candidate.prefix,
       candidate.tail,
-      candidate.source !== 'inferred',
+      true,
     );
     if (violation) {
-      rejected.push({ source: candidate.source, reason: violation });
+      rejection.reject(candidate.source, violation);
       continue;
     }
 
     const estimatedPrefixTokens = candidate.prefixInputTokens
-      ?? estimatedRequestTokens(
-        candidate.prefix,
-        options.fullInput,
-        options.estimatedInputTokens,
-      );
+      ?? candidateTokenEstimate(candidate.prefix, fixedTokens);
     if (estimatedPrefixTokens > options.compactThreshold) {
-      rejected.push({ source: candidate.source, reason: 'prefix_exceeds_compact_threshold' });
+      rejection.reject(candidate.source, 'prefix_exceeds_compact_threshold');
       continue;
     }
-    const estimatedTailTokens = estimatedRequestTokens(
-      candidate.tail,
-      options.fullInput,
-      options.estimatedInputTokens,
-    );
+    const estimatedTailTokens = candidateTokenEstimate(candidate.tail, fixedTokens);
     if (estimatedTailTokens >= options.contextWindow) {
-      rejected.push({ source: candidate.source, reason: 'tail_exceeds_context_window' });
+      rejection.reject(candidate.source, 'tail_exceeds_context_window');
       continue;
     }
 
@@ -372,7 +456,49 @@ export function planResponsesOverflowRecovery(
     });
   }
 
-  return { candidates, rejected };
+  if (candidates.length < maxCandidates) {
+    const dependencies = inferredDependencyTracker(options.fullInput);
+    let prefixItemTokens = totalItemTokens;
+    for (let cut = options.fullInput.length - 1; cut > 0; cut -= 1) {
+      dependencies.moveToTail(options.fullInput[cut]);
+      prefixItemTokens -= itemTokens[cut] ?? 0;
+      if (!inferredBoundary(options.fullInput, cut)) continue;
+
+      const violation = dependencies.violation();
+      if (violation) {
+        rejection.reject('inferred', violation);
+        continue;
+      }
+      const estimatedPrefixTokens = fixedTokens + prefixItemTokens;
+      if (estimatedPrefixTokens > options.compactThreshold) {
+        rejection.reject('inferred', 'prefix_exceeds_compact_threshold');
+        continue;
+      }
+      const estimatedTailTokens = fixedTokens + totalItemTokens - prefixItemTokens;
+      if (estimatedTailTokens >= options.contextWindow) {
+        rejection.reject('inferred', 'tail_exceeds_context_window');
+        continue;
+      }
+
+      const prefix = options.fullInput.slice(0, cut);
+      const prefixFingerprint = itemFingerprint(prefix);
+      if (seen.has(prefixFingerprint)) continue;
+      seen.add(prefixFingerprint);
+      const tail = options.fullInput.slice(cut);
+      candidates.push({
+        source: 'inferred',
+        prefix,
+        tail,
+        prefixFingerprint,
+        tailFingerprint: itemFingerprint(tail),
+        estimatedPrefixTokens,
+        estimatedTailTokens,
+      });
+      if (candidates.length >= maxCandidates) break;
+    }
+  }
+
+  return { candidates, rejected, rejectedCount: rejection.count() };
 }
 
 export function estimatedRebasedInputTokens(
@@ -625,8 +751,8 @@ export class ResponsesOverflowRecoverySession {
         estimatedInputTokens: event.estimatedInputTokens,
         sourceItems: event.inputItems,
         candidateCount: event.plan.candidates.length,
-        rejected: event.plan.rejected.slice(0, REJECTED_DIAGNOSTIC_LIMIT),
-        rejectedCount: event.plan.rejected.length,
+        rejected: event.plan.rejected,
+        rejectedCount: event.plan.rejectedCount,
         stage: event.stage,
       }),
       onAccepted: event => this.emit({

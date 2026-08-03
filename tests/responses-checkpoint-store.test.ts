@@ -55,6 +55,21 @@ describe('Responses checkpoint store', () => {
       .toEqual([value]);
   });
 
+  it('round-trips compacted state larger than the former 8 MiB limit', () => {
+    const directory = storeDirectory('checkpoint-large');
+    const value = checkpoint('9'.repeat(64));
+    value.compactedInput = [{
+      type: 'function_call_output',
+      call_id: 'large-tool-result',
+      output: 'x'.repeat(9 * 1024 * 1024),
+    }];
+
+    expect(saveStoredResponsesCheckpoint(directory, value, 16, 256)).toBe(true);
+    const loaded = loadStoredResponsesCheckpoints(directory, value.lastUsedAt + 1, 10_000);
+    expect(loaded).toHaveLength(1);
+    expect(loaded[0]?.compactedInput).toEqual(value.compactedInput);
+  });
+
   it('drops expired, corrupt, and identity-invalid checkpoint files', () => {
     const directory = storeDirectory('checkpoint-validation');
     const expired = checkpoint('b'.repeat(64), randomUUID(), 0);
