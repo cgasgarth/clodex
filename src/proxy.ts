@@ -57,6 +57,7 @@ import {
   anthropicMessagesEndpoint,
   anthropicPromptTooLongMessage,
   estimateAnthropicInputTokens,
+  normalizeAnthropicGatewayPath,
 } from './anthropic-endpoints.js';
 import { withResponsesWebSocketDiagnosticContext } from './oauth/responses-websocket.js';
 import { resolveOpenAiCompactionThreshold } from './oauth/responses-compaction.js';
@@ -534,6 +535,7 @@ export async function startProxyCatalog(
       async fetch(req, bunServer) {
         const requestUrl = new URL(req.url);
         const requestPath = `${requestUrl.pathname}${requestUrl.search}`;
+        const protocolPath = `${normalizeAnthropicGatewayPath(requestUrl.pathname)}${requestUrl.search}`;
         const response = new BunHttpResponse();
         const res = response as unknown as ServerResponse;
         const run = async () => {
@@ -547,9 +549,9 @@ export async function startProxyCatalog(
     }
 
     // GET /v1/models — Claude Code validates the model on startup and populates /model picker
-    if (req.method === 'GET' && requestPath.startsWith('/v1/models')) {
+    if (req.method === 'GET' && protocolPath.startsWith('/v1/models')) {
       const requestCatalog = catalog;
-      const modelPathMatch = requestPath.match(/^\/v1\/models\/([^?]+)/);
+      const modelPathMatch = protocolPath.match(/^\/v1\/models\/([^?]+)/);
       if (modelPathMatch) {
         const id = decodeURIComponent(modelPathMatch[1]!);
         const route = lookupRoute(requestCatalog.byAlias, id);
@@ -567,7 +569,7 @@ export async function startProxyCatalog(
       return;
     }
 
-    const messagesEndpoint = anthropicMessagesEndpoint(requestPath);
+    const messagesEndpoint = anthropicMessagesEndpoint(protocolPath);
 
     // Anthropic message creation and token counting are distinct endpoints.
     if (req.method === 'POST' && messagesEndpoint) {

@@ -8,7 +8,11 @@ import { join } from 'node:path';
 import { aliasModelId, startProxy, startProxyCatalog, type ProxyRoute } from '../src/proxy.js';
 import { makeRouteResolver, resolveCatalogModelAliases } from '../src/catalog.js';
 import { flushTraceLogs, getProxyDebugLogPath } from '../src/trace-log.js';
-import { anthropicMessagesEndpoint, estimateAnthropicInputTokens } from '../src/anthropic-endpoints.js';
+import {
+  anthropicMessagesEndpoint,
+  estimateAnthropicInputTokens,
+  normalizeAnthropicGatewayPath,
+} from '../src/anthropic-endpoints.js';
 import { withResponsesWebSocketDiagnosticContext } from '../src/oauth/responses-websocket.js';
 import type { LocalProvider, ModelAlias } from '../src/types.js';
 import { asMocked, restoreTestGlobals, stubTestGlobal, waitForCondition } from './test-helpers.js';
@@ -73,8 +77,18 @@ describe('Anthropic endpoint routing', () => {
   it('matches messages and count_tokens exactly, including query strings', () => {
     expect(anthropicMessagesEndpoint('/v1/messages?beta=true')).toBe('messages');
     expect(anthropicMessagesEndpoint('/v1/messages/count_tokens?beta=true')).toBe('count_tokens');
+    expect(anthropicMessagesEndpoint('/anthropic/v1/messages?beta=true')).toBe('messages');
+    expect(anthropicMessagesEndpoint('/anthropic/v1/messages/count_tokens?beta=true')).toBe('count_tokens');
     expect(anthropicMessagesEndpoint('/v1/messages/batches')).toBeNull();
     expect(anthropicMessagesEndpoint('/v1/messages-not-real')).toBeNull();
+    expect(anthropicMessagesEndpoint('/anthropic-other/v1/messages')).toBeNull();
+  });
+
+  it('normalizes only the exact background-wrapper gateway prefix', () => {
+    expect(normalizeAnthropicGatewayPath('/anthropic/v1/models')).toBe('/v1/models');
+    expect(normalizeAnthropicGatewayPath('/anthropic/v1/models?limit=3')).toBe('/v1/models?limit=3');
+    expect(normalizeAnthropicGatewayPath('/v1/models')).toBe('/v1/models');
+    expect(normalizeAnthropicGatewayPath('/anthropic-other/v1/models')).toBe('/anthropic-other/v1/models');
   });
 
   it('estimates only input-context fields', () => {
@@ -674,14 +688,29 @@ describe('catalog model aliases', () => {
       expect(String(url)).toContain('upstream-solver.example');
       expect(JSON.parse(init.body as string).model).toBe('Solver-V1');
 
-      // GET /v1/models/<alias> resolves too
-      const modelLookup = await new Promise<number>((resolve, reject) => {
-        http.get(
-          { hostname: '127.0.0.1', port: handle.port, path: '/v1/models/sol' },
-          res2 => { res2.resume(); resolve(res2.statusCode ?? 0); },
-        ).on('error', reject);
-      });
-      expect(modelLookup).toBe(200);
+      // Both foreground and background-wrapper discovery paths resolve.
+      for (const path of [
+        '/v1/models',
+        '/anthropic/v1/models',
+        '/v1/models/sol',
+        '/anthropic/v1/models/sol',
+      ]) {
+        const modelLookup = await new Promise<number>((resolve, reject) => {
+          http.get(
+            { hostname: '127.0.0.1', port: handle.port, path },
+            res2 => { res2.resume(); resolve(res2.statusCode ?? 0); },
+          ).on('error', reject);
+        });
+        expect(modelLookup).toBe(200);
+      }
+
+      const prefixedMessages = await postToProxy(handle.port, handle.token, {
+        model: 'sol',
+        max_tokens: 100,
+        messages: [{ role: 'user', content: 'background wrapper' }],
+        stream: false,
+      }, undefined, '/anthropic/v1/messages');
+      expect(prefixedMessages.status).toBe(200);
     } finally {
       handle.close();
     }
