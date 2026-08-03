@@ -1,7 +1,19 @@
 const MESSAGE_PATH = '/v1/messages';
 const COUNT_TOKENS_PATH = '/v1/messages/count_tokens';
+const GATEWAY_PREFIX = '/anthropic';
 
 export type AnthropicMessagesEndpoint = 'messages' | 'count_tokens';
+
+/**
+ * Claude's background-process wrapper addresses the shared daemon through its
+ * Anthropic namespace, while foreground launches use the daemon root. Treat
+ * both forms as the same protocol surface.
+ */
+export function normalizeAnthropicGatewayPath(path: string): string {
+  return path.startsWith(`${GATEWAY_PREFIX}/`)
+    ? path.slice(GATEWAY_PREFIX.length)
+    : path;
+}
 
 /** Match Anthropic message endpoints by pathname, never by a shared prefix. */
 export function anthropicMessagesEndpoint(url: string | undefined): AnthropicMessagesEndpoint | null {
@@ -12,8 +24,9 @@ export function anthropicMessagesEndpoint(url: string | undefined): AnthropicMes
   } catch {
     return null;
   }
-  if (pathname === MESSAGE_PATH) return 'messages';
-  if (pathname === COUNT_TOKENS_PATH) return 'count_tokens';
+  const normalizedPathname = normalizeAnthropicGatewayPath(pathname);
+  if (normalizedPathname === MESSAGE_PATH) return 'messages';
+  if (normalizedPathname === COUNT_TOKENS_PATH) return 'count_tokens';
   return null;
 }
 
