@@ -30,7 +30,10 @@ export const compactionCheckpoints = new Map<string, CompactionCheckpoint[]>();
 const checkpointStoreNextScanAt = new Map<string, number>();
 const CHECKPOINT_STORE_RESCAN_INTERVAL_MS = 5_000;
 const MAX_COMPACTION_CHECKPOINTS_PER_PARTITION = 16;
-const MAX_COMPACTION_CHECKPOINTS = 64;
+// 64 global records is only four fully branched Claude sessions. Workflow-heavy
+// use reaches that while sessions are still active, so a restart can lose the
+// only canonical rebase. The seven-day TTL remains the primary retention bound.
+const MAX_COMPACTION_CHECKPOINTS = 256;
 let nextConnectionDebugId = 1;
 let nextLineageDebugId = 1;
 
@@ -160,11 +163,11 @@ export function saveCompactionCheckpoint(entry: ConnectionEntry): void {
 export function persistCompactionCheckpoint(
   checkpoint: CompactionCheckpoint,
   debug: (message: string) => void,
-): void {
+): boolean {
   upsertCompactionCheckpoint(checkpoint);
-  if (checkpoint.checkpointStoreDir) {
-    try {
-      const persisted = saveStoredResponsesCheckpoint(checkpoint.checkpointStoreDir, {
+  if (!checkpoint.checkpointStoreDir) return false;
+  try {
+    const persisted = saveStoredResponsesCheckpoint(checkpoint.checkpointStoreDir, {
         version: 1,
         checkpointKey: checkpoint.key,
         lineageKey: checkpoint.lineageKey,
@@ -176,11 +179,12 @@ export function persistCompactionCheckpoint(
         claudeCompactionSummaryHash: checkpoint.claudeCompactionSummaryHash,
         promptFieldHashes: checkpoint.promptFieldHashes,
         lastUsedAt: checkpoint.lastUsedAt,
-      }, MAX_COMPACTION_CHECKPOINTS_PER_PARTITION, MAX_COMPACTION_CHECKPOINTS);
-      if (!persisted) debug('compact checkpoint exceeded durable store size cap');
-    } catch {
-      debug('compact checkpoint persistence unavailable');
-    }
+    }, MAX_COMPACTION_CHECKPOINTS_PER_PARTITION, MAX_COMPACTION_CHECKPOINTS);
+    if (!persisted) debug('compact checkpoint exceeded 64 MiB durable store size cap');
+    return persisted;
+  } catch (error) {
+    debug(`compact checkpoint persistence unavailable: ${error instanceof Error ? error.message : String(error)}`);
+    return false;
   }
 }
 

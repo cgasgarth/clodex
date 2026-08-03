@@ -13,7 +13,11 @@ import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 
 const STORE_VERSION = 1;
-const MAX_CHECKPOINT_FILE_BYTES = 8 * 1024 * 1024;
+// Native compact output can legitimately retain a large, dependency-closed
+// tool tail (screenshots and workflow results are the common case). Refusing
+// those records makes an otherwise healthy session unrecoverable after a
+// daemon restart. Keep a defensive bound, but size it for real Claude sessions.
+const MAX_CHECKPOINT_FILE_BYTES = 64 * 1024 * 1024;
 const CHECKPOINT_FILE_SUFFIX = '.json';
 const CHECKPOINT_KEY_PATTERN = /^[a-f0-9]{64}$/;
 const LINEAGE_KEY_PATTERN = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;

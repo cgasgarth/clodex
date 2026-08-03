@@ -133,6 +133,26 @@ describe('Responses oversized-context recovery planner', () => {
     });
   });
 
+  it('plans thousands of inferred boundaries without quadratic transcript scans', () => {
+    const fullInput = Array.from({ length: 7_500 }, (_, index) => (
+      index % 2 === 0
+        ? user(`user-${index}-${'u'.repeat(200)}`)
+        : assistant(`assistant-${index}-${'a'.repeat(200)}`)
+    ));
+    const startedAt = performance.now();
+    const plan = planResponsesOverflowRecovery({
+      fullInput,
+      compactThreshold: 265_000,
+      contextWindow: 1_000_000,
+      estimatedInputTokens: 3_250_000,
+      maxCandidates: 2,
+    });
+
+    expect(performance.now() - startedAt).toBeLessThan(1_500);
+    expect(plan.rejected.length).toBeLessThanOrEqual(16);
+    expect(plan.rejectedCount).toBeGreaterThan(plan.rejected.length);
+  });
+
   it('accounts for compact output and untouched tail before replay', () => {
     const compacted = [{ type: 'compaction', encrypted_content: 'opaque' }];
     const tail = [assistant('result')];

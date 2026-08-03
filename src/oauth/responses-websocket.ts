@@ -927,7 +927,7 @@ export function createResponsesWebSocketFetch(
           : RESPONSES_COMPACTION_CHECKPOINT_TTL_MS,
         checkpointStoreDir,
       };
-      persistCompactionCheckpoint(checkpoint, debug);
+      const checkpointDurable = persistCompactionCheckpoint(checkpoint, debug);
       if (supersededEntry) deleteEntry(supersededEntry);
       emitDiagnostic(options, {
         event: 'ws_compaction',
@@ -935,7 +935,7 @@ export function createResponsesWebSocketFetch(
         transport: 'claude_compaction_response',
         reason: compactionReason,
         checkpointItems: checkpoint.compactedInput.length,
-        checkpointDurable: Boolean(checkpointStoreDir),
+        checkpointDurable,
         ...(compactionUsage ?? {}),
       }, diagnosticCorrelation);
       return syntheticClaudeCompactionResponse(

@@ -4021,7 +4021,7 @@ describe('createResponsesWebSocketFetch', () => {
     resetResponsesWebSocketConnectionsForTests();
     fakeSockets.length = 0;
     const global = await exerciseCap(Array.from(
-      { length: 65 },
+      { length: 257 },
       (_, index) => `partition-${index}`,
     ));
     expect(global.oldestInput).not.toContainEqual(expect.objectContaining({

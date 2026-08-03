@@ -51,6 +51,19 @@ describe('Secondwind worker pool', () => {
     }
   });
 
+  it('does not detach or mutate the caller-owned Bun Buffer', async () => {
+    const pool = new SecondwindWorkerPool({ workerCount: 1, workerUrl });
+    const body = Buffer.from(JSON.stringify({ unchanged: true }));
+    const original = Buffer.from(body);
+    try {
+      await pool.rewrite(body);
+      expect(body.byteLength).toBe(original.byteLength);
+      expect(body).toEqual(original);
+    } finally {
+      pool.close();
+    }
+  });
+
   it('keeps the daemon responsive and randomly distributes concurrent rewrites', async () => {
     const selections = [0, 0.99];
     const pool = new SecondwindWorkerPool({

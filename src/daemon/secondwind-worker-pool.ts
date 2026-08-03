@@ -125,7 +125,10 @@ export class SecondwindWorkerPool {
     // Transfer request bytes directly. The proxy already owns the serialized
     // body, so serializing its parsed copy here would walk and allocate the
     // entire transcript again before the worker immediately parses it.
-    const encoded = body.slice();
+    // `body` is normally a Bun/Node Buffer. Buffer#slice() returns a view over
+    // the same ArrayBuffer, so transferring that buffer would detach the
+    // caller's request body. Keep worker ownership explicit with a real copy.
+    const encoded = new Uint8Array(body);
     const sample = Math.max(0, Math.min(1, this.random()));
     const slotIndex = Math.min(this.slots.length - 1, Math.floor(sample * this.slots.length));
     const slot = this.slots[slotIndex]!;

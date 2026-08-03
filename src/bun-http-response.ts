@@ -30,6 +30,7 @@ export class BunHttpResponse extends Writable {
       },
       cancel: () => {
         this.clientCancelled = true;
+        this.bodyClosed = true;
         this.onClientCancel?.();
       },
     });
@@ -78,6 +79,14 @@ export class BunHttpResponse extends Writable {
     encoding: BufferEncoding,
     callback: (error?: Error | null) => void,
   ): void {
+    // Bun cancels the web stream as soon as the downstream socket closes, but
+    // an upstream async iterator may already have yielded its next chunk. Drop
+    // that late chunk: surfacing enqueue-on-closed as a Writable error races
+    // request cancellation and can crash an otherwise clean disconnect path.
+    if (this.clientCancelled || this.bodyClosed) {
+      callback();
+      return;
+    }
     try {
       this.commitHeaders();
       const bytes = typeof chunk === 'string'
@@ -91,6 +100,10 @@ export class BunHttpResponse extends Writable {
   }
 
   override _final(callback: (error?: Error | null) => void): void {
+    if (this.clientCancelled) {
+      callback();
+      return;
+    }
     try {
       this.commitHeaders();
       if (!this.bodyClosed) {
