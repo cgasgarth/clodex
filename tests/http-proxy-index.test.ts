@@ -48,8 +48,10 @@ describe('HTTP proxy startup model list', () => {
     process.env['CLODEX_HOME'] = home;
     const logPath = getInferenceRequestLogPath();
     const consoleLog = vi.spyOn(console, 'log').mockImplementation(() => {});
+    let requestShutdown!: () => void;
+    const shutdownSignal = new Promise<void>(resolve => { requestShutdown = resolve; });
     let shutdownRequested = false;
-    const result = runHttpProxyServerCommand(false, false, 0, true);
+    const result = runHttpProxyServerCommand(false, false, 0, true, shutdownSignal);
 
     try {
       await waitForCondition(() => {
@@ -58,7 +60,7 @@ describe('HTTP proxy startup model list', () => {
         );
       });
       shutdownRequested = true;
-      process.emit('SIGTERM');
+      requestShutdown();
       await expect(result).resolves.toBe(0);
 
       const entries = (await readFlushedLog(logPath)).trim().split('\n').map(line => JSON.parse(line));
@@ -87,7 +89,7 @@ describe('HTTP proxy startup model list', () => {
         port: entries[0].port,
       });
     } finally {
-      if (!shutdownRequested) process.emit('SIGTERM');
+      if (!shutdownRequested) requestShutdown();
       await result.catch(() => undefined);
       consoleLog.mockRestore();
       if (previousHome === undefined) delete process.env['CLODEX_HOME'];

@@ -236,6 +236,7 @@ export async function runHttpProxyServerCommand(
   webSocketDiagnostics = false,
   port?: number,
   noDiscovery = false,
+  shutdownSignal?: Promise<void>,
 ): Promise<number> {
   const webSocketDiagnosticsLogPath = webSocketDiagnostics
     ? getSessionLogPath('server-websocket-diagnostics', 'jsonl')
@@ -292,7 +293,7 @@ export async function runHttpProxyServerCommand(
     });
   }
 
-  await waitForShutdown();
+  await (shutdownSignal ?? waitForShutdown());
   writeProxyLifecycleLog(inferenceLogPath, {
     event: 'proxy_stopping',
     pid: process.pid,
