@@ -209,16 +209,24 @@ export function persistCompactionCheckpoint(
 
 export function hydrateCompactionCheckpoint(
   checkpoint: CompactionCheckpoint,
+  now = Date.now(),
 ): HydratedCompactionCheckpoint | undefined {
-  if (checkpoint.compactedInput) return checkpoint as HydratedCompactionCheckpoint;
-  if (!checkpoint.checkpointStoreDir) return undefined;
-  const stored = loadStoredResponsesCheckpoint(
-    checkpoint.checkpointStoreDir,
-    checkpoint.key,
-    checkpoint.lineageKey,
-  );
-  if (!stored) return undefined;
-  return { ...checkpoint, compactedInput: stored.compactedInput };
+  let compactedInput = checkpoint.compactedInput;
+  if (compactedInput === undefined && checkpoint.checkpointStoreDir) {
+    compactedInput = loadStoredResponsesCheckpoint(
+      checkpoint.checkpointStoreDir,
+      checkpoint.key,
+      checkpoint.lineageKey,
+    )?.compactedInput;
+  }
+  if (compactedInput === undefined) return undefined;
+  const hydrated: HydratedCompactionCheckpoint = {
+    ...checkpoint,
+    compactedInput,
+    lastUsedAt: Math.max(checkpoint.lastUsedAt, now),
+  };
+  upsertCompactionCheckpoint(hydrated);
+  return hydrated;
 }
 
 function refreshChangedStoredCheckpoint(

@@ -58,9 +58,11 @@ describe('Responses WebSocket checkpoint state', () => {
     expect(entries.filter(entry => entry.compactedInput !== undefined)).toHaveLength(8);
     const cold = entries.find(entry => entry.compactedInput === undefined);
     expect(cold).toBeDefined();
-    expect(hydrateCompactionCheckpoint(cold!)?.compactedInput).toEqual([
+    expect(hydrateCompactionCheckpoint(cold!, 11)?.compactedInput).toEqual([
       expect.objectContaining({ encrypted_content: expect.stringContaining('state-') }),
     ]);
+    expect(checkpointEntries(key).find(entry => entry.lineageKey === cold!.lineageKey)?.compactedInput)
+      .toBeDefined();
   });
 
   it('indexes all durable lineages without retaining payloads and hydrates only a requested partition', () => {
@@ -80,7 +82,8 @@ describe('Responses WebSocket checkpoint state', () => {
     expect(checkpointEntries(requestedKey)[0]?.requestInputHashes).toEqual(['request-10']);
     expect(checkpointEntries(requestedKey)[0]?.compactedInput).toBeUndefined();
     expect(checkpointEntries(otherKey)[0]?.requestInputHashes).toEqual([]);
-    expect(hydrateCompactionCheckpoint(checkpointEntries(requestedKey)[0]!)?.compactedInput)
+    expect(hydrateCompactionCheckpoint(checkpointEntries(requestedKey)[0]!, 31)?.compactedInput)
       .toEqual([{ type: 'compaction', encrypted_content: 'state-10' }]);
+    expect(checkpointEntries(requestedKey)[0]?.compactedInput).toBeDefined();
   });
 });

@@ -159,7 +159,7 @@ export function createResponsesWebSocketFetch(
       : [];
     const checkpointCandidate = selected ? undefined : checkpointMatches[0];
     const selectedCheckpoint = checkpointCandidate
-      ? hydrateCompactionCheckpoint(checkpointCandidate.checkpoint)
+      ? hydrateCompactionCheckpoint(checkpointCandidate.checkpoint, now)
       : undefined;
     const checkpointMatch = selectedCheckpoint ? checkpointCandidate?.match : undefined;
     const compactionEnvelopeCount = claudeCompactionEnvelopeOccurrenceCount(payload);
