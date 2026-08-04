@@ -176,6 +176,40 @@ describe('Secondwind daemon service', () => {
     expect(service.snapshot().shadow.tokensReduced).toBeGreaterThan(0);
   });
 
+  it('estimates recurring savings when a persistent session reuses frozen blocks', async () => {
+    const service = new SecondwindService({
+      initialMode: 'on',
+      createSession: async () => ({
+        rewrite: () => ({
+          request: toolRequest('short'),
+          stats: {
+            blocks_rewritten: 1,
+            blocks_first_seen: 0,
+            input_tokens: 0,
+            output_tokens: 0,
+            tokens_saved: 0,
+          },
+        }),
+        close: () => {},
+      }),
+    });
+    const original = toolRequest('long recurring output '.repeat(1_000));
+
+    await service.rewrite({
+      body: Buffer.from(JSON.stringify(original)),
+      request: original,
+      sessionId: 'persistent-session',
+      modelId: 'gpt-5.6-sol',
+    });
+
+    expect(service.snapshot().applied).toMatchObject({
+      requests: 1,
+      blocksRewritten: 1,
+      estimatedTokenRequests: 1,
+    });
+    expect(service.snapshot().applied.tokensReduced).toBeGreaterThan(0);
+  });
+
   it('preserves exact request bytes when the optimizer makes no change', async () => {
     const request = toolRequest('already compact');
     const body = Buffer.from('{\n  "model": "sol", "messages": []\n}\n');

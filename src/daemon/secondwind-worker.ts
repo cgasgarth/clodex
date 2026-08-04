@@ -3,6 +3,7 @@ import { Session } from 'secondwind';
 type WorkerRequest = {
   type: 'rewrite';
   id: number;
+  sessionKey?: string;
   body: Uint8Array;
 };
 
@@ -10,19 +11,31 @@ type WorkerCloseRequest = { type: 'close' };
 
 type WorkerMessage = WorkerRequest | WorkerCloseRequest;
 
+const sessions = new Map<string, Session>();
+
 function send(message: Record<string, unknown>): void {
   process.send?.(message);
 }
 
+function closeSessions(): void {
+  for (const session of sessions.values()) session.close();
+  sessions.clear();
+}
+
 process.on('message', (message: WorkerMessage) => {
   if (message.type === 'close') {
+    closeSessions();
     process.disconnect?.();
     process.exit(0);
   }
 
-  let session: Session | undefined;
+  let session = message.sessionKey ? sessions.get(message.sessionKey) : undefined;
+  const sessionReused = message.sessionKey ? session !== undefined : undefined;
   try {
-    session = new Session();
+    if (!session) {
+      session = new Session();
+      if (message.sessionKey) sessions.set(message.sessionKey, session);
+    }
     const request = JSON.parse(new TextDecoder().decode(message.body)) as Record<string, unknown>;
     const result = session.rewrite(request);
     const body = new TextEncoder().encode(JSON.stringify(result.request));
@@ -31,16 +44,29 @@ process.on('message', (message: WorkerMessage) => {
       id: message.id,
       body,
       stats: result.stats,
+      sessionReused,
+      sessionCount: sessions.size,
+      rssBytes: process.memoryUsage().rss,
     });
   } catch (error) {
+    if (message.sessionKey) {
+      session?.close();
+      sessions.delete(message.sessionKey);
+    }
     send({
       type: 'result',
       id: message.id,
+      sessionReused,
+      sessionCount: sessions.size,
+      rssBytes: process.memoryUsage().rss,
       error: error instanceof Error ? error.message : String(error),
     });
   } finally {
-    session?.close();
+    if (!message.sessionKey) session?.close();
   }
 });
 
-process.on('disconnect', () => process.exit(0));
+process.on('disconnect', () => {
+  closeSessions();
+  process.exit(0);
+});

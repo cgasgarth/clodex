@@ -21,7 +21,7 @@ flowchart LR
 
 - The Clodex daemon owns one Anthropic-format endpoint, OpenAI WebSocket pools,
   compaction checkpoints, session registry, metrics, diagnostics, and optional
-  in-process Secondwind rewriting.
+  conversation-affine Secondwind worker sessions.
 - The endpoint listens on restart-stable loopback port `17647`. Set
   `CLODEX_DAEMON_PORT` before installation to change it.
 - Control operations use `~/.clodex/clodex.sock`, mode `0600`.
