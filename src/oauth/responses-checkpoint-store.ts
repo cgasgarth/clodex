@@ -24,6 +24,12 @@ const LINEAGE_KEY_PATTERN = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9
 const CHECKPOINT_FILE_PATTERN =
   /^[a-f0-9]{64}-[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}\.json$/;
 
+export interface StoredResponsesCheckpointFile {
+  checkpointKey: string;
+  lineageKey: string;
+  mtimeMs: number;
+}
+
 export interface StoredResponsesCheckpoint {
   version: typeof STORE_VERSION;
   checkpointKey: string;
@@ -63,6 +69,13 @@ function checkpointPath(directory: string, checkpointKey: string, lineageKey: st
     throw new Error('Invalid Responses checkpoint identity');
   }
   return join(directory, `${checkpointKey}-${lineageKey}${CHECKPOINT_FILE_SUFFIX}`);
+}
+
+function checkpointIdentity(name: string): Pick<StoredResponsesCheckpointFile, 'checkpointKey' | 'lineageKey'> | undefined {
+  if (!CHECKPOINT_FILE_PATTERN.test(name)) return undefined;
+  const checkpointKey = name.slice(0, 64);
+  const lineageKey = name.slice(65, -CHECKPOINT_FILE_SUFFIX.length);
+  return { checkpointKey, lineageKey };
 }
 
 function ensurePrivateDirectory(directory: string): void {
@@ -108,6 +121,57 @@ export function loadStoredResponsesCheckpoints(
     }
   }
   return loaded;
+}
+
+export function listStoredResponsesCheckpointFiles(
+  directory: string,
+  now: number,
+  ttlMs: number,
+): StoredResponsesCheckpointFile[] {
+  if (!existsSync(directory)) return [];
+  const directoryStat = lstatSync(directory);
+  if (!directoryStat.isDirectory() || directoryStat.isSymbolicLink()) {
+    throw new Error('Responses checkpoint store must be a real directory');
+  }
+  try { chmodSync(directory, 0o700); } catch { /* best effort */ }
+  const files: StoredResponsesCheckpointFile[] = [];
+  for (const name of readdirSync(directory)) {
+    const identity = checkpointIdentity(name);
+    if (!identity) continue;
+    const path = join(directory, name);
+    try {
+      const stat = lstatSync(path);
+      if (
+        !stat.isFile()
+        || stat.isSymbolicLink()
+        || stat.size > MAX_CHECKPOINT_FILE_BYTES
+        || now - stat.mtimeMs >= ttlMs
+      ) {
+        rmSync(path, { force: true });
+        continue;
+      }
+      files.push({ ...identity, mtimeMs: stat.mtimeMs });
+    } catch {
+      try { rmSync(path, { force: true }); } catch { /* ignore */ }
+    }
+  }
+  return files;
+}
+
+export function loadStoredResponsesCheckpoint(
+  directory: string,
+  checkpointKey: string,
+  lineageKey: string,
+): StoredResponsesCheckpoint | undefined {
+  try {
+    const path = checkpointPath(directory, checkpointKey, lineageKey);
+    const stat = lstatSync(path);
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.size > MAX_CHECKPOINT_FILE_BYTES) return undefined;
+    const parsed = JSON.parse(readFileSync(path, 'utf8')) as unknown;
+    return isStoredCheckpoint(parsed) ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 export function saveStoredResponsesCheckpoint(

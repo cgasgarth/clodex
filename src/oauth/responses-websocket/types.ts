@@ -181,7 +181,7 @@ export interface CompactionCheckpoint {
   requestInputHashes: string[];
   expectedAssistantHashes: string[];
   expectedAssistantKinds: string[];
-  compactedInput: unknown[];
+  compactedInput?: unknown[];
   lastInputTokens?: number;
   claudeCompactionSummaryHash?: string;
   promptFieldHashes?: Record<string, string>;
@@ -189,4 +189,7 @@ export interface CompactionCheckpoint {
   lastUsedAt: number;
   ttlMs: number;
   checkpointStoreDir?: string;
+  checkpointStoreMtimeMs?: number;
 }
+
+export type HydratedCompactionCheckpoint = CompactionCheckpoint & { compactedInput: unknown[] };
