@@ -945,6 +945,7 @@ function Dashboard(): React.ReactNode {
             {secondwind?.sessions ?? 0} active optimizer conversations · {secondwind?.errors ?? 0} fail-open errors
             {secondwind?.loaded ? ' · native optimizer loaded' : ' · optimizer not loaded'}
           </Text>
+          {secondwind?.workers && <Text dimColor>{`processes ${secondwind.workers.running}/${secondwind.workers.configured} · ${secondwind.workers.pending} pending · ${secondwind.workers.recycled} recycled · ${secondwind.workers.failures} process failures`}</Text>}
           {secondwind?.lastError && <Text color="yellow">Last error: {secondwind.lastError}</Text>}
         </Box>
       </>

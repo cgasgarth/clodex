@@ -146,8 +146,9 @@ tool-output optimization:
 - `shadow` measures a lossless rewrite while sending the original request; and
 - `on` sends rewritten tool outputs, with fail-open fallback.
 
-Stateless rewrites are randomly distributed across a machine-sized Bun worker
-pool, so concurrent agents are not pinned to one session worker.
+Stateless rewrites are randomly distributed across a machine-sized Bun child-process
+pool. Workers recycle after bounded request or byte budgets so native allocator
+high-water memory returns to the OS without serializing concurrent agents.
 
 The selected daemon-wide mode persists and applies to the next request.
 Secondwind reports measured tokens and input percentage saved, cache-aware

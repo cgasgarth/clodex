@@ -116,11 +116,49 @@ describe('Secondwind worker pool', () => {
       workerCount: 1,
       workerUrl,
       recycleAfterRequests: 1,
+      recycleAfterBytes: Number.MAX_SAFE_INTEGER,
     });
     try {
       const first = decode((await pool.rewrite(encode({}))).body);
       const second = decode((await pool.rewrite(encode({}))).body);
       expect(second.workerId).not.toBe(first.workerId);
+    } finally {
+      pool.close();
+    }
+  });
+
+  it('recycles a process after its cumulative byte budget', async () => {
+    const pool = new SecondwindWorkerPool({
+      workerCount: 1,
+      workerUrl,
+      recycleAfterRequests: Number.MAX_SAFE_INTEGER,
+      recycleAfterBytes: 1,
+    });
+    try {
+      const first = decode((await pool.rewrite(encode({}))).body);
+      const second = decode((await pool.rewrite(encode({}))).body);
+      expect(second.workerId).not.toBe(first.workerId);
+      expect(pool.snapshot()).toMatchObject({
+        configured: 1,
+        running: 0,
+        pending: 0,
+        recycled: 2,
+        failures: 0,
+      });
+      expect(pool.snapshot().processedBytes).toBeGreaterThan(0);
+    } finally {
+      pool.close();
+    }
+  });
+
+  it('rejects work from a crashed process and lazily recovers the slot', async () => {
+    const pool = new SecondwindWorkerPool({ workerCount: 1, workerUrl });
+    try {
+      await expect(pool.rewrite(encode({ exitCode: 13 })))
+        .rejects.toThrow('Secondwind process failed');
+      const recovered = decode((await pool.rewrite(encode({ recovered: true }))).body);
+      expect(recovered.workerId).toBeString();
+      expect(pool.snapshot().failures).toBe(1);
     } finally {
       pool.close();
     }

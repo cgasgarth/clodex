@@ -48,7 +48,7 @@ Enabling native compaction also opts into durable recovery checkpoints under
 `~/.clodex/responses-checkpoints`. These files can contain retained user
 messages, assistant/tool state, and OpenAI's opaque compaction item. Clodex
 creates the directory with mode `0700` and files with mode `0600`, rejects
-symlinked stores, limits each file to 8 MiB, and removes checkpoints after seven
+symlinked stores, limits each file to 64 MiB, and removes checkpoints after seven
 days on the next checkpoint scan. Keep the Clodex home directory private.
 
 With native ownership enabled, Claude-initiated `/compact` uses native OpenAI
@@ -71,9 +71,10 @@ response chain or select a different partition:
 
 Process-local compact checkpoints expire after 30 minutes. Durable checkpoints
 expire after seven days. Both are capped at 16 per model/account/session
-partition and 64 globally. Durable storage is bounded, rescanned periodically
-for checkpoints written by another Clodex process, and used to recover matching
-agent lineages after restart.
+partition and 256 globally. Durable storage is bounded and indexed as lightweight
+lineage metadata; only the matching compacted payload is hydrated. Periodic scans
+discover checkpoints written by another Clodex process without retaining every
+transcript in memory.
 
 Native `/compact` survives daemon restart through the durable checkpoint, but
 its marker is deliberately not a portable summary. It cannot recover context

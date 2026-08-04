@@ -25,6 +25,7 @@ import type {
   RequestContext,
   ConnectionEntry,
   CompactionCheckpoint,
+  HydratedCompactionCheckpoint,
 } from './responses-websocket/types.js';
 import type {
   ResponsesWebSocketFetchOptions,
@@ -41,6 +42,7 @@ import {
   syntheticAssistantMessage,
   syntheticClaudeCompactionResponse,
   loadCompactionCheckpointStore,
+  hydrateCompactionCheckpoint,
   debugKey,
   emitDiagnostic,
 } from './responses-websocket/state.js';
@@ -112,7 +114,7 @@ export function createResponsesWebSocketFetch(
     } = prepareResponsesRequest(wsUrl, init, options);
     const diagnosticCorrelation = diagnosticContext.getStore();
     const now = resolvedOptions.now();
-    loadCompactionCheckpointStore(checkpointStoreDir, now);
+    loadCompactionCheckpointStore(checkpointStoreDir, now, checkpointKey);
     const evictions = cleanupExpiredConnections(now);
 
     const forceCompaction = diagnosticCorrelation?.forceCompaction === true;
@@ -155,8 +157,11 @@ export function createResponsesWebSocketFetch(
         .sort((left, right) => left.match.delta.length - right.match.delta.length
           || continuationMatchRank(left.match.mode) - continuationMatchRank(right.match.mode))
       : [];
-    const selectedCheckpoint = selected ? undefined : checkpointMatches[0]?.checkpoint;
-    const checkpointMatch = selected ? undefined : checkpointMatches[0]?.match;
+    const checkpointCandidate = selected ? undefined : checkpointMatches[0];
+    const selectedCheckpoint = checkpointCandidate
+      ? hydrateCompactionCheckpoint(checkpointCandidate.checkpoint)
+      : undefined;
+    const checkpointMatch = selectedCheckpoint ? checkpointCandidate?.match : undefined;
     const compactionEnvelopeCount = claudeCompactionEnvelopeOccurrenceCount(payload);
     const anchored = selectedMatch?.mode === 'claude_compaction_summary'
       || checkpointMatch?.mode === 'claude_compaction_summary';
@@ -906,7 +911,7 @@ export function createResponsesWebSocketFetch(
       if (!summaryHash) {
         throw new ResponsesCompactionError('Synthetic Claude compaction marker was not anchorable');
       }
-      const checkpoint: CompactionCheckpoint = {
+      const checkpoint: HydratedCompactionCheckpoint = {
         connectionId: 0,
         lineageId: allocateLineageDebugId(),
         lineageKey: randomUUID(),

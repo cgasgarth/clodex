@@ -10,7 +10,10 @@ import {
   type SecondwindSavingsEvent,
 } from './metrics.js';
 import type { SecondwindMode } from '../types.js';
-import { SecondwindWorkerPool } from './secondwind-worker-pool.js';
+import {
+  SecondwindWorkerPool,
+  type SecondwindWorkerPoolSnapshot,
+} from './secondwind-worker-pool.js';
 
 const MAX_PENDING_SAVINGS = 2_048;
 const MAX_LATENCY_SAMPLES = 10_000;
@@ -84,6 +87,7 @@ export interface SecondwindSnapshot {
   };
   errors: number;
   lastError?: string;
+  workers?: SecondwindWorkerPoolSnapshot;
 }
 
 export interface SecondwindSessionSavings extends SecondwindModeMetrics {
@@ -133,6 +137,7 @@ interface SecondwindServiceOptions {
   metrics?: SecondwindMetricsPersistence;
   now?: () => number;
   closeBackend?: () => void;
+  backendSnapshot?: () => SecondwindWorkerPoolSnapshot;
 }
 
 function emptyMetrics(): SecondwindModeMetrics {
@@ -371,6 +376,7 @@ export class SecondwindService {
   readonly #createSession: SecondwindSessionFactory;
   readonly #now: () => number;
   readonly #closeBackend: () => void;
+  readonly #backendSnapshot?: () => SecondwindWorkerPoolSnapshot;
   readonly #activeSessions = new Map<string, number>();
   readonly #pendingSavings = new Map<string, PendingSecondwindSavings>();
   readonly #sessionSavings = new Map<string, SecondwindSessionSavings>();
@@ -400,6 +406,7 @@ export class SecondwindService {
     this.#lifetime = loadLifetimeMetrics(options.metrics);
     this.#now = options.now ?? performance.now.bind(performance);
     this.#closeBackend = options.closeBackend ?? (() => {});
+    this.#backendSnapshot = options.backendSnapshot;
   }
 
   setMode(mode: SecondwindMode): void {
@@ -430,6 +437,7 @@ export class SecondwindService {
         p95Ms: percentile(this.#latencySamples, 0.95),
       },
       errors: this.#errors,
+      ...(this.#backendSnapshot ? { workers: this.#backendSnapshot() } : {}),
       ...(this.#lastError ? { lastError: this.#lastError } : {}),
     };
   }
@@ -721,5 +729,6 @@ export function createDaemonSecondwindService(
       };
     },
     closeBackend: () => workers.close(),
+    backendSnapshot: () => workers.snapshot(),
   });
 }
