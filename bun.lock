@@ -17,7 +17,7 @@
         "open": "11.0.0",
         "picocolors": "1.1.1",
         "react": "19.2.7",
-        "secondwind": "0.2.2",
+        "secondwind": "0.3.0",
         "tweakcc": "4.3.0",
         "undici": "7.28.0",
       },
@@ -189,15 +189,15 @@
 
     "@nodelib/fs.walk": ["@nodelib/fs.walk@1.2.8", "", { "dependencies": { "@nodelib/fs.scandir": "2.1.5", "fastq": "^1.6.0" } }, "sha512-oGB+UxlgWcgQkgwo8GcEGwemoTFt3FIO9ababBmaGwXIoBKZ+GTy0pP185beGg7Llih/NSHSV2XAs1lnznocSg=="],
 
-    "@orchetron/secondwind-darwin-arm64": ["@orchetron/secondwind-darwin-arm64@0.2.2", "", { "os": "darwin", "cpu": "arm64" }, "sha512-HgCl0vMYNYapC3153ZRBOAjaaKkH/6yJXWQL4T9mD9/3jxveXItaBOntrVEj/OLLjlgylsc2PX8FCfWnCg3zHw=="],
+    "@orchetron/secondwind-darwin-arm64": ["@orchetron/secondwind-darwin-arm64@0.3.0", "", { "os": "darwin", "cpu": "arm64" }, "sha512-gUecrR5Ad9BVUyfA79I4qVisyHqL2yU6OWti8GFoUQv9PRMbyiKr9jqo/mQIMr+K7OInFJNNKxfmjlXu5XATWg=="],
 
-    "@orchetron/secondwind-darwin-x64": ["@orchetron/secondwind-darwin-x64@0.2.2", "", { "os": "darwin", "cpu": "x64" }, "sha512-Ya1pLROFcVsP65NPOmzcO4SvAHpxIHNGKdo1YHTEn/ITUI5VI4uhbV7+vQwtWfkrWDH5NAzKBaZtMCt5kMFgfQ=="],
+    "@orchetron/secondwind-darwin-x64": ["@orchetron/secondwind-darwin-x64@0.3.0", "", { "os": "darwin", "cpu": "x64" }, "sha512-RfEEQ+zaP6yRARDB3AcfXzoT9NU/8h3q+MTcQv2ZZFMxBq1zUvbgXEEPwaL8Orv5nn6cfN6miL+zwUKR+qu2QQ=="],
 
-    "@orchetron/secondwind-linux-arm64": ["@orchetron/secondwind-linux-arm64@0.2.2", "", { "os": "linux", "cpu": "arm64" }, "sha512-lABKqgI5pzMSAI55+gIHtrRLV4OB5nneM9PO6gY/s75s8lDC0KkuPa9Bo8BCgSBD1PqYYvAA9y3GDe8hczfFmw=="],
+    "@orchetron/secondwind-linux-arm64": ["@orchetron/secondwind-linux-arm64@0.3.0", "", { "os": "linux", "cpu": "arm64" }, "sha512-0TrMYbU3dLlR0W/zS5D+cbRiSagJOieWlZ+QbhF3OD2si1/tIhL+Byl3LEu/nVOC1I8bao872rw264zMiSfkpg=="],
 
-    "@orchetron/secondwind-linux-x64": ["@orchetron/secondwind-linux-x64@0.2.2", "", { "os": "linux", "cpu": "x64" }, "sha512-ITw0F9okp6gZJbpwK22TIuHOGcjwmUjkKGftzMT0OaYCs/RE+YCidcQsnQEc7NyDuAkbCrZJ1n1az5V+dPliUA=="],
+    "@orchetron/secondwind-linux-x64": ["@orchetron/secondwind-linux-x64@0.3.0", "", { "os": "linux", "cpu": "x64" }, "sha512-gTp8h7XzPzzu/XmA57AdmwQHJ3OzTvDT4EZptwV51+giHipF4XszR0EdlWnOEEXr47FrycdVWR0ZLhXkz2oeng=="],
 
-    "@orchetron/secondwind-win32-x64": ["@orchetron/secondwind-win32-x64@0.2.2", "", { "os": "win32", "cpu": "x64" }, "sha512-gnCkKkqrgYpmr/7frWEuku3Cj2Woqoq43X7o1rpJN4j2J11XBmhPWidc4FTEMJjnQi1GvooKQk/LQ8Yt7+1U4Q=="],
+    "@orchetron/secondwind-win32-x64": ["@orchetron/secondwind-win32-x64@0.3.0", "", { "os": "win32", "cpu": "x64" }, "sha512-KMlb1QDlBnOFMKKjb3ncPM2Ha8A1bBYPvwAyLchT0rMs9LJ7je79QgCUYglLDxoHzVbIvdrANwLX0TnPO+/rZw=="],
 
     "@oxc-parser/binding-android-arm-eabi": ["@oxc-parser/binding-android-arm-eabi@0.142.0", "", { "os": "android", "cpu": "arm" }, "sha512-ZiRGDutGsv1G6bL/ozy/koC0Sv39T1DqyoC4KD1DOy9ZoACm1O5UWhEK2c02Qdk+4lfLVkvFa/mQ0fm/4h1BtQ=="],
 
@@ -689,7 +689,7 @@
 
     "scheduler": ["scheduler@0.27.0", "", {}, "sha512-eNv+WrVbKu1f3vbYJT/xtiF5syA5HPIMtf9IgY/nKg0sWqzAUEvqY/xm7OcZc/qafLx/iO9FgOmeSAp4v5ti/Q=="],
 
-    "secondwind": ["secondwind@0.2.2", "", { "dependencies": { "koffi": "^3.1.1" }, "optionalDependencies": { "@orchetron/secondwind-darwin-arm64": "0.2.2", "@orchetron/secondwind-darwin-x64": "0.2.2", "@orchetron/secondwind-linux-arm64": "0.2.2", "@orchetron/secondwind-linux-x64": "0.2.2", "@orchetron/secondwind-win32-x64": "0.2.2" } }, "sha512-SFcFF+wzAUsIPj6krCO7JuEBkzmiXxjD9/POrloyLPnoNuvKAIKCN/WwqMrRQMwe+KjWSz70+kJMznNHnMnyeg=="],
+    "secondwind": ["secondwind@0.3.0", "", { "dependencies": { "koffi": "^3.1.1" }, "optionalDependencies": { "@orchetron/secondwind-darwin-arm64": "0.3.0", "@orchetron/secondwind-darwin-x64": "0.3.0", "@orchetron/secondwind-linux-arm64": "0.3.0", "@orchetron/secondwind-linux-x64": "0.3.0", "@orchetron/secondwind-win32-x64": "0.3.0" } }, "sha512-jYYNmmAIRXLmXckmnujBDPWYkc/fweSgjuE3Eix6sbN2JIgre3CvMDJysXBxtlspN967l/pt81IkW9kuI+0ZYQ=="],
 
     "section-matter": ["section-matter@1.0.0", "", { "dependencies": { "extend-shallow": "^2.0.1", "kind-of": "^6.0.0" } }, "sha512-vfD3pmTzGpufjScBh50YHKzEu2lxBWhVEHsNGoEXmCmn2hKGfeNLYMzCJpe8cD7gqX7TJluOVpBkAequ6dgMmA=="],
 

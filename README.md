@@ -139,16 +139,18 @@ Claude's saved transcript are different state. Enable and tune it with
 
 ### Secondwind
 
-[Secondwind](https://github.com/orchetron/secondwind) is optional, in-process
+[Secondwind](https://github.com/orchetron/secondwind) v3 provides optional
 tool-output optimization:
 
 - `off` bypasses it;
 - `shadow` measures a lossless rewrite while sending the original request; and
 - `on` sends rewritten tool outputs, with fail-open fallback.
 
-Stateless rewrites are randomly distributed across a machine-sized Bun child-process
-pool. Workers recycle after bounded request or byte budgets so native allocator
-high-water memory returns to the OS without serializing concurrent agents.
+Each Claude conversation keeps a reusable Secondwind session on a stable worker,
+so repeated tool outputs use Secondwind's freeze cache. Different conversations
+remain parallel across a machine-sized Bun child-process pool. Workers recycle
+after bounded request or resident-memory budgets, returning native allocator
+high-water memory to the OS.
 
 The selected daemon-wide mode persists and applies to the next request.
 Secondwind reports measured tokens and input percentage saved, cache-aware

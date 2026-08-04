@@ -179,7 +179,6 @@ function Dashboard(): React.ReactNode {
     name: string;
     enabled: boolean;
   }>();
-
   const refresh = useCallback(async () => {
     if (refreshInFlight.current) return;
     refreshInFlight.current = true;
@@ -203,7 +202,6 @@ function Dashboard(): React.ReactNode {
         setModels(snapshot.models);
         setSelectedModelIndex(index => Math.min(index, Math.max(0, snapshot.models!.length - 1)));
       }
-
       const warnings = [...snapshot.warnings];
       const activeAccount = snapshot.accounts?.find(account => account.selected);
       const metricsQuery = new URLSearchParams({
@@ -945,7 +943,7 @@ function Dashboard(): React.ReactNode {
             {secondwind?.sessions ?? 0} active optimizer conversations · {secondwind?.errors ?? 0} fail-open errors
             {secondwind?.loaded ? ' · native optimizer loaded' : ' · optimizer not loaded'}
           </Text>
-          {secondwind?.workers && <Text dimColor>{`processes ${secondwind.workers.running}/${secondwind.workers.configured} · ${secondwind.workers.pending} pending · ${secondwind.workers.recycled} recycled · ${secondwind.workers.failures} process failures`}</Text>}
+          {secondwind?.workers && <Text dimColor>{`processes ${secondwind.workers.running}/${secondwind.workers.configured} · ${secondwind.workers.pending} pending · ${secondwind.workers.sessions} sessions · cache ${secondwind.workers.sessionHits}/${secondwind.workers.sessionMisses} hit/miss · ${secondwind.workers.recycled} recycled · ${secondwind.workers.failures} failures · RSS ${compactNumber(Math.round(secondwind.workers.rssBytes / 1_048_576))} MiB (peak ${compactNumber(Math.round(secondwind.workers.peakRssBytes / 1_048_576))})`}</Text>}
           {secondwind?.lastError && <Text color="yellow">Last error: {secondwind.lastError}</Text>}
         </Box>
       </>

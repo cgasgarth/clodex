@@ -5,12 +5,12 @@ export default tseslint.config(
     ignores: ['dist/**', 'coverage/**', 'node_modules/**'],
   },
   {
-    files: ['src/**/*.{ts,tsx}', 'scripts/**/*.ts'],
+    files: ['src/**/*.{ts,tsx}', 'scripts/**/*.ts', 'benchmarks/secondwind/*.ts'],
     languageOptions: {
       parser: tseslint.parser,
       parserOptions: {
         projectService: {
-          allowDefaultProject: ['scripts/*.ts'],
+          allowDefaultProject: ['scripts/*.ts', 'benchmarks/secondwind/*.ts'],
         },
         tsconfigRootDir: import.meta.dirname,
       },

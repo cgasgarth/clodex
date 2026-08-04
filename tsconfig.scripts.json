@@ -5,6 +5,7 @@
   },
   "include": [
     "src",
-    "scripts"
+    "scripts",
+    "benchmarks/secondwind/*.ts"
   ]
 }

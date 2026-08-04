@@ -20,6 +20,7 @@ const MAX_LATENCY_SAMPLES = 10_000;
 
 interface SecondwindRewriteStats {
   blocks_rewritten?: number;
+  blocks_first_seen?: number;
   input_tokens?: number;
   output_tokens?: number;
   tokens_saved?: number;
@@ -221,8 +222,15 @@ function tokenAccounting(
   const measuredInput = nonNegativeInteger(stats?.input_tokens);
   const measuredOutput = nonNegativeInteger(stats?.output_tokens);
   const measuredSaved = nonNegativeInteger(stats?.tokens_saved);
+  const blocksFirstSeen = nonNegativeInteger(stats?.blocks_first_seen);
+  const measuredStatsCoverRequest = blocksFirstSeen === undefined
+    || blocksFirstSeen >= blocksRewritten;
 
-  if (measuredSaved !== undefined) {
+  // Persistent Secondwind sessions report exact token counts only for blocks
+  // first seen by that session. A cached resend can still rewrite prior blocks
+  // while reporting zero measured tokens, so estimate the complete request in
+  // that case instead of silently dropping recurring savings.
+  if (measuredSaved !== undefined && measuredStatsCoverRequest) {
     if (measuredInput !== undefined && measuredOutput !== undefined) {
       return {
         originalTokens: measuredInput,
@@ -715,11 +723,11 @@ export function createDaemonSecondwindService(
     initialMode: loadPreferences().secondwindMode,
     metrics,
     persistMode: mode => savePreferences({ secondwindMode: mode }),
-    createSession: () => {
+    createSession: key => {
       return {
         rewrite: async (_request, body) => {
           if (!body) throw new Error('Secondwind worker rewrite requires serialized request bytes');
-          const result = await workers.rewrite(body);
+          const result = await workers.rewrite(key, body);
           return {
             body: result.body,
             stats: result.stats,

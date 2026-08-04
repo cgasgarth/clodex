@@ -35,11 +35,12 @@
   },
   "scripts": {
     "build": "bun run scripts/build.ts",
+    "benchmark:secondwind-latency": "bun run benchmarks/secondwind/latency.ts",
     "dev": "bun run scripts/build.ts --watch",
     "install:global": "bun run scripts/install-global.ts",
     "test": "bun test --isolate --parallel=8 --timeout=30000 --only-failures",
     "test:file": "bun test --timeout=30000",
-    "lint": "eslint src scripts",
+    "lint": "eslint src scripts benchmarks/secondwind/*.ts",
     "lint:dead-code": "knip",
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.scripts.json",
     "prepare": "bunx --no-install husky",
@@ -58,7 +59,7 @@
     "open": "11.0.0",
     "picocolors": "1.1.1",
     "react": "19.2.7",
-    "secondwind": "0.2.2",
+    "secondwind": "0.3.0",
     "tweakcc": "4.3.0",
     "undici": "7.28.0"
   },
