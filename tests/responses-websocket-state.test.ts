@@ -31,6 +31,7 @@ function checkpoint(
     lineageKey: randomUUID(),
     key,
     requestInputHashes: [`request-${lastUsedAt}`],
+    requestInputKinds: ['user'],
     expectedAssistantHashes: [`assistant-${lastUsedAt}`],
     expectedAssistantKinds: ['assistant'],
     compactedInput: [{ type: 'compaction', encrypted_content: `state-${lastUsedAt}` }],

@@ -54,6 +54,7 @@ export interface ContinuationSource {
   requestInput?: unknown[];
   expectedAssistant?: unknown[];
   requestInputHashes?: string[];
+  requestInputKinds?: string[];
   expectedAssistantHashes?: string[];
   expectedAssistantKinds?: string[];
   claudeCompactionSummaryHash?: string;
@@ -402,11 +403,13 @@ export function historyContinuationMatch(
 ): ContinuationMatch | undefined {
   const requestHashes = entry.requestInputHashes
     ?? entry.requestInput?.map(conversationItemHash);
+  const requestKinds = entry.requestInputKinds
+    ?? entry.requestInput?.map(conversationItemKind);
   const assistantHashes = entry.expectedAssistantHashes
     ?? entry.expectedAssistant?.map(conversationItemHash);
   const assistantKinds = entry.expectedAssistantKinds
     ?? entry.expectedAssistant?.map(conversationItemKind);
-  if (!requestHashes || !assistantHashes || !assistantKinds) return undefined;
+  if (!requestHashes || !requestKinds || !assistantHashes || !assistantKinds) return undefined;
   const full = prepared.items;
   const fullHashes = prepared.hashes;
   const exactPrefixHashes = [...requestHashes, ...assistantHashes];
@@ -416,6 +419,55 @@ export function historyContinuationMatch(
       .every((hash, index) => hash === exactPrefixHashes[index])
   ) {
     return { delta: full.slice(exactPrefixHashes.length), mode: 'exact' };
+  }
+
+  // Claude reserializes opaque OpenAI reasoning while it rebuilds Anthropic
+  // request history. That can change ids, encrypted payloads, and summaries at
+  // any earlier turn, not only in the latest assistant response. Match the
+  // complete visible history exactly, but permit reasoning envelopes to be
+  // reshaped, repeated, or omitted. Item order and every user message, tool
+  // call, tool result, and visible assistant message remain strict boundaries.
+  const expectedKinds = [...requestKinds, ...assistantKinds];
+  let expectedIndex = 0;
+  let fullIndex = 0;
+  let replayedReasoning = false;
+  let omittedReasoning = false;
+  while (expectedIndex < exactPrefixHashes.length) {
+    const expectedKind = expectedKinds[expectedIndex];
+    if (expectedKind === 'reasoning' || isOpaqueCompactionKind(expectedKind ?? '')) {
+      const start = fullIndex;
+      while (
+        fullIndex < full.length
+        && conversationItemKind(full[fullIndex]) === 'reasoning'
+      ) fullIndex += 1;
+      replayedReasoning ||= fullIndex > start;
+      omittedReasoning ||= fullIndex === start;
+      expectedIndex += 1;
+      continue;
+    }
+    while (
+      fullIndex < full.length
+      && conversationItemKind(full[fullIndex]) === 'reasoning'
+    ) {
+      replayedReasoning = true;
+      fullIndex += 1;
+    }
+    if (
+      fullIndex >= full.length
+      || fullHashes[fullIndex] !== exactPrefixHashes[expectedIndex]
+    ) break;
+    expectedIndex += 1;
+    fullIndex += 1;
+  }
+  if (
+    expectedIndex === exactPrefixHashes.length
+    && fullIndex < full.length
+    && (replayedReasoning || omittedReasoning)
+  ) {
+    return {
+      delta: full.slice(fullIndex),
+      mode: replayedReasoning ? 'replayed_reasoning' : 'omitted_reasoning',
+    };
   }
 
   // Claude can round-trip OpenAI's encrypted reasoning through an Anthropic

@@ -321,12 +321,14 @@ Patch the installed Claude Code binary so clodex favorites and aliases are first
 | `--trace` | Show the underlying tweakcc output |
 | `--help` | Help |
 
-The patch map is built from your favorites and aliases; context windows come from provider metadata. A pristine per-version backup is kept, and a manifest (`~/.clodex/patch-state.json`) makes re-runs no-ops until your config or Claude Code version changes — then the binary is restored first and re-patched fresh. `clodex claude` checks patch freshness at launch and offers to re-patch (a non-blocking notice when not interactive). Re-run `clodex patch` after every `claude` update.
+The patch map is built from your favorites and aliases; context windows come from provider metadata. This Clodex release supports Claude Code **2.1.222 only**. `clodex patch` rejects every other version before it reads, backs up, or changes the binary. `clodex patch --restore` remains available for recovery.
+
+A pristine content-addressed backup and `~/.clodex/patch-state.json` make unchanged re-runs no-ops. `clodex claude` checks compatibility and patch freshness at launch. Update Clodex before updating Claude Code when a newer Claude release appears.
 
 Claude Workflow normally stops an agent after 180 seconds without a semantic
 content event. Patched installations accept
 `CLODEX_WORKFLOW_STALL_TIMEOUT_MS` to increase that watchdog for models that
-spend longer generating buffered tool input. The default remains 180 seconds;
+spend longer generating buffered tool input. The patched default is 10 minutes;
 overrides are clamped to 3–30 minutes.
 
 ### `clodex models` / `clodex favorites`

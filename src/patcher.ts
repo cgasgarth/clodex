@@ -78,6 +78,8 @@ import {
   type PatchScriptModelConfig,
 } from './patch-transforms.js';
 
+const SUPPORTED_CLAUDE_CODE_VERSION = '2.1.222';
+
 // ── Manifest ────────────────────────────────────────────────────────────────
 
 export interface PatchManifest {
@@ -803,6 +805,13 @@ export async function runPatchCommand(opts: {
     return 1;
   }
   const { binaryPath, version } = target;
+  if (version !== SUPPORTED_CLAUDE_CODE_VERSION) {
+    p.log.error(
+      `Clodex supports patching Claude Code ${SUPPORTED_CLAUDE_CODE_VERSION}; found ${version}. `
+      + 'Install the supported Claude Code version before running `clodex patch`.',
+    );
+    return 1;
+  }
 
   const desired = buildDesiredPatchConfig();
   if (Object.keys(desired.config).length === 0) {
@@ -883,6 +892,15 @@ export async function runLaunchPatchCheck(opts: { agentStdout?: boolean; dryRun?
       return;
     }
     const resolved = target;
+    if (resolved.version !== SUPPORTED_CLAUDE_CODE_VERSION) {
+      if (!opts.agentStdout) {
+        console.error(pc.dim(
+          `clodex: Claude Code ${resolved.version} is unsupported; Clodex requires `
+          + `${SUPPORTED_CLAUDE_CODE_VERSION}. Patch check skipped.`,
+        ));
+      }
+      return;
+    }
 
     const configHash = computePatchConfigHash(desired.config);
     const manifest = readPatchManifest();

@@ -927,6 +927,7 @@ export function createResponsesWebSocketFetch(
         requestInput,
         expectedAssistant: [assistantItem],
         requestInputHashes: requestInput.map(conversationItemHash),
+        requestInputKinds: requestInput.map(conversationItemKind),
         expectedAssistantHashes: [conversationItemHash(assistantItem)],
         expectedAssistantKinds: [conversationItemKind(assistantItem)],
         compactedInput: [...compactedInputBase, assistantItem],
