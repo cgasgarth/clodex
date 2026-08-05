@@ -3627,10 +3627,11 @@ describe('createResponsesWebSocketFetch', () => {
       { type: 'compaction', encrypted_content: `external-${initialStore}` },
     ];
     expect(saveStoredResponsesCheckpoint(checkpointStoreDir, {
-      version: 1,
+      version: 2,
       checkpointKey,
       lineageKey: randomUUID(),
       requestInputHashes: [checkpointItemHash(user)],
+      requestInputKinds: ['user'],
       expectedAssistantHashes: [checkpointItemHash(assistant)],
       expectedAssistantKinds: ['assistant'],
       compactedInput,
@@ -3657,6 +3658,86 @@ describe('createResponsesWebSocketFetch', () => {
     await readAll(resumed);
   });
 
+  it('restores a durable checkpoint when Claude reshapes opaque reasoning across old turns', async () => {
+    mkdirSync(process.env.CLODEX_HOME!, { recursive: true });
+    const checkpointStoreDir = mkdtempSync(join(process.env.CLODEX_HOME!, 'checkpoint-reasoning-replay-'));
+    const accountId = 'acct-checkpoint-reasoning-replay';
+    const user = { role: 'user', content: [{ type: 'input_text', text: 'start' }] };
+    const oldReasoning = { type: 'reasoning', encrypted_content: 'old-request-reasoning', summary: [] };
+    const call = {
+      type: 'function_call', call_id: 'call_replay', name: 'Bash', arguments: '{"command":"pwd"}',
+    };
+    const output = { type: 'function_call_output', call_id: 'call_replay', output: '/tmp' };
+    const oldAssistantReasoning = {
+      type: 'reasoning', encrypted_content: 'old-assistant-reasoning', summary: [],
+    };
+    const assistant = {
+      type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'done' }],
+    };
+    const requestInput = [user, oldReasoning, call, output];
+    const expectedAssistant = [oldAssistantReasoning, assistant];
+    const checkpointKey = responsesWebSocketPartitionKey(
+      WS_URL,
+      sessionPayload([user]),
+      { accountId },
+    )!;
+    const compactedInput = [user, { type: 'compaction', encrypted_content: 'durable-native-state' }];
+    expect(saveStoredResponsesCheckpoint(checkpointStoreDir, {
+      version: 2,
+      checkpointKey,
+      lineageKey: randomUUID(),
+      requestInputHashes: requestInput.map(checkpointItemHash),
+      requestInputKinds: requestInput.map(item => (
+        item && typeof item === 'object' && 'type' in item
+          ? String(item.type)
+          : String((item as { role?: unknown }).role)
+      )),
+      expectedAssistantHashes: expectedAssistant.map(checkpointItemHash),
+      expectedAssistantKinds: expectedAssistant.map(item => String(item.type)),
+      compactedInput,
+      lastInputTokens: 260_000,
+      lastUsedAt: Date.now(),
+    }, 16, 64)).toBe(true);
+
+    const compactFetch = vi.fn(async () => new Response('unexpected compaction', { status: 500 }));
+    const wsFetch = createResponsesWebSocketFetch(WS_URL, undefined, {
+      accountId,
+      checkpointStoreDir,
+      compactFetch,
+      compactThreshold: 100,
+    });
+    const nextUser = { role: 'user', content: [{ type: 'input_text', text: 'continue' }] };
+    const replayedInput = [
+      user,
+      { type: 'reasoning', encrypted_content: 'reshaped-request-reasoning', summary: [{ text: 'new' }] },
+      call,
+      output,
+      { type: 'reasoning', encrypted_content: 'reshaped-assistant-reasoning', summary: [] },
+      assistant,
+      nextUser,
+    ];
+    const response = await wsFetch('https://example.test/responses', {
+      method: 'POST',
+      headers: {},
+      body: JSON.stringify(sessionPayload(replayedInput)),
+    });
+    const socket = lastSocket();
+    socket.emit('open');
+    const sent = JSON.parse(socket.send.mock.calls[0]![0] as string);
+    expect(sent.previous_response_id).toBeUndefined();
+    expect(sent.input).toEqual([...compactedInput, nextUser]);
+    expect(compactFetch).toHaveBeenCalledOnce();
+    expect(JSON.parse(String(compactFetch.mock.calls[0]![1]?.body)).input)
+      .toEqual([...compactedInput, nextUser]);
+    emitTextResponse(socket, 'resp_reasoning_replay_restored', 'continued', {
+      input_tokens: 42_000,
+      output_tokens: 100,
+    });
+    const body = await readAll(response);
+    expect(body).toContain('response.completed');
+    expect(body).toContain('42000');
+  });
+
   it('does not restore durable checkpoints when native compaction is disabled', async () => {
     mkdirSync(process.env.CLODEX_HOME!, { recursive: true });
     const checkpointStoreDir = mkdtempSync(join(process.env.CLODEX_HOME!, 'checkpoint-disabled-'));
@@ -3675,10 +3756,11 @@ describe('createResponsesWebSocketFetch', () => {
       { accountId },
     )!;
     saveStoredResponsesCheckpoint(checkpointStoreDir, {
-      version: 1,
+      version: 2,
       checkpointKey,
       lineageKey: randomUUID(),
       requestInputHashes: [checkpointItemHash(user)],
+      requestInputKinds: ['user'],
       expectedAssistantHashes: [checkpointItemHash(assistant)],
       expectedAssistantKinds: ['assistant'],
       compactedInput: [{ type: 'compaction', encrypted_content: 'must-not-load' }],

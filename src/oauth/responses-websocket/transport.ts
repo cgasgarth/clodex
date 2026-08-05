@@ -80,6 +80,7 @@ export function beginRecycledLineage(entry: ConnectionEntry): void {
   entry.requestInput = undefined;
   entry.expectedAssistant = undefined;
   entry.requestInputHashes = undefined;
+  entry.requestInputKinds = undefined;
   entry.expectedAssistantHashes = undefined;
   entry.expectedAssistantKinds = undefined;
   entry.compactedInput = undefined;
@@ -568,6 +569,7 @@ function handleSocketMessage(entry: ConnectionEntry, data: RawData): void {
       entry.requestInput = inputArray(ctx.originalPayload);
       entry.expectedAssistant = assistantItems;
       entry.requestInputHashes = entry.requestInput.map(conversationItemHash);
+      entry.requestInputKinds = entry.requestInput.map(conversationItemKind);
       entry.expectedAssistantHashes = assistantItems.map(conversationItemHash);
       entry.expectedAssistantKinds = assistantItems.map(conversationItemKind);
       entry.compactedInput = ctx.compactedInputBase

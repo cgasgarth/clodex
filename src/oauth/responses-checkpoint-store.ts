@@ -12,7 +12,7 @@ import {
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 
-const STORE_VERSION = 1;
+const STORE_VERSION = 2;
 // Native compact output can legitimately retain a large, dependency-closed
 // tool tail (screenshots and workflow results are the common case). Refusing
 // those records makes an otherwise healthy session unrecoverable after a
@@ -35,6 +35,7 @@ export interface StoredResponsesCheckpoint {
   checkpointKey: string;
   lineageKey: string;
   requestInputHashes: string[];
+  requestInputKinds: string[];
   expectedAssistantHashes: string[];
   expectedAssistantKinds: string[];
   compactedInput: unknown[];
@@ -57,6 +58,8 @@ function isStoredCheckpoint(value: unknown): value is StoredResponsesCheckpoint 
     && typeof record.lineageKey === 'string'
     && LINEAGE_KEY_PATTERN.test(record.lineageKey)
     && isStringArray(record.requestInputHashes)
+    && isStringArray(record.requestInputKinds)
+    && record.requestInputHashes.length === record.requestInputKinds.length
     && isStringArray(record.expectedAssistantHashes)
     && isStringArray(record.expectedAssistantKinds)
     && record.expectedAssistantHashes.length === record.expectedAssistantKinds.length

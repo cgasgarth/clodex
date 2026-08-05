@@ -164,6 +164,7 @@ export interface ConnectionEntry {
   expectedAssistant?: unknown[];
   /** Canonical item hashes cached when this conversation head is completed. */
   requestInputHashes?: string[];
+  requestInputKinds?: string[];
   expectedAssistantHashes?: string[];
   expectedAssistantKinds?: string[];
   compactedInput?: unknown[];
@@ -183,6 +184,7 @@ export interface CompactionCheckpoint {
   requestInput?: unknown[];
   expectedAssistant?: unknown[];
   requestInputHashes: string[];
+  requestInputKinds: string[];
   expectedAssistantHashes: string[];
   expectedAssistantKinds: string[];
   compactedInput?: unknown[];

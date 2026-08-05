@@ -150,7 +150,7 @@ const CLODEX_PATCH_COMMENT_PREFIX = '/*ccpatch:';
  * old enough to predate the required effort sites: back then the `ctx` comment
  * was the only marker, and it appears only when some model carried a non-default
  * context window — so such a binary can carry no proof marker at all (verified
- * against the real 2.1.220 bundle).
+ * against the real supported Claude Code bundle).
  *
  * They do NOT block, because unlike the proof marker they can in principle
  * collide with Claude Code's own bytes, and a false positive there is

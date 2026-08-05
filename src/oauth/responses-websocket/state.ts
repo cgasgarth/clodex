@@ -155,6 +155,8 @@ export function saveCompactionCheckpoint(entry: ConnectionEntry): void {
     expectedAssistant: entry.expectedAssistant,
     requestInputHashes: entry.requestInputHashes
       ?? entry.requestInput.map(conversationItemHash),
+    requestInputKinds: entry.requestInputKinds
+      ?? entry.requestInput.map(conversationItemKind),
     expectedAssistantHashes: entry.expectedAssistantHashes
       ?? entry.expectedAssistant.map(conversationItemHash),
     expectedAssistantKinds: entry.expectedAssistantKinds
@@ -183,10 +185,11 @@ export function persistCompactionCheckpoint(
   }
   try {
     const persisted = saveStoredResponsesCheckpoint(checkpoint.checkpointStoreDir, {
-        version: 1,
+        version: 2,
         checkpointKey: checkpoint.key,
         lineageKey: checkpoint.lineageKey,
         requestInputHashes: checkpoint.requestInputHashes,
+        requestInputKinds: checkpoint.requestInputKinds,
         expectedAssistantHashes: checkpoint.expectedAssistantHashes,
         expectedAssistantKinds: checkpoint.expectedAssistantKinds,
         compactedInput: checkpoint.compactedInput,
@@ -251,6 +254,7 @@ function refreshChangedStoredCheckpoint(
     ...existing,
     compactedInput: undefined,
     requestInputHashes: stored.requestInputHashes,
+    requestInputKinds: stored.requestInputKinds,
     expectedAssistantHashes: stored.expectedAssistantHashes,
     expectedAssistantKinds: stored.expectedAssistantKinds,
     lastInputTokens: stored.lastInputTokens,
@@ -376,6 +380,7 @@ export function loadCompactionCheckpointStore(
           lineageKey: file.lineageKey,
           key: file.checkpointKey,
           requestInputHashes: [],
+          requestInputKinds: [],
           expectedAssistantHashes: [],
           expectedAssistantKinds: [],
           lastUsedAt: file.mtimeMs,
@@ -394,6 +399,7 @@ export function loadCompactionCheckpointStore(
         upsertCompactionCheckpoint({
           ...checkpoint,
           requestInputHashes: stored.requestInputHashes,
+          requestInputKinds: stored.requestInputKinds,
           expectedAssistantHashes: stored.expectedAssistantHashes,
           expectedAssistantKinds: stored.expectedAssistantKinds,
           lastInputTokens: stored.lastInputTokens,
