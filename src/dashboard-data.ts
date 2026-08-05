@@ -98,6 +98,7 @@ export interface DeviceCodePrompt {
 }
 
 export type UsagePeriod = 'day' | 'last7' | 'last30';
+export type UsageAccountScope = 'active' | 'all';
 
 export interface UsageRange {
   period: UsagePeriod;
@@ -282,6 +283,48 @@ export function usagePeriodLabel(period: UsagePeriod): string {
   if (period === 'last7') return 'LAST 7 DAYS';
   if (period === 'last30') return 'LAST 30 DAYS';
   return 'DAY';
+}
+
+export function usageMetricsPath(
+  range: UsageRange,
+  scope: UsageAccountScope,
+  activeAccountId?: string,
+): string | undefined {
+  const query = new URLSearchParams({
+    start: range.start.toISOString(),
+    end: range.end.toISOString(),
+    bucketMinutes: String(range.bucketMinutes),
+  });
+  if (scope === 'active') {
+    if (!activeAccountId) return undefined;
+    query.set('accountId', activeAccountId);
+  }
+  return `/v1/metrics?${query.toString()}`;
+}
+
+export async function loadUsageMetrics(
+  range: UsageRange,
+  scope: UsageAccountScope,
+  activeAccountId?: string,
+  request: DashboardRequest = daemonControlRequest,
+): Promise<MetricBucket[]> {
+  const path = usageMetricsPath(range, scope, activeAccountId);
+  if (!path) return [];
+  const result = await request<{
+    start: string;
+    end: string;
+    accountId?: string;
+    buckets: MetricBucket[];
+  }>(path, { timeoutMs: DASHBOARD_CONTROL_REQUEST_TIMEOUT_MS });
+  const expectedAccountId = scope === 'active' ? activeAccountId : undefined;
+  if (
+    result.start !== range.start.toISOString()
+    || result.end !== range.end.toISOString()
+    || result.accountId !== expectedAccountId
+  ) {
+    throw new Error('Usage metrics response does not match the requested range or account scope');
+  }
+  return result.buckets;
 }
 
 export function cyclePeriod(period: UsagePeriod, direction: 1 | -1): UsagePeriod {

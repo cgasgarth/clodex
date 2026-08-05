@@ -1,10 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Box, Text, render, useApp, useInput } from 'ink';
 import { daemonControlRequest } from './daemon/control-client.js';
-import {
-  DASHBOARD_CONTROL_REQUEST_TIMEOUT_MS,
-  DASHBOARD_USAGE_REQUEST_TIMEOUT_MS,
-} from './timeouts.js';
+import { DASHBOARD_USAGE_REQUEST_TIMEOUT_MS } from './timeouts.js';
 import {
   loginOpenAiAccount,
   logoutOpenAiAccount,
@@ -24,6 +21,7 @@ import {
   formatUsd,
   lineChart,
   loadDashboardPanels,
+  loadUsageMetrics,
   requestFailure,
   secondwindPercentSaved,
   secondwindSessionSummary,
@@ -37,6 +35,7 @@ import {
   type Diagnostic,
   type MetricBucket,
   type UsagePeriod,
+  type UsageAccountScope,
   type UsageRange,
 } from './dashboard-data.js';
 type DashboardView =
@@ -145,6 +144,7 @@ function Dashboard(): React.ReactNode {
   const { exit } = useApp();
   const [view, setView] = useState<DashboardView>('overview');
   const [period, setPeriod] = useState<UsagePeriod>('day');
+  const [usageAccountScope, setUsageAccountScope] = useState<UsageAccountScope>('active');
   const [periodOffset, setPeriodOffset] = useState(0);
   const [rangeNow, setRangeNow] = useState(() => new Date());
   const range = useMemo(
@@ -204,36 +204,16 @@ function Dashboard(): React.ReactNode {
       }
       const warnings = [...snapshot.warnings];
       const activeAccount = snapshot.accounts?.find(account => account.selected);
-      const metricsQuery = new URLSearchParams({
-        start: range.start.toISOString(),
-        end: range.end.toISOString(),
-        bucketMinutes: String(range.bucketMinutes),
-        ...(activeAccount ? { accountId: activeAccount.id } : {}),
-      });
-      if (activeAccount) {
-        try {
-          const nextMetrics = await daemonControlRequest<{
-            start: string;
-            end: string;
-            accountId?: string;
-            buckets: MetricBucket[];
-          }>(
-            `/v1/metrics?${metricsQuery.toString()}`,
-            { timeoutMs: DASHBOARD_CONTROL_REQUEST_TIMEOUT_MS },
-          );
-          if (sequence !== refreshSequence.current) return;
-          if (
-            nextMetrics.start === range.start.toISOString()
-            && nextMetrics.end === range.end.toISOString()
-            && nextMetrics.accountId === activeAccount.id
-          ) {
-            setMetrics(nextMetrics.buckets);
-          }
-        } catch (error) {
-          warnings.push(`metrics: ${requestFailure(error)}`);
-        }
-      } else if (snapshot.accounts) {
-        setMetrics([]);
+      try {
+        const nextMetrics = await loadUsageMetrics(
+          range,
+          usageAccountScope,
+          activeAccount?.id,
+        );
+        if (sequence !== refreshSequence.current) return;
+        setMetrics(nextMetrics);
+      } catch (error) {
+        warnings.push(`metrics: ${requestFailure(error)}`);
       }
       if (sequence !== refreshSequence.current) return;
       setMessage(warnings.length > 0
@@ -246,7 +226,7 @@ function Dashboard(): React.ReactNode {
       refreshInFlight.current = false;
       setLoading(false);
     }
-  }, [range.bucketMinutes, range.end, range.start]);
+  }, [range, usageAccountScope]);
 
   const refreshUsage = useCallback(async () => {
     if (usageRefreshInFlight.current) return;
@@ -431,6 +411,12 @@ function Dashboard(): React.ReactNode {
       return;
     }
     if (view === 'usage') {
+      if (input === 'a') {
+        refreshSequence.current += 1;
+        setMetrics([]);
+        setUsageAccountScope(current => current === 'active' ? 'all' : 'active');
+        return;
+      }
       if (key.tab) {
         refreshSequence.current += 1;
         setMetrics([]);
@@ -702,7 +688,7 @@ function Dashboard(): React.ReactNode {
       </>
     );
   } else if (view === 'usage') {
-    controls = `Tab/Shift+Tab day · last 7 days · last 30 days · ←/→ period · 0 current · ${VIEW_SWITCH_HINT} · r refresh · q quit`;
+    controls = `a active/all accounts · Tab/Shift+Tab day · last 7 days · last 30 days · ←/→ period · 0 current · ${VIEW_SWITCH_HINT} · r refresh · q quit`;
     const tokenValues = metrics.map(bucket =>
       bucket.inputTokens
       + bucket.cachedInputTokens
@@ -716,7 +702,12 @@ function Dashboard(): React.ReactNode {
           <Text>
             <Text bold color="cyan">{usagePeriodLabel(period)}</Text> · {range.label}
           </Text>
-          <Text>{activeAccount ? accountDisplayName(activeAccount) : 'No active account'}</Text>
+          <Text>
+            {usageAccountScope === 'all'
+              ? 'All accounts'
+              : activeAccount ? accountDisplayName(activeAccount) : 'No active account'}
+            {' · '}<Text dimColor>press a to toggle</Text>
+          </Text>
         </Box>
         <Box borderStyle="round" paddingX={1} flexDirection="column">
           <Chart
@@ -759,8 +750,10 @@ function Dashboard(): React.ReactNode {
             {totals.unpricedRequests > 0 ? ` · ${totals.unpricedRequests} other-model requests excluded` : ''}
           </Text>
         </Box>
-        {!activeAccount && <Text color="yellow">Select an account to view account-scoped history.</Text>}
-        {activeAccount && totals.requests === 0 && (
+        {usageAccountScope === 'active' && !activeAccount && (
+          <Text color="yellow">Select an account or press a to view all-account history.</Text>
+        )}
+        {usageAccountScope === 'active' && activeAccount && totals.requests === 0 && (
           <Text dimColor>Account-scoped history begins when this dashboard version records new requests; legacy rows remain unattributed.</Text>
         )}
       </>
