@@ -25,7 +25,12 @@ import {
   debugKey,
 } from './state.js';
 import { changedPromptFields, inputArray } from './fingerprint.js';
-import { conversationItemKind, compactionSummaryHash, assistantCompactionSummaryText } from './continuation.js';
+import {
+  assistantCompactionSummaryText,
+  compactionSummaryHash,
+  conversationItemHash,
+  conversationItemKind,
+} from './continuation.js';
 import {
   eventType,
   responseErrorCode,
@@ -74,6 +79,9 @@ export function beginRecycledLineage(entry: ConnectionEntry): void {
   entry.responseId = undefined;
   entry.requestInput = undefined;
   entry.expectedAssistant = undefined;
+  entry.requestInputHashes = undefined;
+  entry.expectedAssistantHashes = undefined;
+  entry.expectedAssistantKinds = undefined;
   entry.compactedInput = undefined;
   entry.lastInputTokens = undefined;
   entry.claudeCompactionSummaryHash = undefined;
@@ -559,6 +567,9 @@ function handleSocketMessage(entry: ConnectionEntry, data: RawData): void {
       entry.responseId = ctx.responseId;
       entry.requestInput = inputArray(ctx.originalPayload);
       entry.expectedAssistant = assistantItems;
+      entry.requestInputHashes = entry.requestInput.map(conversationItemHash);
+      entry.expectedAssistantHashes = assistantItems.map(conversationItemHash);
+      entry.expectedAssistantKinds = assistantItems.map(conversationItemKind);
       entry.compactedInput = ctx.compactedInputBase
         ? [...ctx.compactedInputBase, ...assistantItems]
         : undefined;

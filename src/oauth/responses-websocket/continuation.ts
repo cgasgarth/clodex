@@ -28,10 +28,6 @@ function normalizeToolCallJson(value: unknown): unknown {
   return out;
 }
 
-function arraysEqual(left: unknown[], right: unknown[]): boolean {
-  return canonicalJson(normalizeToolCallJson(left)) === canonicalJson(normalizeToolCallJson(right));
-}
-
 export type ContinuationMatchMode =
   | 'exact'
   | 'replayed_reasoning'
@@ -61,6 +57,11 @@ export interface ContinuationSource {
   expectedAssistantHashes?: string[];
   expectedAssistantKinds?: string[];
   claudeCompactionSummaryHash?: string;
+}
+
+export interface PreparedConversationItems {
+  items: unknown[];
+  hashes: string[];
 }
 
 const CLAUDE_COMPACTION_CONTINUATION_PREFIX =
@@ -350,13 +351,27 @@ export function conversationItemHash(value: unknown): string {
   return createHash('sha256').update(canonicalJson(normalizeToolCallJson(value))).digest('hex').slice(0, 16);
 }
 
-export function continuationMismatchDetails(entry: ConnectionEntry, payload: JsonObject): Record<string, unknown> {
-  const full = inputArray(payload);
+/** Canonicalize the incoming conversation once, then reuse it for every head. */
+export function prepareConversationItems(payload: JsonObject): PreparedConversationItems {
+  const items = inputArray(payload);
+  return { items, hashes: items.map(conversationItemHash) };
+}
+
+export function continuationMismatchDetails(
+  entry: ConnectionEntry,
+  payload: JsonObject,
+  prepared = prepareConversationItems(payload),
+): Record<string, unknown> {
+  const full = prepared.items;
   const prefix = [...(entry.requestInput ?? []), ...(entry.expectedAssistant ?? [])];
+  const prefixHashes = [
+    ...(entry.requestInputHashes ?? entry.requestInput?.map(conversationItemHash) ?? []),
+    ...(entry.expectedAssistantHashes ?? entry.expectedAssistant?.map(conversationItemHash) ?? []),
+  ];
   const comparable = Math.min(full.length, prefix.length);
   let mismatch = comparable;
   for (let index = 0; index < comparable; index += 1) {
-    if (!arraysEqual([full[index]], [prefix[index]])) {
+    if (prepared.hashes[index] !== prefixHashes[index]) {
       mismatch = index;
       break;
     }
@@ -369,8 +384,8 @@ export function continuationMismatchDetails(entry: ConnectionEntry, payload: Jso
     firstMismatch: mismatch,
     expectedKind: expected === undefined ? 'none' : conversationItemKind(expected),
     actualKind: actual === undefined ? 'none' : conversationItemKind(actual),
-    ...(expected !== undefined ? { expectedHash: conversationItemHash(expected) } : {}),
-    ...(actual !== undefined ? { actualHash: conversationItemHash(actual) } : {}),
+    ...(expected !== undefined ? { expectedHash: prefixHashes[mismatch] } : {}),
+    ...(actual !== undefined ? { actualHash: prepared.hashes[mismatch] } : {}),
   };
 }
 
@@ -383,6 +398,7 @@ export function continuationMismatchSummary(entry: ConnectionEntry, payload: Jso
 export function historyContinuationMatch(
   entry: ContinuationSource,
   payload: JsonObject,
+  prepared = prepareConversationItems(payload),
 ): ContinuationMatch | undefined {
   const requestHashes = entry.requestInputHashes
     ?? entry.requestInput?.map(conversationItemHash);
@@ -391,8 +407,8 @@ export function historyContinuationMatch(
   const assistantKinds = entry.expectedAssistantKinds
     ?? entry.expectedAssistant?.map(conversationItemKind);
   if (!requestHashes || !assistantHashes || !assistantKinds) return undefined;
-  const full = inputArray(payload);
-  const fullHashes = full.map(conversationItemHash);
+  const full = prepared.items;
+  const fullHashes = prepared.hashes;
   const exactPrefixHashes = [...requestHashes, ...assistantHashes];
   if (
     full.length > exactPrefixHashes.length
@@ -467,7 +483,11 @@ export function historyContinuationMatch(
   return claudeCompactionContinuationMatch(entry, payload);
 }
 
-export function continuationMatch(entry: ConnectionEntry, payload: JsonObject): ContinuationMatch | undefined {
+export function continuationMatch(
+  entry: ConnectionEntry,
+  payload: JsonObject,
+  prepared?: PreparedConversationItems,
+): ContinuationMatch | undefined {
   if (!entry.responseId) return undefined;
-  return historyContinuationMatch(entry, payload);
+  return historyContinuationMatch(entry, payload, prepared);
 }

@@ -738,8 +738,14 @@ describe('selective HTTP proxy', () => {
       await ended;
       res.writeHead(503, { 'Content-Type': 'application/json' });
       res.flushHeaders();
-      res.write('{"error":{"message":"partial outage');
-      setTimeout(() => res.destroy(new Error('origin reset')), 20).unref();
+      await new Promise<void>((resolve, reject) => {
+        res.write('{"error":{"message":"partial outage', error => {
+          if (error) reject(error);
+          else resolve();
+        });
+      });
+      await new Promise<void>(resolve => setTimeout(resolve, 100));
+      res.destroy(new Error('origin reset'));
     });
     const originPort = await listen(origin);
     const proxy = await startHttpProxy({

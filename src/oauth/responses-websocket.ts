@@ -62,6 +62,7 @@ import {
   continuationMismatchSummary,
   historyContinuationMatch,
   continuationMatch,
+  prepareConversationItems,
 } from './responses-websocket/continuation.js';
 import type { ContinuationMatch } from './responses-websocket/continuation.js';
 import { boundedDiagnosticIdentifier, closeContext } from './responses-websocket/protocol.js';
@@ -120,8 +121,12 @@ export function createResponsesWebSocketFetch(
     const forceCompaction = diagnosticCorrelation?.forceCompaction === true;
     const candidates = partitionKey ? connectionEntries(partitionKey) : [];
     const idleCandidates = candidates.filter(entry => !entry.inFlight);
+    const preparedConversation = prepareConversationItems(payload);
     const matches = idleCandidates
-      .map(entry => ({ entry, match: continuationMatch(entry, payload) }))
+      .map(entry => ({
+        entry,
+        match: continuationMatch(entry, payload, preparedConversation),
+      }))
       .filter((candidate): candidate is { entry: ConnectionEntry; match: ContinuationMatch } => candidate.match !== undefined)
       // Prefer the longest matching history, which produces the smallest delta.
       .sort((left, right) => left.match.delta.length - right.match.delta.length
@@ -149,7 +154,10 @@ export function createResponsesWebSocketFetch(
     }
     const checkpointMatches = checkpointKey
       ? checkpointEntries(checkpointKey)
-        .map(checkpoint => ({ checkpoint, match: historyContinuationMatch(checkpoint, payload) }))
+        .map(checkpoint => ({
+          checkpoint,
+          match: historyContinuationMatch(checkpoint, payload, preparedConversation),
+        }))
         .filter((candidate): candidate is {
           checkpoint: CompactionCheckpoint;
           match: ContinuationMatch;
@@ -832,7 +840,7 @@ export function createResponsesWebSocketFetch(
       ));
     }
 
-    const requestInput = inputArray(payload);
+    const requestInput = preparedConversation.items;
     emitDiagnostic(options, {
       event: 'ws_head_decision',
       decision,
@@ -855,7 +863,7 @@ export function createResponsesWebSocketFetch(
       input: {
         count: requestInput.length,
         kinds: requestInput.map(conversationItemKind),
-        hashes: requestInput.map(conversationItemHash),
+        hashes: preparedConversation.hashes,
       },
       candidateCount: candidates.length,
       idleCandidateCount: idleCandidates.length,
@@ -888,7 +896,7 @@ export function createResponsesWebSocketFetch(
         ttlPausedMs: entry.ttlPausedMs,
         idleMs: Math.max(0, now - entry.lastUsedAt),
         promptChanges: changedPromptFields(entry.promptFieldHashes, promptFieldHashes),
-        mismatch: continuationMismatchDetails(entry, payload),
+        mismatch: continuationMismatchDetails(entry, payload, preparedConversation),
         claudeAgentIdHash: entry.claudeAgentId
           ? createHash('sha256').update(entry.claudeAgentId).digest('hex').slice(0, 12)
           : undefined,
