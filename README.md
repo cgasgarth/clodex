@@ -30,6 +30,9 @@ that every runtime artifact matches the checkout.
 
 ## Quick start
 
+This release supports Claude Code **2.1.222 only**. Clodex checks the installed
+version before it patches or launches Claude Code.
+
 Install clodex, sign in to OpenAI, choose the Codex models you want Claude to
 show, and patch Claude Code's model metadata:
 
@@ -187,7 +190,8 @@ clodex stop                 # stop the daemon
 
 Bare `clodex` starts the daemon if needed and opens six views: Overview, Usage,
 Accounts, Diagnostics, Secondwind, and Models. Press `1`–`6` to switch views. Usage
-supports day/last-7-days/last-30-days navigation with `Tab`, `Shift+Tab`, `←`, `→`, and `0`.
+supports active-account/all-account scope with `a`, plus day/last-7-days/last-30-days
+navigation with `Tab`, `Shift+Tab`, `←`, `→`, and `0`.
 Secondwind mode changes require confirmation. The Models view enables or disables OpenAI
 models in the live route catalog and the patched picker used by new Claude launches.
 The Diagnostics view switches between compact error-only logs and full lifecycle logs;
@@ -195,10 +199,10 @@ full mode records native compaction start, completion, duration, and recovery de
 
 ### Usage, caching, and API-equivalent cost
 
-The Usage view shows account-scoped input, cache reads, cache writes, output,
-request failures, cache share, and what the same traffic would cost at the
-published OpenAI API rates. ChatGPT subscription usage is not billed by these
-figures.
+The Usage view toggles between the active account and all managed accounts. It
+shows input, cache reads, cache writes, output, request failures, cache share,
+and what the same traffic would cost at published OpenAI API rates. ChatGPT
+subscription usage is not billed by these figures.
 
 ![Clodex usage dashboard with token history, cache share, and API-equivalent cost](./docs/dashboard-usage.png)
 

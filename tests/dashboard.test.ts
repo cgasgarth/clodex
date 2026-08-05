@@ -6,10 +6,12 @@ import {
   formatUsd,
   lineChart,
   loadDashboardPanels,
+  loadUsageMetrics,
   secondwindPercentSaved,
   secondwindSessionSummary,
   secondwindTokenSummary,
   usageRange,
+  usageMetricsPath,
   usagePeriodLabel,
   VIEW_SWITCH_HINT,
   type DashboardRequest,
@@ -56,6 +58,34 @@ describe('dashboard usage chart', () => {
     expect(formatUsd(0)).toBe('$0.00');
     expect(formatUsd(0.0042)).toBe('$0.0042');
     expect(formatUsd(12.345)).toBe('$12.35');
+  });
+
+  it('filters usage to the active account or aggregates all accounts', () => {
+    const range = usageRange('last7', 0, new Date(2026, 6, 29, 12));
+    const activePath = usageMetricsPath(range, 'active', 'account-1');
+    const allPath = usageMetricsPath(range, 'all', 'account-1');
+
+    expect(activePath).toContain('accountId=account-1');
+    expect(allPath).not.toContain('accountId=');
+    expect(usageMetricsPath(range, 'active')).toBeUndefined();
+  });
+
+  it('loads and validates all-account usage without an account filter', async () => {
+    const range = usageRange('day', 0, new Date(2026, 6, 29, 12));
+    const calls: string[] = [];
+    const request: DashboardRequest = async <T>(path: string): Promise<T> => {
+      calls.push(path);
+      return {
+        start: range.start.toISOString(),
+        end: range.end.toISOString(),
+        buckets: [],
+      } as T;
+    };
+    const buckets = await loadUsageMetrics(range, 'all', 'ignored', request);
+
+    expect(buckets).toEqual([]);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).not.toContain('accountId=');
   });
 });
 
