@@ -153,9 +153,12 @@ export function saveCompactionCheckpoint(entry: ConnectionEntry): void {
     key: entry.checkpointKey,
     requestInput: entry.requestInput,
     expectedAssistant: entry.expectedAssistant,
-    requestInputHashes: entry.requestInput.map(conversationItemHash),
-    expectedAssistantHashes: entry.expectedAssistant.map(conversationItemHash),
-    expectedAssistantKinds: entry.expectedAssistant.map(conversationItemKind),
+    requestInputHashes: entry.requestInputHashes
+      ?? entry.requestInput.map(conversationItemHash),
+    expectedAssistantHashes: entry.expectedAssistantHashes
+      ?? entry.expectedAssistant.map(conversationItemHash),
+    expectedAssistantKinds: entry.expectedAssistantKinds
+      ?? entry.expectedAssistant.map(conversationItemKind),
     compactedInput: entry.compactedInput,
     lastInputTokens: entry.lastInputTokens,
     claudeCompactionSummaryHash: entry.claudeCompactionSummaryHash,

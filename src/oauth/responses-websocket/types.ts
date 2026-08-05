@@ -162,6 +162,10 @@ export interface ConnectionEntry {
   responseId?: string;
   requestInput?: unknown[];
   expectedAssistant?: unknown[];
+  /** Canonical item hashes cached when this conversation head is completed. */
+  requestInputHashes?: string[];
+  expectedAssistantHashes?: string[];
+  expectedAssistantKinds?: string[];
   compactedInput?: unknown[];
   lastInputTokens?: number;
   claudeCompactionSummaryHash?: string;
