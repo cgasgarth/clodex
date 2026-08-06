@@ -3031,7 +3031,10 @@ describe('createResponsesWebSocketFetch', () => {
       () => initialFetch('https://example.test/responses', {
         method: 'POST',
         headers: { Authorization: 'Bearer access-token-before-restart' },
-        body: JSON.stringify(sessionPayload(oldTurns)),
+        body: JSON.stringify(sessionPayload(oldTurns, {
+          instructions: 'MCP tools are ready.',
+          tools: [{ type: 'function', name: 'Read', parameters: { type: 'object' } }],
+        })),
       }),
     );
     const compactedSocket = lastSocket();
@@ -3082,7 +3085,10 @@ describe('createResponsesWebSocketFetch', () => {
         method: 'POST',
         // OAuth token rotation must not orphan a checkpoint for the same account.
         headers: { Authorization: 'Bearer access-token-after-restart' },
-        body: JSON.stringify(sessionPayload(oversizedResume)),
+        body: JSON.stringify(sessionPayload(oversizedResume, {
+          instructions: 'MCP tools are still starting.',
+          tools: [],
+        })),
       }),
     );
     const restoredSocket = lastSocket();
