@@ -3,6 +3,7 @@ import {
   accountDisplayName,
   cyclePeriod,
   deviceCodeInstruction,
+  diagnosticLines,
   formatUsd,
   lineChart,
   loadDashboardPanels,
@@ -108,6 +109,32 @@ describe('dashboard device-code login', () => {
 describe('dashboard controls', () => {
   it('explicitly tells users to press the numbered view keys', () => {
     expect(VIEW_SWITCH_HINT).toBe('Press 1–6 to switch views');
+  });
+
+  it('shows compaction lifecycle, thread identity, sizes, and duration', () => {
+    expect(diagnosticLines({
+      timestamp: '2026-08-06T06:09:39.288Z',
+      kind: 'ws_compaction',
+      requestId: 'compact-request',
+      sessionId: '10a1f5d9-490e-4444-911d-ecc365a07bad',
+      threadName: 'typing cleanup efforts continued',
+      detail: {
+        outcome: 'completed',
+        stage: 1,
+        transport: 'responses_compact_endpoint',
+        reason: 'known_oversized',
+        estimatedInputTokens: 910_173,
+        inputTokens: 194_383,
+        outputTokens: 4_627,
+        estimatedRebasedTokens: 684_341,
+        durationMs: 93_897,
+      },
+    })).toEqual([
+      expect.stringContaining('compaction completed · stage 1'),
+      'thread typing cleanup efforts continued · 10a1f5d9-490e-4444-911d-ecc365a07bad',
+      'input 194.4K · compact output 4.6K · resulting context 684.3K · raw transcript 910.2K',
+      'duration 1m 34s · responses_compact_endpoint · known_oversized',
+    ]);
   });
 
   it('labels native Secondwind token accounting as measured', () => {

@@ -2,6 +2,7 @@ import type { InferenceTraceEvent } from '../trace-log.js';
 import { normalizeApiProcessingMode, type ApiProcessingMode } from './api-pricing.js';
 import { DaemonMetricsStore, hashSessionId } from './metrics.js';
 import { DaemonSessionRegistry } from './session-registry.js';
+import { resolveClaudeSessionTitle } from './session/title.js';
 
 interface PendingUsage {
   requestId: string;
@@ -23,6 +24,8 @@ export interface DaemonDiagnostic {
   kind: string;
   requestId?: string;
   sessionHash?: string;
+  sessionId?: string;
+  threadName?: string;
   code?: string;
   statusCode?: number;
   detail?: Record<string, unknown>;
@@ -40,7 +43,10 @@ export class DaemonInferenceCollector {
   private readonly pending = new Map<string, PendingUsage>();
   private readonly diagnostics: DaemonDiagnostic[] = [];
 
-  constructor(metrics = new DaemonMetricsStore()) {
+  constructor(
+    metrics = new DaemonMetricsStore(),
+    private readonly sessionTitle = resolveClaudeSessionTitle,
+  ) {
     this.metrics = metrics;
   }
 
@@ -172,17 +178,18 @@ export class DaemonInferenceCollector {
       || eventName.includes('compact')
       || eventName.includes('retry')
     ) {
+      const sessionId = typeof diagnosticEvent.claudeSessionId === 'string'
+        ? diagnosticEvent.claudeSessionId
+        : undefined;
       this.pushDiagnostic({
         timestamp: now.toISOString(),
         kind: eventName,
         requestId: typeof diagnosticEvent.requestId === 'string'
           ? diagnosticEvent.requestId
           : undefined,
-        sessionHash: hashSessionId(
-          typeof diagnosticEvent.claudeSessionId === 'string'
-            ? diagnosticEvent.claudeSessionId
-            : undefined,
-        ),
+        sessionHash: hashSessionId(sessionId),
+        sessionId,
+        threadName: sessionId ? this.sessionTitle(sessionId) : undefined,
         detail: sanitizeDiagnosticDetail(diagnosticEvent),
       });
     }
@@ -241,8 +248,29 @@ function sanitizeDiagnosticDetail(
     'errorSignature',
     'fallbackPath',
     'durationMs',
+    'outcome',
+    'mode',
+    'transport',
+    'stage',
+    'threshold',
+    'contextWindow',
     'estimatedInputTokens',
+    'measuredInputTokens',
+    'canonicalEstimatedInputTokens',
+    'estimatedPrefixTokens',
+    'estimatedTailTokens',
+    'estimatedRebasedTokens',
+    'liveContinuationEstimatedTokens',
     'inputTokens',
+    'cachedTokens',
+    'outputTokens',
+    'sourceItems',
+    'prefixItems',
+    'tailItems',
+    'retainedItems',
+    'compactedItems',
+    'rebasedItems',
+    'compactCallAttempt',
     'payloadBytes',
     'wireBytes',
     'connectionCount',

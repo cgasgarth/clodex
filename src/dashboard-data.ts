@@ -88,8 +88,13 @@ export interface Account {
 export interface Diagnostic {
   timestamp: string;
   kind: string;
+  requestId?: string;
+  sessionId?: string;
+  sessionHash?: string;
+  threadName?: string;
   code?: string;
   statusCode?: number;
+  detail?: Record<string, unknown>;
 }
 
 export interface DeviceCodePrompt {
@@ -191,6 +196,71 @@ export function compactNumber(value: number): string {
     notation: 'compact',
     maximumFractionDigits: 1,
   }).format(value);
+}
+
+function diagnosticNumber(detail: Record<string, unknown> | undefined, key: string): number | undefined {
+  const value = detail?.[key];
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function diagnosticText(detail: Record<string, unknown> | undefined, key: string): string | undefined {
+  const value = detail?.[key];
+  return typeof value === 'string' && value ? value : undefined;
+}
+
+function compactionInput(detail: Record<string, unknown> | undefined): number | undefined {
+  return diagnosticNumber(detail, 'inputTokens')
+    ?? diagnosticNumber(detail, 'estimatedPrefixTokens')
+    ?? diagnosticNumber(detail, 'canonicalEstimatedInputTokens')
+    ?? diagnosticNumber(detail, 'measuredInputTokens')
+    ?? diagnosticNumber(detail, 'estimatedInputTokens');
+}
+
+export function diagnosticLines(diagnostic: Diagnostic): string[] {
+  const detail = diagnostic.detail;
+  const outcome = diagnosticText(detail, 'outcome');
+  const stage = diagnosticNumber(detail, 'stage');
+  const lifecycle = diagnostic.kind === 'ws_compaction'
+    ? `compaction ${outcome ?? 'event'}${stage ? ` · stage ${stage}` : ''}`
+    : diagnostic.kind;
+  const header = `${new Date(diagnostic.timestamp).toLocaleString()} · ${lifecycle}`
+    + (diagnostic.statusCode ? ` · HTTP ${diagnostic.statusCode}` : '')
+    + (diagnostic.code ? ` · ${diagnostic.code}` : '');
+  const lines = [header];
+  if (diagnostic.threadName || diagnostic.sessionId) {
+    lines.push(`thread ${diagnostic.threadName ?? 'untitled'} · ${diagnostic.sessionId ?? diagnostic.sessionHash}`);
+  }
+  if (diagnostic.kind !== 'ws_compaction') return lines;
+
+  const input = compactionInput(detail);
+  const output = diagnosticNumber(detail, 'outputTokens');
+  const result = diagnosticNumber(detail, 'estimatedRebasedTokens');
+  const raw = diagnosticNumber(detail, 'estimatedInputTokens');
+  const sizes = [
+    input === undefined ? undefined : `input ${compactNumber(input)}`,
+    output === undefined ? undefined : `compact output ${compactNumber(output)}`,
+    result === undefined ? undefined : `resulting context ${compactNumber(result)}`,
+    raw !== undefined && raw !== input ? `raw transcript ${compactNumber(raw)}` : undefined,
+  ].filter((value): value is string => Boolean(value));
+  if (sizes.length) lines.push(sizes.join(' · '));
+  const durationMs = diagnosticNumber(detail, 'durationMs');
+  const transport = diagnosticText(detail, 'transport');
+  const reason = diagnosticText(detail, 'reason');
+  const context = [
+    durationMs === undefined ? undefined : `duration ${formatDiagnosticDuration(durationMs)}`,
+    transport,
+    reason,
+  ].filter((value): value is string => Boolean(value));
+  if (context.length) lines.push(context.join(' · '));
+  return lines;
+}
+
+function formatDiagnosticDuration(durationMs: number): string {
+  if (durationMs < 1_000) return `${Math.round(durationMs)}ms`;
+  if (durationMs < 60_000) return `${(durationMs / 1_000).toFixed(1)}s`;
+  const minutes = Math.floor(durationMs / 60_000);
+  const seconds = Math.round((durationMs % 60_000) / 1_000);
+  return `${minutes}m ${seconds}s`;
 }
 
 export function formatUsd(value: number): string {
