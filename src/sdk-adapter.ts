@@ -200,6 +200,25 @@ function systemToString(
   }).join('\n');
 }
 
+function inlineSystemToString(messages: AnthropicMsg[]): string | undefined {
+  const text = messages
+    .filter(message => message.role === 'system')
+    .flatMap(message => {
+      if (typeof message.content === 'string') return [message.content];
+      return message.content
+        .filter(block => block.type === 'text')
+        .map(block => block.text ?? '');
+    })
+    .filter(value => value.trim())
+    .join('\n');
+  return text || undefined;
+}
+
+function joinInstructions(...parts: Array<string | undefined>): string | undefined {
+  const present = parts.filter((part): part is string => Boolean(part?.trim()));
+  return present.length ? present.join('\n') : undefined;
+}
+
 function openAiCacheBreakpoint(block: AnthropicBlock, enabled: boolean): Record<string, unknown> | undefined {
   if (!enabled || !block.cache_control) return undefined;
   return { openai: { promptCacheBreakpoint: { mode: 'explicit' } } };
@@ -524,7 +543,18 @@ export function translateRequest(
   // instruction, and forwarding it to OpenAI would invalidate the stable
   // prompt prefix. Anthropic passthrough and non-OAuth providers are untouched.
   const baseSystem = systemToString(body.system, options?.openAiOAuth === true);
-  const systemText = baseSystem?.trim() || (options?.openAiOAuth ? 'You are a coding assistant.' : undefined);
+  // Claude can add and remove inline system reminders while MCP servers start.
+  // The Codex Responses API accepts fresh instructions on every request, so
+  // keep these current instructions out of replayed conversation history. This
+  // lets a durable native-compaction checkpoint survive a daemon restart while
+  // the MCP tool set is still settling. Other providers retain positional
+  // system messages because their semantics can differ.
+  const inlineSystem = options?.openAiOAuth ? inlineSystemToString(messages) : undefined;
+  const systemText = joinInstructions(baseSystem, inlineSystem)
+    ?? (options?.openAiOAuth ? 'You are a coding assistant.' : undefined);
+  const conversationMessages = options?.openAiOAuth
+    ? messages.filter(message => message.role !== 'system')
+    : messages;
 
   // resolveUpstreamTools uses the shared proxy types; the adapter keeps its own
   // minimal request shapes, so cast at this boundary. Keep compact-request tool
@@ -586,7 +616,7 @@ export function translateRequest(
     instructions: options?.openAiOAuth || supportsExplicitOpenAiCaching ? undefined : systemText,
     messages: [
       ...(supportsExplicitOpenAiCaching ? translateTopLevelSystemForOpenAi(body.system) : []),
-      ...translateMessages(messages, npm, supportsExplicitOpenAiCaching),
+      ...translateMessages(conversationMessages, npm, supportsExplicitOpenAiCaching),
     ],
     allowSystemInMessages: true,
     tools: translateTools(upstreamTools.length ? upstreamTools : undefined),

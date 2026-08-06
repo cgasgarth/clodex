@@ -387,6 +387,30 @@ describe('translateRequest', () => {
     expect(params.messages).toEqual([{ role: 'system', content: 'only inline context' }]);
   });
 
+  it('moves transient inline system reminders into current OAuth instructions', () => {
+    const params = translateRequest({
+      model: 'gpt-5.6-sol',
+      system: 'stable Claude instructions',
+      messages: [
+        { role: 'user', content: 'continue the task' },
+        {
+          role: 'system',
+          content: [
+            { type: 'text', text: '<system-reminder>computer-use is pending</system-reminder>' },
+            { type: 'text', text: '<system-reminder>playwright is pending</system-reminder>' },
+          ],
+        } as any,
+      ],
+    }, '@ai-sdk/openai', { openAiOAuth: true });
+
+    expect((params.providerOptions as any).openai.instructions).toBe(
+      'stable Claude instructions\n'
+      + '<system-reminder>computer-use is pending</system-reminder>\n'
+      + '<system-reminder>playwright is pending</system-reminder>',
+    );
+    expect(params.messages).toEqual([{ role: 'user', content: [{ type: 'text', text: 'continue the task' }] }]);
+  });
+
   it('maps Claude cache_control blocks to GPT-5.6 explicit cache breakpoints', () => {
     const params = translateRequest({
       model: 'gpt-5.6',
