@@ -577,7 +577,7 @@ function handleSocketMessage(entry: ConnectionEntry, data: RawData): void {
         : undefined;
       entry.claudeCompactionSummaryHash = ctx.claudeCompactionRequest && entry.compactedInput
         ? compactionSummaryHash(assistantCompactionSummaryText(assistantItems))
-        : undefined;
+        : ctx.claudeCompactionSummaryHash;
       entry.claudeAgentId = ctx.claudeAgentId;
       entry.recyclableAgentHead = Boolean(
         ctx.claudeAgentId

@@ -129,7 +129,7 @@ export function createResponsesWebSocketFetch(
       }))
       .filter((candidate): candidate is { entry: ConnectionEntry; match: ContinuationMatch } => candidate.match !== undefined)
       // Prefer the longest matching history, which produces the smallest delta.
-      .sort((left, right) => left.match.delta.length - right.match.delta.length
+        .sort((left, right) => left.match.delta.length - right.match.delta.length
         || continuationMatchRank(left.match.mode) - continuationMatchRank(right.match.mode));
     let selected: ConnectionEntry | undefined = matches[0]?.entry;
     let selectedMatch = matches[0]?.match;
@@ -162,8 +162,10 @@ export function createResponsesWebSocketFetch(
           checkpoint: CompactionCheckpoint;
           match: ContinuationMatch;
         } => candidate.match !== undefined)
-        .sort((left, right) => left.match.delta.length - right.match.delta.length
-          || continuationMatchRank(left.match.mode) - continuationMatchRank(right.match.mode))
+      .sort((left, right) => left.match.delta.length - right.match.delta.length
+          || continuationMatchRank(left.match.mode) - continuationMatchRank(right.match.mode)
+          || (left.checkpoint.lastInputTokens ?? Number.MAX_SAFE_INTEGER)
+            - (right.checkpoint.lastInputTokens ?? Number.MAX_SAFE_INTEGER))
       : [];
     const checkpointCandidate = selected ? undefined : checkpointMatches[0];
     const selectedCheckpoint = checkpointCandidate
@@ -329,8 +331,17 @@ export function createResponsesWebSocketFetch(
     const matchedCanonicalInput = selected?.compactedInput && selectedDelta
       ? [...selected.compactedInput, ...selectedDelta]
       : checkpointContinuationInput;
-    const matchedCanonicalEstimatedTokens = liveContinuationEstimatedTokens
+    const measuredMatchedCanonicalTokens = liveContinuationEstimatedTokens
       ?? checkpointContinuationEstimatedTokens;
+    const matchedCanonicalEstimatedTokens = measuredMatchedCanonicalTokens
+      ?? (matchedCanonicalInput
+        ? estimatedRebasedInputTokens(
+          matchedCanonicalInput,
+          [],
+          inputArray(payload),
+          estimatedInputTokens,
+        )
+        : undefined);
     const matchedCanonicalFitsContext = (
       contextWindow !== undefined
       && matchedCanonicalEstimatedTokens !== undefined
@@ -368,9 +379,10 @@ export function createResponsesWebSocketFetch(
     };
     const runOverflowRecovery = async (
       reason: OverflowRecoveryReason,
+      forceInitialCompaction = reason !== 'known_oversized',
     ): Promise<boolean> => {
       if (!overflowRecovery || contextWindow === undefined || contextWindow <= 0) return false;
-      const recoverFromMatchedCanonical = reason !== 'known_oversized'
+      const recoverFromMatchedCanonical = reason !== 'known_oversized' || anchored
         ? matchedCanonicalInput
         : undefined;
       const recoveryInput = compactedInputBase
@@ -390,10 +402,10 @@ export function createResponsesWebSocketFetch(
           : Math.max(estimatedInputTokens ?? 0, sourceEstimatedInputTokens);
       const result = await overflowRecovery.recover({
         input: recoveryInput,
-        sources: compactedInputBase || recoverFromMatchedCanonical ? [] : recoverySources,
+        sources: compactedInputBase ? [] : recoverySources,
         estimatedInputTokens: recoveryEstimate,
         reason,
-        forceInitialCompaction: reason !== 'known_oversized',
+        forceInitialCompaction,
       });
       compactionUsage = overflowRecovery.usage;
       if (result.recovered && result.estimatedInputTokens !== undefined) {
@@ -425,10 +437,35 @@ export function createResponsesWebSocketFetch(
     };
     if (
       compactThreshold !== undefined
+      && anchored
+      && matchedCanonicalInput
+      && matchedCanonicalEstimatedTokens !== undefined
+      && matchedCanonicalEstimatedTokens >= compactThreshold
+    ) {
+      try {
+        const recovered = await runOverflowRecovery('known_oversized', true);
+        if (
+          !recovered
+          && contextWindow !== undefined
+          && matchedCanonicalEstimatedTokens >= contextWindow
+        ) {
+          terminalOverflowReason =
+            'No dependency-safe native compaction prefix could recover the oversized anchored continuation';
+        }
+      } catch (error) {
+        if (!(error instanceof ResponsesCompactionError)) throw error;
+        terminalRecoveryFailure = error;
+      }
+    }
+    if (
+      compactThreshold !== undefined
       && contextWindow !== undefined
       && estimatedInputTokens !== undefined
       && estimatedInputTokens >= contextWindow
       && !matchedCanonicalFitsContext
+      && !hasCompacted()
+      && !terminalOverflowReason
+      && !terminalRecoveryFailure
     ) {
       try {
         if (!await runOverflowRecovery('known_oversized')) {
@@ -984,6 +1021,11 @@ export function createResponsesWebSocketFetch(
           usageOffset: compactionUsage,
           supersededEntry,
           claudeCompactionRequest: forceCompaction,
+          claudeCompactionSummaryHash: selectedMatch?.mode === 'claude_compaction_summary'
+            ? selected?.claudeCompactionSummaryHash
+            : checkpointMatch?.mode === 'claude_compaction_summary'
+              ? selectedCheckpoint?.claudeCompactionSummaryHash
+              : undefined,
           claudeAgentId: diagnosticCorrelation?.claudeAgentId,
           promptFieldHashes,
           instructionsSnapshot,
