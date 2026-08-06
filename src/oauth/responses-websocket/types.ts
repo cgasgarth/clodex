@@ -107,6 +107,8 @@ export interface RequestContext {
   supersededEntry?: ConnectionEntry;
   /** This request is Claude Code's own portable-summary compaction turn. */
   claudeCompactionRequest?: boolean;
+  /** Portable summary anchor inherited by a continuation of compacted state. */
+  claudeCompactionSummaryHash?: string;
   claudeAgentId?: string;
   promptFieldHashes: Record<string, string>;
   instructionsSnapshot?: string;

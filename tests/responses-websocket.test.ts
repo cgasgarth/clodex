@@ -1787,14 +1787,22 @@ describe('createResponsesWebSocketFetch', () => {
   });
 
   it('returns a synthetic Claude summary and re-anchors it to native compacted state', async () => {
+    mkdirSync(process.env.CLODEX_HOME!, { recursive: true });
+    const checkpointStoreDir = mkdtempSync(join(
+      process.env.CLODEX_HOME!,
+      'claude-summary-anchor-checkpoints-',
+    ));
     const diagnostics: ResponsesWebSocketDiagnosticEvent[] = [];
     const compactFetch = vi.fn();
-    const wsFetch = createResponsesWebSocketFetch(WS_URL, undefined, {
+    const options = {
       accountId: 'acct-claude-summary-anchor',
       compactThreshold: 900,
+      contextWindow: 2_000,
+      checkpointStoreDir,
       compactFetch: compactFetch as typeof fetch,
       onDiagnostic: event => diagnostics.push(event),
-    });
+    };
+    const wsFetch = createResponsesWebSocketFetch(WS_URL, undefined, options);
     const firstUser = {
       role: 'user',
       content: [{ type: 'input_text', text: 'Investigate the original task.' }],
@@ -1905,7 +1913,7 @@ describe('createResponsesWebSocketFetch', () => {
       event: 'ws_compaction',
       outcome: 'synthetic_checkpoint',
       transport: 'claude_compaction_response',
-      checkpointDurable: false,
+      checkpointDurable: true,
     }));
     expect(diagnostics).toContainEqual(expect.objectContaining({
       event: 'ws_head_decision',
@@ -2007,8 +2015,103 @@ describe('createResponsesWebSocketFetch', () => {
     });
     expect(JSON.stringify(diagnostics)).not.toContain(portableSummary);
 
-    emitTextResponse(anchoredSocket, 'resp_anchor_continued', 'Implemented.');
+    emitTextResponse(anchoredSocket, 'resp_anchor_continued', 'Implemented.', {
+      input_tokens: 1_200,
+      output_tokens: 10,
+    });
     await readAll(continued);
+
+    resetResponsesWebSocketConnectionsForTests();
+    fakeSockets.length = 0;
+    const resumedFetch = createResponsesWebSocketFetch(WS_URL, undefined, {
+      ...options,
+      compactThreshold: 1_500,
+      contextWindow: 2_500,
+    });
+    const durableResume = await resumedFetch('https://example.test/responses', {
+      method: 'POST',
+      headers: {},
+      body: JSON.stringify(sessionPayload([rewrittenUser])),
+    });
+    const durableSocket = lastSocket();
+    durableSocket.emit('open');
+    expect(JSON.parse(durableSocket.send.mock.calls[0]![0] as string).input).toEqual(
+      expect.arrayContaining([expect.objectContaining({ type: 'compaction' })]),
+    );
+    emitTextResponse(durableSocket, 'resp_durable_anchor', 'Still anchored.', {
+      input_tokens: 1_200,
+      output_tokens: 10,
+    });
+    await readAll(durableResume);
+
+    resetResponsesWebSocketConnectionsForTests();
+    fakeSockets.length = 0;
+    const handoffFetch = createResponsesWebSocketFetch(WS_URL, undefined, {
+      ...options,
+      compactThreshold: 1_500,
+      contextWindow: 4_000,
+    });
+
+    const compactBodies: unknown[][] = [];
+    compactFetch.mockImplementation(async (_url: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body));
+      compactBodies.push(body.input);
+      return new Response(JSON.stringify({
+        output: [{ type: 'compaction', encrypted_content: 'account-handoff-rebase' }],
+        usage: { input_tokens: 850, output_tokens: 20 },
+      }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    });
+    const staleAccountHistory = {
+      role: 'user',
+      content: [{ type: 'input_text', text: `stale-account:${'x'.repeat(8_000)}` }],
+    };
+    const retainedTurns = Array.from({ length: 6 }, (_, index) => ([
+      {
+        type: 'message',
+        role: 'assistant',
+        content: [{ type: 'output_text', text: `retained-${index}:${'a'.repeat(600)}` }],
+      },
+      {
+        type: 'message',
+        role: 'user',
+        content: [{ type: 'input_text', text: `current-${index}:${'u'.repeat(300)}` }],
+      },
+    ])).flat();
+    const retainedUser = retainedTurns.at(-1)!;
+    const handedOff = await withResponsesWebSocketDiagnosticContext(
+      { estimatedInputTokens: 4_300, claudeAgentId: 'account-handoff-resume' },
+      () => handoffFetch('https://example.test/responses', {
+        method: 'POST',
+        headers: {},
+        body: JSON.stringify(sessionPayload([
+          staleAccountHistory,
+          rewrittenUser,
+          ...retainedTurns,
+        ])),
+      }),
+    );
+
+    expect(compactBodies.length).toBeGreaterThan(0);
+    expect(JSON.stringify(compactBodies)).not.toContain('stale-account:');
+    const handedOffSocket = lastSocket();
+    handedOffSocket.emit('open');
+    const handedOffPayload = JSON.parse(handedOffSocket.send.mock.calls[0]![0] as string);
+    expect(handedOffPayload.previous_response_id).toBeUndefined();
+    expect(handedOffPayload.input).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'compaction', encrypted_content: 'account-handoff-rebase' }),
+      retainedUser,
+    ]));
+    emitTextResponse(handedOffSocket, 'resp_account_handoff', 'Resumed safely.');
+    await readAll(handedOff);
+    expect(diagnostics).toContainEqual(expect.objectContaining({
+      event: 'ws_overflow_recovery',
+      outcome: 'stage_accepted',
+      reason: 'known_oversized',
+    }));
+    rmSync(checkpointStoreDir, { recursive: true, force: true });
   });
 
   it('does not anchor a tampered synthetic Claude compaction summary', async () => {
