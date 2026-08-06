@@ -18,6 +18,7 @@ import {
   compactNumber,
   cyclePeriod,
   deviceCodeInstruction,
+  diagnosticLines,
   formatUsd,
   lineChart,
   loadDashboardPanels,
@@ -807,11 +808,13 @@ function Dashboard(): React.ReactNode {
         {diagnostics.length === 0
           ? <Text dimColor>No recent failures or compaction warnings.</Text>
           : diagnostics.map((diagnostic, index) => (
-              <Text key={`${diagnostic.timestamp}-${index}`} color="yellow">
-                {new Date(diagnostic.timestamp).toLocaleString()} · {diagnostic.kind}
-                {diagnostic.statusCode ? ` · HTTP ${diagnostic.statusCode}` : ''}
-                {diagnostic.code ? ` · ${diagnostic.code}` : ''}
-              </Text>
+              <Box key={`${diagnostic.timestamp}-${index}`} flexDirection="column" marginBottom={1}>
+                {diagnosticLines(diagnostic).map((line, lineIndex) => (
+                  <Text key={`${diagnostic.timestamp}-${lineIndex}`} color={lineIndex === 0 ? 'yellow' : undefined}>
+                    {lineIndex === 0 ? line : `  ${line}`}
+                  </Text>
+                ))}
+              </Box>
             ))}
       </Box>
     );

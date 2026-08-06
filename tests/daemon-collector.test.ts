@@ -239,4 +239,50 @@ describe('DaemonInferenceCollector', () => {
     expect(bucket?.unpricedRequests).toBe(0);
     metrics.close();
   });
+
+  it('retains compaction lifecycle sizes and local thread identity', () => {
+    const root = mkdtempSync(join(tmpdir(), 'clodex-collector-'));
+    roots.push(root);
+    const metrics = new DaemonMetricsStore(join(root, 'metrics.sqlite'));
+    const sessionId = '10a1f5d9-490e-4444-911d-ecc365a07bad';
+    const collector = new DaemonInferenceCollector(metrics, id => (
+      id === sessionId ? 'typing cleanup efforts continued' : undefined
+    ));
+
+    collector.handle({
+      kind: 'websocket',
+      entry: {
+        event: 'ws_compaction',
+        outcome: 'completed',
+        stage: 2,
+        transport: 'responses_compact_endpoint',
+        reason: 'known_oversized',
+        estimatedInputTokens: 684_341,
+        inputTokens: 263_145,
+        outputTokens: 4_627,
+        estimatedRebasedTokens: 438_908,
+        durationMs: 93_897,
+        requestId: 'compact-request',
+        claudeSessionId: sessionId,
+      },
+    });
+
+    expect(collector.recentDiagnostics()).toEqual([
+      expect.objectContaining({
+        kind: 'ws_compaction',
+        requestId: 'compact-request',
+        sessionId,
+        threadName: 'typing cleanup efforts continued',
+        detail: expect.objectContaining({
+          outcome: 'completed',
+          stage: 2,
+          inputTokens: 263_145,
+          outputTokens: 4_627,
+          estimatedRebasedTokens: 438_908,
+          durationMs: 93_897,
+        }),
+      }),
+    ]);
+    metrics.close();
+  });
 });
