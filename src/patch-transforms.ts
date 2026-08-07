@@ -33,7 +33,7 @@ import { isReservedModelAlias } from './model-aliases.js';
  * and never receive the new transforms, silently. `tests/patcher.test.ts` pins a
  * hash of this file to force that decision to be made rather than forgotten.
  */
-export const PATCH_TRANSFORMS_VERSION = 5;
+export const PATCH_TRANSFORMS_VERSION = 6;
 
 export interface PatchScriptModelEntry {
   alias?: string;
@@ -272,9 +272,11 @@ export function applyClodexPatches(source: string, config: PatchScriptModelConfi
 
   // ---------------------------------------------------------------------------
   // PATCH 1 — Agent/subagent tool 'model' zod enum.
-  // Anchor: .enum([ "sonnet",...,"fable" ]).optional().describe( — the array
-  // begins with the built-in aliases and is immediately followed by
-  // .optional().describe(. We append our identities (alias when defined, else
+  // Anchor: the enum constructor call followed by
+  // ["sonnet",...,"fable"].optional().describe(. Claude 2.1.224 replaced
+  // Zod's `.enum(...)` spelling with a minified enum helper, so preserve the
+  // constructor token instead of assuming either implementation. We append our
+  // identities (alias when defined, else
   // the canonical id) inside the enum so the tool accepts them — this is the same
   // enum subagent/skill 'model:' frontmatter is validated against, which is why
   // the short alias has to be the value that lands here.
@@ -282,8 +284,8 @@ export function applyClodexPatches(source: string, config: PatchScriptModelConfi
   // ---------------------------------------------------------------------------
   applyOnce(
     'PATCH 1: Agent tool model enum',
-    /\.enum\((\["sonnet","opus","haiku"(?:,"[^"]+")*\])\)\.optional\(\)\.describe\(/,
-    (_m, arr) => '.enum(' + extendAliasArray(arr) + ').optional().describe(',
+    /((?:\.enum|[\w$]+)\()(\["sonnet","opus","haiku"(?:,"[^"]+")*\])(\)\.optional\(\)\.describe\()/,
+    (_m, constructor, arr, suffix) => constructor + extendAliasArray(arr) + suffix,
     { required: true, noopIsSkip: true }
   );
 
@@ -496,11 +498,11 @@ export function applyClodexPatches(source: string, config: PatchScriptModelConfi
     const MARKER = '/*clodex:native-context-window*/';
     applyOnce(
       'PATCH X4: native context window',
-      /function ([\w$]+)\(e,t\)\{let ([\w$]+)=([\w$]+)\(e\),([\w$]+)=([\w$]+)\(\),([\w$]+)=([\w$]+)\(e,\4\);if\(process\.env\.CLAUDE_CODE_AUTO_COMPACT_WINDOW\)/,
-      (_m, resolver, modelKey, normalizeModel, clientData, readClientData, modelCap, resolveModelCap) =>
-        'function ' + resolver + '(e,t){let ' + modelKey + '=' + normalizeModel + '(e),'
-        + clientData + '=' + readClientData + '(),' + modelCap + '=' + resolveModelCap
-        + '(e,' + clientData + ');' + MARKER
+      /function ([\w$]+)\(e,t,r=([\w$]+)\(\)\)\{let ([\w$]+)=([\w$]+)\(e\),([\w$]+)=([\w$]+)\(e,r\);if\(process\.env\.CLAUDE_CODE_AUTO_COMPACT_WINDOW\)/,
+      (_m, resolver, readClientData, modelKey, normalizeModel, modelCap, resolveModelCap) =>
+        'function ' + resolver + '(e,t,r=' + readClientData + '()){let '
+        + modelKey + '=' + normalizeModel + '(e),' + modelCap + '=' + resolveModelCap
+        + '(e,r);' + MARKER
         + 'if(process.env.CLODEX_NATIVE_CONTEXT_OWNER==="1")return{window:' + modelCap
         + ',configured:' + modelCap + ',source:"owner"};'
         + 'if(process.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW)',
