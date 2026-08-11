@@ -6,9 +6,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Release workflow
 
-Releases are managed by release-please from conventional commits. The `test` job runs Bun typecheck, tests, and build before release-please can tag. A created release is rebuilt and published with `bun publish`; CI requires the `NPM_TOKEN` secret because npm trusted-publishing OIDC is currently implemented by the npm CLI, not Bun. Never publish locally. `.github/workflows/release-please.yml` is the only release path.
+Releases are managed by release-please from conventional commits. The `test` job runs Bun typecheck, tests, and build before release-please can tag. Never publish locally. `.github/workflows/release-please.yml` is the only release path.
 
-Release and commitlint jobs are gated by `CLODEX_PUBLISH_ENABLED=true`. The publishing repository also needs a scoped npm token in `NPM_TOKEN`. Publishing stays in the release-please job because tags created by the default `GITHUB_TOKEN` do not trigger another workflow.
+Release and commitlint jobs are gated by `CLODEX_PUBLISH_ENABLED=true`. GitHub-only releases need no package-registry credentials. npm publishing is separately gated by `CLODEX_NPM_PUBLISH_ENABLED=true` and requires a scoped token in `NPM_TOKEN`; leave it disabled in forks that do not own the package name. Publishing stays in the release-please job because tags created by the default `GITHUB_TOKEN` do not trigger another workflow.
 
 **Commit cheat sheet:** `feat:` adds a feature, `fix:` fixes behavior, and `build:`, `ci:`, `docs:`, or `chore:` cover non-feature maintenance. Add `!` after the type/scope or a `BREAKING CHANGE:` footer for an incompatible change. Commitlint runs locally through Husky and in CI.
 
