@@ -90,7 +90,7 @@ describe('translateMessages', () => {
     ]);
   });
 
-  it('maps Claude mid-turn steering to the final normal user message for OpenAI OAuth', () => {
+  it('maps Claude mid-turn steering to an explicit final user instruction for OpenAI OAuth', () => {
     const queued = 'The user sent a new message while you were working:\n'
       + 'update the pull request description with these results\n\n'
       + 'This is how Claude Code surfaces messages the user sends mid-turn — within the running '
@@ -111,8 +111,13 @@ describe('translateMessages', () => {
       'tool',
       'user',
     ]);
-    expect((params.messages[1] as any).content[0].text)
-      .toBe('update the pull request description with these results');
+    expect((params.messages[1] as any).content[0].text).toBe([
+      'The user sent this new instruction while the current task was running.',
+      'Treat it as the newest user request and apply it now before continuing earlier work.',
+      'If it replaces, redirects, limits, or stops prior work, follow it immediately.',
+      '',
+      'update the pull request description with these results',
+    ].join('\n'));
     expect(params.providerOptions?.openai?.instructions).toContain(
       'If they intended to override or replace it, drop the previous work',
     );
@@ -150,8 +155,30 @@ describe('translateMessages', () => {
 
     expect((params.messages[0] as any).content.map((part: any) => part.text)).toEqual([
       'tool context that arrived in the same boundary',
-      'focus only on the failing test',
+      [
+        'The user sent this new instruction while the current task was running.',
+        'Treat it as the newest user request and apply it now before continuing earlier work.',
+        'If it replaces, redirects, limits, or stops prior work, follow it immediately.',
+        '',
+        'focus only on the failing test',
+      ].join('\n'),
     ]);
+  });
+
+  it('does not interpret the content of a mid-turn instruction', () => {
+    const queued = 'The user sent a new message while you were working:\n'
+      + 'actually stop i dont care anymore\n\n'
+      + 'This is how Claude Code surfaces messages the user sends mid-turn — within the running '
+      + 'turn, often alongside the next tool result, rather than as a separate conversation turn. '
+      + 'Address the message above as you continue this turn.';
+    const params = translateRequest({
+      model: 'sol',
+      messages: [{ role: 'user', content: [{ type: 'text', text: queued }] }],
+    }, '@ai-sdk/openai', { openAiOAuth: true });
+
+    expect((params.messages[0] as any).content[0].text).toEndWith(
+      '\n\nactually stop i dont care anymore',
+    );
   });
 
   it('preserves wrapper-like text unless the full Claude envelope matches', () => {
