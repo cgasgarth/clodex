@@ -436,8 +436,8 @@ describe('PATCH_TRANSFORMS_VERSION', () => {
     ).replace(/\r\n/g, '\n');
     const digest = createHash('sha256').update(source).digest('hex');
     expect({ version: PATCH_TRANSFORMS_VERSION, digest }).toEqual({
-      version: 6,
-      digest: '7cb40bf57c6e92bae2090192c09a9ac75903bdd9bf58420d22fe579fc23ffba9',
+      version: 7,
+      digest: '20cc33475303d91fb5e3c4b5f38db0dc1f3002453b57c052fca5ee37fee12c5f',
     });
   });
 });
@@ -635,7 +635,7 @@ const CLAUDE_CORE_FIXTURE = [
   'function Fw(e){let t=Rd();if(oSs(e))return!Syo(t.enabledMcpServers).includes(e);return Syo(t.disabledMcpServers).includes(e)}',
   'function aY(e,t,r=Mv()){let n=lo(e),o=JE(e,r);if(process.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW){let l=UNe("CLAUDE_CODE_AUTO_COMPACT_WINDOW",process.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW,Tfo,Nds);if(l.status!=="invalid"){let c=Math.max(Tfo,l.effective);return{window:Math.min(o,c),configured:c,source:"env"}}}return{window:o,configured:o,source:"auto"}}',
   'function JI(){if(Z.DISABLE_COMPACT)return!1;if(Yt(process.env.DISABLE_AUTO_COMPACT))return!1;return Hc("autoCompactEnabled",!0).value}',
-  'function uMu(e,t,r,n=t){let o=Sfo(t,r),i=r.enabled?o:t,s=i-20000,a=r.testBlockingOverride,l=a!==void 0&&!isNaN(a)&&a>0?a:n-3000,c=Math.max(0,Math.round((i-e)/i*100));if(e>=l)return{level:"blocked",pctLeft:c};if(r.enabled&&e>=o)return{level:"compact",pctLeft:c};if(e>=s)return{level:"warn",pctLeft:c};return{level:"ok"}}',
+  'function uMu(e,t,r,n=t,o){let i=o??Sfo(t,r),s=r.enabled?i:t,a=s-20000,l=r.testBlockingOverride,c=l!==void 0&&!isNaN(l)&&l>0?l:n-3000,u=Math.max(0,Math.round((s-e)/s*100));if(e>=c)return{level:"blocked",pctLeft:u};if(r.enabled&&e>=i)return{level:"compact",pctLeft:u};if(e>=a)return{level:"warn",pctLeft:u};return{level:"ok"}}',
   'function gMu(e,t,r,n){let o=Uds(t,r,n),i=o.enabled?r:void 0,s=CSe(t,i);if(!JGe(t,r))return e>=Hds(s,o);let{window:a}=aY(t,i);if(a<bRe)return!1;return e>=Hds(s,o)}',
   'const workflowNote=`NOTE: You are running inside a workflow script. Be concise \\u2014 the script will parse your output.`,aa,bb,cc,dd,sj_=180000,attempts=5,retries=5;var runtime={};',
   'function runWorkflow(events){let last,messages=[],tokens=0,baseTokens=0,baseTools=0,toolCalls=0,progress=[];const countUsage=(usage)=>usage.total;const emit=(state,data)=>progress.push(data.tokens);for(const msg of events){if(msg.type==="user"){continue}if(msg.type==="assistant"){if(last=msg,messages?.push(msg),!msg.isApiErrorMessage){tokens=countUsage(msg.message.usage);let model=msg.message.model;emit("progress",{tokens:baseTokens+tokens,toolCalls:baseTools+toolCalls})}}}return{tokens,progress}}/*workflow-end*/',
@@ -1070,7 +1070,7 @@ describe('patch script identity naming', () => {
     expect(out).not.toMatch(/KNOWN=\[[^\]]*gpt-5\.6-sol/);
   });
 
-  it('patches Claude 2.1.224 enum helper syntax without rewriting the helper', () => {
+  it('patches Claude 2.1.227 enum helper syntax without rewriting the helper', () => {
     const source = CLAUDE_FIXTURE.replace(
       '.enum(["sonnet","opus","haiku","fable"])',
       'xr(["sonnet","opus","haiku","fable"])',
@@ -1082,7 +1082,7 @@ describe('patch script identity naming', () => {
     expect(out).not.toContain('.enum(["sonnet","opus","haiku","fable","sol","clodex:openai:mystery"])');
   });
 
-  it('keeps native Clodex ownership ahead of Claude 2.1.224 unknown-model enforcement', () => {
+  it('keeps native Clodex ownership ahead of Claude 2.1.227 unknown-model enforcement', () => {
     const source = CLAUDE_FIXTURE.replace(
       'return{window:o,configured:o,source:"auto"}}',
       'if(fx()&&!ee.CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT&&!R8_(e,r)&&!zks(e)&&!Vur(e,n))return{window:o,configured:o,source:"unknown-model"};return{window:o,configured:o,source:"auto"}}',

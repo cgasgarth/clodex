@@ -82,6 +82,41 @@ describe('translateMessages', () => {
     ]);
   });
 
+  it('makes Claude mid-turn steering explicit for OpenAI OAuth without raising its role', () => {
+    const queued = 'The user sent a new message while you were working:\n'
+      + 'update the pull request description with these results\n\n'
+      + 'This is how Claude Code surfaces messages the user sends mid-turn — within the running '
+      + 'turn, often alongside the next tool result, rather than as a separate conversation turn. '
+      + 'Address the message above as you continue this turn.';
+    const params = translateRequest({
+      model: 'sol',
+      messages: [{
+        role: 'user',
+        content: [
+          { type: 'tool_result', tool_use_id: 'call_1', content: 'benchmark complete' },
+          { type: 'text', text: queued },
+        ],
+      }],
+    }, '@ai-sdk/openai', { openAiOAuth: true });
+
+    expect((params.messages as any[]).map(message => message.role)).toEqual(['tool', 'user']);
+    expect((params.messages[1] as any).content[0].text).toBe([
+      'The user sent the following instruction while the previous response was running.',
+      'This is the newest user request. Apply it to the active plan now; do not postpone it until',
+      'after the prior plan. If it redirects or stops earlier work, follow the new direction.',
+      '',
+      'update the pull request description with these results',
+    ].join('\n'));
+  });
+
+  it('preserves the Claude mid-turn wrapper for non-OAuth routes', () => {
+    const queued = 'The user sent a new message while you were working:\nkeep going';
+    const out = translateMessages([
+      { role: 'user', content: queued },
+    ], '@ai-sdk/openai') as any[];
+    expect(out[0].content[0].text).toBe(queued);
+  });
+
   it('maps tool_use → tool-call and tool_result → tool message', () => {
     const messages = [
       { role: 'assistant' as const, content: [{ type: 'tool_use', id: 'call_1', name: 'Read', input: { path: 'a' } }] },

@@ -355,9 +355,33 @@ function translateSystemBlocks(
   });
 }
 
+const CLAUDE_MID_TURN_PREFIX = 'The user sent a new message while you were working:\n';
+const CLAUDE_MID_TURN_SUFFIX = '\n\nThis is how Claude Code surfaces messages the user sends mid-turn — '
+  + 'within the running turn, often alongside the next tool result, rather than as a separate '
+  + 'conversation turn. Address the message above as you continue this turn.';
+
+/** Make Claude's model-specific mid-turn wrapper explicit for Codex models. */
+function normalizeClaudeMidTurnMessage(text: string): string {
+  if (!text.startsWith(CLAUDE_MID_TURN_PREFIX) || !text.endsWith(CLAUDE_MID_TURN_SUFFIX)) {
+    return text;
+  }
+  const instruction = text.slice(
+    CLAUDE_MID_TURN_PREFIX.length,
+    -CLAUDE_MID_TURN_SUFFIX.length,
+  );
+  return [
+    'The user sent the following instruction while the previous response was running.',
+    'This is the newest user request. Apply it to the active plan now; do not postpone it until',
+    'after the prior plan. If it redirects or stops earlier work, follow the new direction.',
+    '',
+    instruction,
+  ].join('\n');
+}
+
 function translateUserBlocks(
   blocks: AnthropicBlock[],
   openAiPromptCacheBreakpoints: boolean,
+  normalizeMidTurnSteering: boolean,
 ): ModelMessage[] {
   const imageParts: Array<Record<string, unknown>> = [];
   const toolResults = blocks.filter(block => block.type === 'tool_result');
@@ -380,7 +404,9 @@ function translateUserBlocks(
     if (block.type === 'text') {
       parts.push({
         type: 'text',
-        text: block.text ?? '',
+        text: normalizeMidTurnSteering
+          ? normalizeClaudeMidTurnMessage(block.text ?? '')
+          : block.text ?? '',
         ...cacheBreakpointOptions(block, openAiPromptCacheBreakpoints),
       });
       continue;
@@ -432,6 +458,7 @@ export function translateMessages(
   messages: AnthropicMsg[],
   npm: string,
   openAiPromptCacheBreakpoints = false,
+  normalizeMidTurnSteering = false,
 ): ModelMessage[] {
   const out: ModelMessage[] = [];
 
@@ -445,7 +472,11 @@ export function translateMessages(
       continue;
     }
     if (msg.role === 'user') {
-      out.push(...translateUserBlocks(blocks, openAiPromptCacheBreakpoints));
+      out.push(...translateUserBlocks(
+        blocks,
+        openAiPromptCacheBreakpoints,
+        normalizeMidTurnSteering,
+      ));
       continue;
     }
     out.push(...translateAssistantBlocks(blocks, npm));
@@ -616,7 +647,12 @@ export function translateRequest(
     instructions: options?.openAiOAuth || supportsExplicitOpenAiCaching ? undefined : systemText,
     messages: [
       ...(supportsExplicitOpenAiCaching ? translateTopLevelSystemForOpenAi(body.system) : []),
-      ...translateMessages(conversationMessages, npm, supportsExplicitOpenAiCaching),
+      ...translateMessages(
+        conversationMessages,
+        npm,
+        supportsExplicitOpenAiCaching,
+        options?.openAiOAuth === true,
+      ),
     ],
     allowSystemInMessages: true,
     tools: translateTools(upstreamTools.length ? upstreamTools : undefined),
