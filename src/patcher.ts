@@ -78,7 +78,7 @@ import {
   type PatchScriptModelConfig,
 } from './patch-transforms.js';
 
-const SUPPORTED_CLAUDE_CODE_VERSION = '2.1.224';
+const SUPPORTED_CLAUDE_CODE_VERSION = '2.1.227';
 
 // ── Manifest ────────────────────────────────────────────────────────────────
 

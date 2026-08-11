@@ -33,7 +33,7 @@ import { isReservedModelAlias } from './model-aliases.js';
  * and never receive the new transforms, silently. `tests/patcher.test.ts` pins a
  * hash of this file to force that decision to be made rather than forgotten.
  */
-export const PATCH_TRANSFORMS_VERSION = 6;
+export const PATCH_TRANSFORMS_VERSION = 7;
 
 export interface PatchScriptModelEntry {
   alias?: string;
@@ -273,7 +273,7 @@ export function applyClodexPatches(source: string, config: PatchScriptModelConfi
   // ---------------------------------------------------------------------------
   // PATCH 1 — Agent/subagent tool 'model' zod enum.
   // Anchor: the enum constructor call followed by
-  // ["sonnet",...,"fable"].optional().describe(. Claude 2.1.224 replaced
+  // ["sonnet",...,"fable"].optional().describe(. Claude 2.1.227 replaced
   // Zod's `.enum(...)` spelling with a minified enum helper, so preserve the
   // constructor token instead of assuming either implementation. We append our
   // identities (alias when defined, else
@@ -457,11 +457,11 @@ export function applyClodexPatches(source: string, config: PatchScriptModelConfi
     const MARKER = '/*clodex:native-context-guard*/';
     applyOnce(
       'PATCH X2: native context guard',
-      new RegExp(String.raw`function ([\w$]+)\(e,t,r,n=t\)\{let ([\w$]+)=([\w$]+)\(t,r\),([\w$]+)=r\.enabled\?\2:t,([\w$]+)=\4-20000,([\w$]+)=r\.testBlockingOverride,`),
+      new RegExp(String.raw`function ([\w$]+)\(e,t,r,n=t,o\)\{let ([\w$]+)=o\?\?([\w$]+)\(t,r\),([\w$]+)=r\.enabled\?\2:t,([\w$]+)=\4-20000,([\w$]+)=r\.testBlockingOverride,`),
       (_m, fn, threshold, thresholdFor, active, warn, blocking) =>
-        'function ' + fn + '(e,t,r,n=t){' + MARKER
+        'function ' + fn + '(e,t,r,n=t,o){' + MARKER
         + 'if(process.env.CLODEX_NATIVE_CONTEXT_OWNER==="1")return{level:"ok",pctLeft:100};'
-        + 'let ' + threshold + '=' + thresholdFor + '(t,r),' + active + '=r.enabled?' + threshold + ':t,'
+        + 'let ' + threshold + '=o??' + thresholdFor + '(t,r),' + active + '=r.enabled?' + threshold + ':t,'
         + warn + '=' + active + '-20000,' + blocking + '=r.testBlockingOverride,',
       { marker: MARKER, required: true }
     );
