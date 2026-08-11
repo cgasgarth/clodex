@@ -219,6 +219,14 @@ function joinInstructions(...parts: Array<string | undefined>): string | undefin
   return present.length ? present.join('\n') : undefined;
 }
 
+const OPENAI_OAUTH_STEERING_POLICY = [
+  'The user may send a new message while you are still working. When they do, evaluate whether',
+  'they intended to replace the active request or add to it. If they intended to override or',
+  'replace it, drop the previous work and focus on the new request. If the new message adds to',
+  'unfinished work, address both. If it asks for status or another question, answer it and then',
+  'continue only the work that remains relevant.',
+].join(' ');
+
 function openAiCacheBreakpoint(block: AnthropicBlock, enabled: boolean): Record<string, unknown> | undefined {
   if (!enabled || !block.cache_control) return undefined;
   return { openai: { promptCacheBreakpoint: { mode: 'explicit' } } };
@@ -359,11 +367,6 @@ const CLAUDE_MID_TURN_PREFIX = 'The user sent a new message while you were worki
 const CLAUDE_MID_TURN_SUFFIX = '\n\nThis is how Claude Code surfaces messages the user sends mid-turn — '
   + 'within the running turn, often alongside the next tool result, rather than as a separate '
   + 'conversation turn. Address the message above as you continue this turn.';
-const CLAUDE_MID_TURN_CONTROL = [
-  'The next user message is a new instruction that the human user sent while the previous',
-  'response was running. Apply it to the active plan before you continue earlier work. If it',
-  'redirects, limits, or stops earlier work, follow the new instruction immediately.',
-].join('\n');
 
 /** Extract the human instruction from Claude's model-specific mid-turn wrapper. */
 function extractClaudeMidTurnInstruction(text: string): string | undefined {
@@ -398,19 +401,22 @@ function translateUserBlocks(
   }
 
   const parts: Array<Record<string, unknown>> = [];
-  let hasMidTurnSteering = false;
+  const steeringParts: Array<Record<string, unknown>> = [];
   for (const block of blocks) {
     if (block.type === 'text') {
       const text = block.text ?? '';
       const midTurnInstruction = normalizeMidTurnSteering
         ? extractClaudeMidTurnInstruction(text)
         : undefined;
-      hasMidTurnSteering ||= midTurnInstruction !== undefined;
-      parts.push({
+      const part = {
         type: 'text',
         text: midTurnInstruction ?? text,
         ...cacheBreakpointOptions(block, openAiPromptCacheBreakpoints),
-      });
+      };
+      // Codex queues steering as typed user input and places it last in the
+      // next model sample. Keep the same model-visible ordering without
+      // interpreting the human text.
+      (midTurnInstruction === undefined ? parts : steeringParts).push(part);
       continue;
     }
     if (block.type !== 'image') continue;
@@ -419,15 +425,8 @@ function translateUserBlocks(
       parts.push({ ...image, ...cacheBreakpointOptions(block, openAiPromptCacheBreakpoints) });
     }
   }
-  const userParts = [...imageParts, ...parts];
+  const userParts = [...imageParts, ...parts, ...steeringParts];
   if (userParts.length > 0) {
-    if (hasMidTurnSteering) {
-      // Keep the human content at user authority, but give Codex a late,
-      // fixed control boundary. The OpenAI Responses provider maps this
-      // inline system message to developer authority without changing the
-      // stable top-level prompt prefix.
-      messages.push({ role: 'system', content: CLAUDE_MID_TURN_CONTROL });
-    }
     messages.push({ role: 'user', content: userParts } as unknown as ModelMessage);
   }
   return messages;
@@ -590,8 +589,13 @@ export function translateRequest(
   // the MCP tool set is still settling. Other providers retain positional
   // system messages because their semantics can differ.
   const inlineSystem = options?.openAiOAuth ? inlineSystemToString(messages) : undefined;
-  const systemText = joinInstructions(baseSystem, inlineSystem)
-    ?? (options?.openAiOAuth ? 'You are a coding assistant.' : undefined);
+  const systemText = options?.openAiOAuth
+    ? joinInstructions(
+        baseSystem ?? 'You are a coding assistant.',
+        OPENAI_OAUTH_STEERING_POLICY,
+        inlineSystem,
+      )
+    : joinInstructions(baseSystem, inlineSystem);
   const conversationMessages = options?.openAiOAuth
     ? messages.filter(message => message.role !== 'system')
     : messages;

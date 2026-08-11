@@ -2,7 +2,7 @@ import { CONFLICTING_ENV_VARS } from '../constants.js';
 import { claudeCodeClientModelId, stripOneMContextSuffix } from '../context-model-id.js';
 import { resolveContextWindow } from '../context-window.js';
 import type { ConflictInfo } from '../types.js';
-import { applyClaudeStreamIdleTimeout, removeAnthropicProxyBypass } from '../wrapper-env.js';
+import { applyClaudeProxyReliabilityEnv, removeAnthropicProxyBypass } from '../wrapper-env.js';
 
 export function detectConflicts(): ConflictInfo[] {
   return CONFLICTING_ENV_VARS.filter(name => process.env[name] !== undefined).map(name => ({
@@ -23,7 +23,7 @@ function applyClaudeCodeThirdPartyCompat(env: NodeJS.ProcessEnv): void {
   // Claude Code's own stream watchdog defaults to five minutes. Long Codex
   // reasoning turns can legitimately stay quiet longer, so clodex launches use
   // the supported env override rather than changing provider or daemon timers.
-  applyClaudeStreamIdleTimeout(env);
+  applyClaudeProxyReliabilityEnv(env);
 }
 
 export function buildChildEnv(
@@ -86,5 +86,6 @@ export function buildHttpProxyChildEnv(proxyPort: number, caCertPath: string): N
   env['http_proxy'] = proxyUrl;
   env['NODE_EXTRA_CA_CERTS'] = caCertPath;
   removeAnthropicProxyBypass(env);
+  applyClaudeProxyReliabilityEnv(env);
   return env;
 }

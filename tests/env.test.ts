@@ -234,6 +234,7 @@ describe('buildChildEnv', () => {
     const env = buildChildEnv(UPSTREAM_URL, 'gemini-3.5-flash', 'my-key', 12345);
     expect(env['ENABLE_TOOL_SEARCH']).toBe('true');
     expect(env['CLAUDE_CODE_SIMPLE_SYSTEM_PROMPT']).toBe('0');
+    expect(env['CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK']).toBe('1');
   });
 
   it('uses upstream URL when proxyPort is not provided', () => {
@@ -262,6 +263,7 @@ describe('buildHttpProxyChildEnv', () => {
       expect(env['ANTHROPIC_API_KEY']).toBe('normal-api-key');
       expect(env['ANTHROPIC_AUTH_TOKEN']).toBe('normal-auth-token');
       expect(env['ANTHROPIC_MODEL']).toBe('sonnet');
+      expect(env['CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK']).toBe('1');
       expect(env['NO_PROXY']).toBe('localhost,.internal.example');
       expect(env['no_proxy']).toBe('localhost,.internal.example');
     } finally {

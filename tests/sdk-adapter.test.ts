@@ -17,6 +17,14 @@ import {
   generateAnthropicResponse,
 } from '../src/sdk-adapter.js';
 
+const OPENAI_STEERING_POLICY_FOR_TESTS = [
+  'The user may send a new message while you are still working. When they do, evaluate whether',
+  'they intended to replace the active request or add to it. If they intended to override or',
+  'replace it, drop the previous work and focus on the new request. If the new message adds to',
+  'unfinished work, address both. If it asks for status or another question, answer it and then',
+  'continue only the work that remains relevant.',
+].join(' ');
+
 describe('sdkTranslationErrorSignature', () => {
   it('classifies missing stream parts without exposing their dynamic ids', () => {
     expect(sdkTranslationErrorSignature(new Error('reasoning part reasoning-42 not found')))
@@ -82,7 +90,7 @@ describe('translateMessages', () => {
     ]);
   });
 
-  it('gives Claude mid-turn steering a late control boundary for OpenAI OAuth', () => {
+  it('maps Claude mid-turn steering to the final normal user message for OpenAI OAuth', () => {
     const queued = 'The user sent a new message while you were working:\n'
       + 'update the pull request description with these results\n\n'
       + 'This is how Claude Code surfaces messages the user sends mid-turn — within the running '
@@ -101,17 +109,16 @@ describe('translateMessages', () => {
 
     expect((params.messages as any[]).map(message => message.role)).toEqual([
       'tool',
-      'system',
       'user',
     ]);
-    expect((params.messages[1] as any).content).toContain(
-      'follow the new instruction immediately',
-    );
-    expect((params.messages[2] as any).content[0].text)
+    expect((params.messages[1] as any).content[0].text)
       .toBe('update the pull request description with these results');
+    expect(params.providerOptions?.openai?.instructions).toContain(
+      'If they intended to override or replace it, drop the previous work',
+    );
   });
 
-  it('does not add a control boundary for ordinary OpenAI OAuth user text', () => {
+  it('uses one stable steering policy without adding inline control messages', () => {
     const params = translateRequest({
       model: 'sol',
       messages: [{ role: 'user', content: 'continue the existing plan' }],
@@ -119,6 +126,42 @@ describe('translateMessages', () => {
 
     expect((params.messages as any[]).map(message => message.role)).toEqual(['user']);
     expect((params.messages[0] as any).content[0].text).toBe('continue the existing plan');
+    expect(params.providerOptions?.openai?.instructions).toContain(
+      'The user may send a new message while you are still working.',
+    );
+  });
+
+  it('puts exact steering wrappers after ordinary content in the same user message', () => {
+    const queued = 'The user sent a new message while you were working:\n'
+      + 'focus only on the failing test\n\n'
+      + 'This is how Claude Code surfaces messages the user sends mid-turn — within the running '
+      + 'turn, often alongside the next tool result, rather than as a separate conversation turn. '
+      + 'Address the message above as you continue this turn.';
+    const params = translateRequest({
+      model: 'sol',
+      messages: [{
+        role: 'user',
+        content: [
+          { type: 'text', text: queued },
+          { type: 'text', text: 'tool context that arrived in the same boundary' },
+        ],
+      }],
+    }, '@ai-sdk/openai', { openAiOAuth: true });
+
+    expect((params.messages[0] as any).content.map((part: any) => part.text)).toEqual([
+      'tool context that arrived in the same boundary',
+      'focus only on the failing test',
+    ]);
+  });
+
+  it('preserves wrapper-like text unless the full Claude envelope matches', () => {
+    const text = 'The user sent a new message while you were working:\nkeep going';
+    const params = translateRequest({
+      model: 'sol',
+      messages: [{ role: 'user', content: text }],
+    }, '@ai-sdk/openai', { openAiOAuth: true });
+
+    expect((params.messages[0] as any).content[0].text).toBe(text);
   });
 
   it('preserves the Claude mid-turn wrapper for non-OAuth routes', () => {
@@ -251,7 +294,10 @@ describe('translateRequest', () => {
     }, '@ai-sdk/openai', { openAiOAuth: true });
 
     expect(params.instructions).toBeUndefined();
-    expect(params.providerOptions?.openai?.instructions).toBe('You are a coding assistant.');
+    expect(params.providerOptions?.openai?.instructions).toStartWith('You are a coding assistant.');
+    expect(params.providerOptions?.openai?.instructions).toContain(
+      'The user may send a new message while you are still working.',
+    );
     expect(params.maxOutputTokens).toBeUndefined();
   });
 
@@ -269,7 +315,9 @@ describe('translateRequest', () => {
 
     const oauth = translateRequest(body, '@ai-sdk/openai', { openAiOAuth: true });
     expect(oauth.providerOptions?.openai?.instructions)
-      .toBe('You are Claude Code.\nFollow the user instructions.');
+      .toStartWith('You are Claude Code.\nFollow the user instructions.\n');
+    expect(oauth.providerOptions?.openai?.instructions)
+      .toContain('The user may send a new message while you are still working.');
 
     const changedAttribution = translateRequest({
       ...body,
@@ -452,6 +500,7 @@ describe('translateRequest', () => {
 
     expect((params.providerOptions as any).openai.instructions).toBe(
       'stable Claude instructions\n'
+      + OPENAI_STEERING_POLICY_FOR_TESTS + '\n'
       + '<system-reminder>computer-use is pending</system-reminder>\n'
       + '<system-reminder>playwright is pending</system-reminder>',
     );
