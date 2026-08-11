@@ -44,6 +44,7 @@ describe('computeWrapperEnv', () => {
     expect(env['NODE_EXTRA_CA_CERTS']).toBe('/home/u/.clodex/http-proxy/clodex-ca.pem');
     expect(env['PATH']).toBe('/usr/bin');
     expect(env['CLAUDE_STREAM_IDLE_TIMEOUT_MS']).toBe(String(CLAUDE_STREAM_IDLE_TIMEOUT_MS));
+    expect(env['CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK']).toBe('1');
   });
 
   it('proxy-mode server removes Anthropic bypasses while preserving unrelated hosts', () => {
@@ -94,6 +95,7 @@ describe('computeWrapperEnv', () => {
     expect(env['ANTHROPIC_BASE_URL']).toBe('http://127.0.0.1:4242/anthropic');
     expect(env['ANTHROPIC_API_KEY']).toBe(LOCAL_GATEWAY_API_KEY);
     expect(env['CLAUDE_STREAM_IDLE_TIMEOUT_MS']).toBe(String(CLAUDE_STREAM_IDLE_TIMEOUT_MS));
+    expect(env['CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK']).toBe('1');
     expect(LOCAL_GATEWAY_API_KEY.length).toBeGreaterThan(0);
     for (const name of ['HTTPS_PROXY', 'HTTP_PROXY', 'https_proxy', 'http_proxy']) {
       expect(env[name]).toBeUndefined();
