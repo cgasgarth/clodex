@@ -368,15 +368,28 @@ const CLAUDE_MID_TURN_SUFFIX = '\n\nThis is how Claude Code surfaces messages th
   + 'within the running turn, often alongside the next tool result, rather than as a separate '
   + 'conversation turn. Address the message above as you continue this turn.';
 
-/** Extract the human instruction from Claude's model-specific mid-turn wrapper. */
-function extractClaudeMidTurnInstruction(text: string): string | undefined {
+/**
+ * Preserve Claude's mid-turn control semantics at user authority.
+ *
+ * The queued command is transient in Claude's transcript. Codex therefore gets
+ * one model sample in which to act on it. Keep the human text opaque, but make
+ * that boundary explicit instead of reducing it to an ordinary user message.
+ */
+function normalizeClaudeMidTurnInstruction(text: string): string | undefined {
   if (!text.startsWith(CLAUDE_MID_TURN_PREFIX) || !text.endsWith(CLAUDE_MID_TURN_SUFFIX)) {
     return undefined;
   }
-  return text.slice(
+  const instruction = text.slice(
     CLAUDE_MID_TURN_PREFIX.length,
     -CLAUDE_MID_TURN_SUFFIX.length,
   );
+  return [
+    'The user sent this new instruction while the current task was running.',
+    'Treat it as the newest user request and apply it now before continuing earlier work.',
+    'If it replaces, redirects, limits, or stops prior work, follow it immediately.',
+    '',
+    instruction,
+  ].join('\n');
 }
 
 function translateUserBlocks(
@@ -406,7 +419,7 @@ function translateUserBlocks(
     if (block.type === 'text') {
       const text = block.text ?? '';
       const midTurnInstruction = normalizeMidTurnSteering
-        ? extractClaudeMidTurnInstruction(text)
+        ? normalizeClaudeMidTurnInstruction(text)
         : undefined;
       const part = {
         type: 'text',
