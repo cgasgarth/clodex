@@ -82,7 +82,7 @@ describe('translateMessages', () => {
     ]);
   });
 
-  it('makes Claude mid-turn steering explicit for OpenAI OAuth without raising its role', () => {
+  it('gives Claude mid-turn steering a late control boundary for OpenAI OAuth', () => {
     const queued = 'The user sent a new message while you were working:\n'
       + 'update the pull request description with these results\n\n'
       + 'This is how Claude Code surfaces messages the user sends mid-turn — within the running '
@@ -99,14 +99,26 @@ describe('translateMessages', () => {
       }],
     }, '@ai-sdk/openai', { openAiOAuth: true });
 
-    expect((params.messages as any[]).map(message => message.role)).toEqual(['tool', 'user']);
-    expect((params.messages[1] as any).content[0].text).toBe([
-      'The user sent the following instruction while the previous response was running.',
-      'This is the newest user request. Apply it to the active plan now; do not postpone it until',
-      'after the prior plan. If it redirects or stops earlier work, follow the new direction.',
-      '',
-      'update the pull request description with these results',
-    ].join('\n'));
+    expect((params.messages as any[]).map(message => message.role)).toEqual([
+      'tool',
+      'system',
+      'user',
+    ]);
+    expect((params.messages[1] as any).content).toContain(
+      'follow the new instruction immediately',
+    );
+    expect((params.messages[2] as any).content[0].text)
+      .toBe('update the pull request description with these results');
+  });
+
+  it('does not add a control boundary for ordinary OpenAI OAuth user text', () => {
+    const params = translateRequest({
+      model: 'sol',
+      messages: [{ role: 'user', content: 'continue the existing plan' }],
+    }, '@ai-sdk/openai', { openAiOAuth: true });
+
+    expect((params.messages as any[]).map(message => message.role)).toEqual(['user']);
+    expect((params.messages[0] as any).content[0].text).toBe('continue the existing plan');
   });
 
   it('preserves the Claude mid-turn wrapper for non-OAuth routes', () => {
