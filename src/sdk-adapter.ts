@@ -359,23 +359,21 @@ const CLAUDE_MID_TURN_PREFIX = 'The user sent a new message while you were worki
 const CLAUDE_MID_TURN_SUFFIX = '\n\nThis is how Claude Code surfaces messages the user sends mid-turn — '
   + 'within the running turn, often alongside the next tool result, rather than as a separate '
   + 'conversation turn. Address the message above as you continue this turn.';
+const CLAUDE_MID_TURN_CONTROL = [
+  'The next user message is a new instruction that the human user sent while the previous',
+  'response was running. Apply it to the active plan before you continue earlier work. If it',
+  'redirects, limits, or stops earlier work, follow the new instruction immediately.',
+].join('\n');
 
-/** Make Claude's model-specific mid-turn wrapper explicit for Codex models. */
-function normalizeClaudeMidTurnMessage(text: string): string {
+/** Extract the human instruction from Claude's model-specific mid-turn wrapper. */
+function extractClaudeMidTurnInstruction(text: string): string | undefined {
   if (!text.startsWith(CLAUDE_MID_TURN_PREFIX) || !text.endsWith(CLAUDE_MID_TURN_SUFFIX)) {
-    return text;
+    return undefined;
   }
-  const instruction = text.slice(
+  return text.slice(
     CLAUDE_MID_TURN_PREFIX.length,
     -CLAUDE_MID_TURN_SUFFIX.length,
   );
-  return [
-    'The user sent the following instruction while the previous response was running.',
-    'This is the newest user request. Apply it to the active plan now; do not postpone it until',
-    'after the prior plan. If it redirects or stops earlier work, follow the new direction.',
-    '',
-    instruction,
-  ].join('\n');
 }
 
 function translateUserBlocks(
@@ -400,13 +398,17 @@ function translateUserBlocks(
   }
 
   const parts: Array<Record<string, unknown>> = [];
+  let hasMidTurnSteering = false;
   for (const block of blocks) {
     if (block.type === 'text') {
+      const text = block.text ?? '';
+      const midTurnInstruction = normalizeMidTurnSteering
+        ? extractClaudeMidTurnInstruction(text)
+        : undefined;
+      hasMidTurnSteering ||= midTurnInstruction !== undefined;
       parts.push({
         type: 'text',
-        text: normalizeMidTurnSteering
-          ? normalizeClaudeMidTurnMessage(block.text ?? '')
-          : block.text ?? '',
+        text: midTurnInstruction ?? text,
         ...cacheBreakpointOptions(block, openAiPromptCacheBreakpoints),
       });
       continue;
@@ -419,6 +421,13 @@ function translateUserBlocks(
   }
   const userParts = [...imageParts, ...parts];
   if (userParts.length > 0) {
+    if (hasMidTurnSteering) {
+      // Keep the human content at user authority, but give Codex a late,
+      // fixed control boundary. The OpenAI Responses provider maps this
+      // inline system message to developer authority without changing the
+      // stable top-level prompt prefix.
+      messages.push({ role: 'system', content: CLAUDE_MID_TURN_CONTROL });
+    }
     messages.push({ role: 'user', content: userParts } as unknown as ModelMessage);
   }
   return messages;
