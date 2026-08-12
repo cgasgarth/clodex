@@ -67,6 +67,7 @@ import { BunHttpResponse } from './bun-http-response.js';
 import type { ApiProcessingMode } from './daemon/api-pricing.js';
 import {
   RESPONSE_STREAM_MAX_RETRIES,
+  commitProviderStreamLive,
   responseStreamRetryDelayMs,
   createAgentStreamTransaction,
   isResponseStreamRetryEligible,
@@ -920,6 +921,7 @@ export async function startProxyCatalog(
                     onPart: partType => {
                       lastUpstreamPartAt = Date.now();
                       translationLifecycle?.onPart(partType);
+                      commitProviderStreamLive(streamTransaction, route.providerId, partType);
                     },
                     onUsage: usage => { finalUsage = usage; },
                     initialInputTokens: estimatedInputTokens,

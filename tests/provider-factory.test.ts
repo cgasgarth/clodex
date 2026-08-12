@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'bun:test';
+import { streamText } from 'ai';
 import {
   createLanguageModel,
   deepMergeProviderOptions,
@@ -332,6 +333,89 @@ describe('effortProviderOptions + deepMergeProviderOptions', () => {
 });
 
 describe('createLanguageModel', () => {
+  it('surfaces Grok Responses reasoning as live SDK stream parts', async () => {
+    const events = [
+      {
+        type: 'response.created',
+        response: {
+          id: 'resp-grok-live', created_at: 1, model: 'grok-4.6', object: 'response',
+          output: [], status: 'in_progress',
+        },
+      },
+      {
+        type: 'response.reasoning_summary_part.added',
+        item_id: 'reasoning-1', output_index: 0, summary_index: 0,
+        part: { type: 'summary_text', text: '' },
+      },
+      {
+        type: 'response.reasoning_summary_text.delta',
+        item_id: 'reasoning-1', output_index: 0, summary_index: 0,
+        delta: 'working through it',
+      },
+      {
+        type: 'response.output_item.done', output_index: 0,
+        item: {
+          type: 'reasoning', id: 'reasoning-1', status: 'completed',
+          summary: [{ type: 'summary_text', text: 'working through it' }],
+          content: null, encrypted_content: null,
+        },
+      },
+      {
+        type: 'response.output_text.delta',
+        item_id: 'message-1', output_index: 1, content_index: 0,
+        delta: 'finished answer',
+      },
+      {
+        type: 'response.output_text.done',
+        item_id: 'message-1', output_index: 1, content_index: 0,
+        text: 'finished answer', annotations: [], logprobs: [],
+      },
+      {
+        type: 'response.completed',
+        response: {
+          id: 'resp-grok-live', created_at: 1, model: 'grok-4.6', object: 'response',
+          output: [], status: 'completed',
+          usage: {
+            input_tokens: 10, output_tokens: 5, total_tokens: 15,
+            input_tokens_details: { cached_tokens: 8 },
+            output_tokens_details: { reasoning_tokens: 3 },
+          },
+        },
+      },
+    ];
+    const responseBody = events.map(event => `data: ${JSON.stringify(event)}\n\n`).join('');
+    const xaiFetch = vi.fn(async () => new Response(responseBody, {
+      status: 200,
+      headers: { 'content-type': 'text/event-stream' },
+    }));
+    const model = await createLanguageModel({
+      npm: '@ai-sdk/xai',
+      modelId: 'grok-4.6',
+      apiKey: 'subscription-token',
+      authType: 'oauth',
+      providerId: 'xai-oauth',
+      claudeSessionId: 'session-live-parts',
+    }, {
+      createXaiSubscriptionFetch: vi.fn(() => xaiFetch as typeof fetch) as never,
+    });
+
+    const streamed = streamText({ model, prompt: 'test live Grok reasoning', maxRetries: 0 });
+    const partTypes: string[] = [];
+    let reasoning = '';
+    let text = '';
+    for await (const part of streamed.stream) {
+      partTypes.push(part.type);
+      if (part.type === 'reasoning-delta') reasoning += part.text;
+      if (part.type === 'text-delta') text += part.text;
+    }
+
+    expect(partTypes).toContain('reasoning-start');
+    expect(partTypes).toContain('reasoning-delta');
+    expect(partTypes).toContain('text-start');
+    expect(reasoning).toBe('working through it');
+    expect(text).toBe('finished answer');
+  });
+
   it('routes only Grok 4.6 OAuth through the SuperGrok Responses proxy', async () => {
     const responses = vi.fn((modelId: string) => ({ modelId, provider: 'xai-responses' }));
     const createXai = vi.fn(() => ({ responses }));

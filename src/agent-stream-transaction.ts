@@ -104,6 +104,33 @@ export function createAgentStreamTransaction(options: CreateAgentStreamTransacti
 export const RESPONSE_STREAM_MAX_RETRIES = 2;
 const RESPONSE_STREAM_MAX_RETRY_AFTER_SECONDS = 15;
 
+const XAI_LIVE_STREAM_PARTS = new Set([
+  'reasoning-start',
+  'reasoning-delta',
+  'text-start',
+  'text-delta',
+]);
+
+/**
+ * SuperGrok can spend minutes producing reasoning before final text. Release
+ * that stream as soon as real semantic output proves the request was accepted.
+ * After commit, a later provider failure is visible to Claude and cannot be
+ * replayed transparently.
+ */
+export function commitProviderStreamLive(
+  transaction: AgentStreamTransaction,
+  providerId: string | undefined,
+  partType: string,
+): boolean {
+  if (
+    !transaction.replaySafe
+    || providerId !== 'xai-oauth'
+    || !XAI_LIVE_STREAM_PARTS.has(partType)
+  ) return false;
+  transaction.commit();
+  return true;
+}
+
 export function isResponseStreamRetryEligible(
   retryable: boolean,
   retryAfterSeconds?: number,

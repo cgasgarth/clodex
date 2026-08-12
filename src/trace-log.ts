@@ -7,7 +7,7 @@ import {
   readFileSync,
   unlinkSync,
 } from 'node:fs';
-import { appendFile, chmod } from 'node:fs/promises';
+import { appendFile, chmod, stat, truncate } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import pc from 'picocolors';
@@ -19,6 +19,7 @@ const DIR_MODE = 0o700;
 const FILE_MODE = 0o600;
 const LOG_FLUSH_INTERVAL_MS = 50;
 const LOG_BATCH_BYTES = 64 * 1024;
+export const TRACE_LOG_MAX_BYTES = 50 * 1024 * 1024;
 
 interface PendingLogWrites {
   lines: string[];
@@ -49,6 +50,14 @@ async function flushPendingLog(path: string, pending: PendingLogWrites): Promise
     pending.lines = [];
     pending.bytes = 0;
     pending.writing = pending.writing.then(async () => {
+      try {
+        const current = await stat(path);
+        if (current.size + Buffer.byteLength(batch) > TRACE_LOG_MAX_BYTES) {
+          await truncate(path, 0);
+        }
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      }
       await appendFile(path, batch, { encoding: 'utf8', mode: FILE_MODE });
       if (!pending.prepared) {
         await chmod(path, FILE_MODE);
