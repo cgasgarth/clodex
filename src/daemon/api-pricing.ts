@@ -1,6 +1,7 @@
-export const API_PRICING_SOURCE = 'OpenAI Standard and Fast API pricing';
-export const API_PRICING_AS_OF = '2026-07-30';
-const LONG_CONTEXT_INPUT_TOKENS = 272_000;
+export const API_PRICING_SOURCE = 'OpenAI and xAI API pricing';
+export const API_PRICING_AS_OF = '2026-08-12';
+const OPENAI_LONG_CONTEXT_INPUT_TOKENS = 272_000;
+const XAI_LONG_CONTEXT_INPUT_TOKENS = 200_000;
 
 const TOKENS_PER_MILLION = 1_000_000;
 const LONG_CONTEXT_INPUT_MULTIPLIER = 2;
@@ -45,18 +46,30 @@ export const GPT_5_6_PRIORITY_API_RATES: Readonly<Record<string, ApiTokenRates>>
   'gpt-5.6-luna': { input: 0.4, cachedInput: 0.04, output: 2.4 },
 };
 
+/** Grok 4.5 API prices used as the public API equivalent for subscription-only Grok 4.6. */
+export const GROK_4_5_API_RATES: Readonly<{
+  shortContext: ApiTokenRates;
+  longContext: ApiTokenRates;
+}> = {
+  shortContext: { input: 2, cachedInput: 0.3, output: 6 },
+  longContext: { input: 4, cachedInput: 0.6, output: 12 },
+};
+
 export function normalizeApiProcessingMode(value: unknown): ApiProcessingMode {
   return value === 'fast' || value === 'priority' ? 'fast' : 'standard';
 }
 
 export function effectiveApiProcessingMode(
-  usage: Pick<ApiPricedUsage, 'processingMode' | 'inputTokens' | 'cachedInputTokens' | 'cacheWriteTokens'>,
+  usage: Pick<ApiPricedUsage, 'modelId' | 'processingMode' | 'inputTokens' | 'cachedInputTokens' | 'cacheWriteTokens'>,
 ): ApiProcessingMode {
+  const modelId = canonicalPricedModelId(usage.modelId);
   const logicalInputTokens = usage.inputTokens
     + usage.cachedInputTokens
     + usage.cacheWriteTokens;
   return normalizeApiProcessingMode(usage.processingMode) === 'fast'
-    && logicalInputTokens <= LONG_CONTEXT_INPUT_TOKENS
+    && modelId !== undefined
+    && GPT_5_6_API_RATES[modelId] !== undefined
+    && logicalInputTokens <= OPENAI_LONG_CONTEXT_INPUT_TOKENS
     ? 'fast'
     : 'standard';
 }
@@ -71,6 +84,9 @@ export function canonicalPricedModelId(modelId: string): string | undefined {
   if (withoutContextSuffix === 'sol') return 'gpt-5.6-sol';
   if (withoutContextSuffix === 'terra') return 'gpt-5.6-terra';
   if (withoutContextSuffix === 'luna') return 'gpt-5.6-luna';
+  if (withoutContextSuffix === 'grok' || withoutContextSuffix === 'grok-4.6') {
+    return 'grok-4.6';
+  }
   return GPT_5_6_API_RATES[withoutContextSuffix] ? withoutContextSuffix : undefined;
 }
 
@@ -80,7 +96,19 @@ export function estimateApiCost(usage: ApiPricedUsage): ApiCostBreakdown | undef
   const logicalInputTokens = usage.inputTokens
     + usage.cachedInputTokens
     + usage.cacheWriteTokens;
-  const longContext = logicalInputTokens > LONG_CONTEXT_INPUT_TOKENS;
+  if (modelId === 'grok-4.6') {
+    const rates = logicalInputTokens >= XAI_LONG_CONTEXT_INPUT_TOKENS
+      ? GROK_4_5_API_RATES.longContext
+      : GROK_4_5_API_RATES.shortContext;
+    const input = usage.inputTokens / TOKENS_PER_MILLION * rates.input;
+    const cacheRead = usage.cachedInputTokens / TOKENS_PER_MILLION * rates.cachedInput;
+    // xAI publishes cache-read pricing but no separate cache-write surcharge.
+    const cacheWrite = usage.cacheWriteTokens / TOKENS_PER_MILLION * rates.input;
+    const cache = cacheRead + cacheWrite;
+    const output = usage.outputTokens / TOKENS_PER_MILLION * rates.output;
+    return { input, cache, output, total: input + cache + output };
+  }
+  const longContext = logicalInputTokens > OPENAI_LONG_CONTEXT_INPUT_TOKENS;
   // OpenAI Fast processing excludes requests estimated above 272K prompt
   // tokens. Those requests are served/billed as Standard long-context traffic.
   const fast = effectiveApiProcessingMode(usage) === 'fast';

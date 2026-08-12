@@ -794,10 +794,10 @@ function Dashboard(): React.ReactNode {
             {' · '}fast {formatUsd(totals.fastCost)} ({totals.fastRequests} req)
           </Text>
           <Text dimColor>
-            Sol, Terra, and Luna · normal + fast processing · token-only estimate · rates as of {API_PRICING_AS_OF}
+            Sol, Terra, Luna, and Grok · token-only estimate · rates as of {API_PRICING_AS_OF}
           </Text>
           <Text dimColor>
-            {API_PRICING_SOURCE}
+            {API_PRICING_SOURCE}{' · '}Grok 4.6 estimated at published Grok 4.5 rates
             {totals.unpricedRequests > 0 ? ` · ${totals.unpricedRequests} other-model requests excluded` : ''}
           </Text>
         </Box>
@@ -971,7 +971,7 @@ function Dashboard(): React.ReactNode {
           {metricLine('Applied', secondwind?.applied, 'estimated savings')}
           <Text> </Text>
           {metricLine('Shadow potential', secondwind?.shadow, 'estimated possible savings')}
-          <Text dimColor>API-equivalent cache-aware estimate for priced Sol, Terra, and Luna requests.</Text>
+          <Text dimColor>API-equivalent cache-aware estimate for priced OpenAI and Grok requests.</Text>
         </Box>
         <Box borderStyle="round" paddingX={1} flexDirection="column">
           <Text bold>Added request latency</Text>

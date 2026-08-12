@@ -71,6 +71,47 @@ describe('DaemonMetricsStore', () => {
     store.close();
   });
 
+  it('reports Grok tokens and their xAI API-equivalent cost', () => {
+    const root = mkdtempSync(join(tmpdir(), 'clodex-metrics-'));
+    roots.push(root);
+    const now = Date.now();
+    const store = new DaemonMetricsStore(join(root, 'metrics.sqlite'), { now: () => now });
+    store.append({
+      timestamp: new Date(now - 60_000).toISOString(),
+      requestId: 'grok-request',
+      accountId: 'xai-account',
+      processingMode: 'standard',
+      modelId: 'grok',
+      provider: 'xai-oauth',
+      inputTokens: 100_000,
+      cachedInputTokens: 100_000,
+      cacheWriteTokens: 0,
+      outputTokens: 10_000,
+      error: false,
+      cancelled: false,
+    });
+    const bucket = store.bucketsRange(
+      now - 3_600_000,
+      now,
+      3_600_000,
+      'xai-account',
+    ).find(item => item.requests === 1);
+    expect(bucket).toEqual(expect.objectContaining({
+      inputTokens: 100_000,
+      cachedInputTokens: 100_000,
+      outputTokens: 10_000,
+      pricedRequests: 1,
+      unpricedRequests: 0,
+      standardRequests: 1,
+      fastRequests: 0,
+    }));
+    expect(bucket?.inputCost).toBeCloseTo(0.4);
+    expect(bucket?.cacheCost).toBeCloseTo(0.06);
+    expect(bucket?.outputCost).toBeCloseTo(0.12);
+    expect(bucket?.totalCost).toBeCloseTo(0.58);
+    store.close();
+  });
+
   it('migrates legacy JSONL rows as explicitly unattributed history', () => {
     const root = mkdtempSync(join(tmpdir(), 'clodex-metrics-'));
     roots.push(root);
