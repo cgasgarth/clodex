@@ -1,0 +1,4 @@
+interface:
+  display_name: "Install Clodex"
+  short_description: "Install compatible Claude Code and Clodex"
+  default_prompt: "Use $install-clodex to install or update Claude Code and Clodex safely."

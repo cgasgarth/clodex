@@ -37,6 +37,7 @@
   },
   "scripts": {
     "build": "bun run scripts/build.ts",
+    "check:ci": "bun run typecheck && bun run lint && bun run lint:dead-code && bun run test && bun run build",
     "benchmark:secondwind-latency": "bun run benchmarks/secondwind/latency.ts",
     "dev": "bun run scripts/build.ts --watch",
     "install:global": "bun run scripts/install-global.ts",

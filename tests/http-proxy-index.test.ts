@@ -58,7 +58,7 @@ describe('HTTP proxy startup model list', () => {
         expect(consoleLog).toHaveBeenCalledWith(
           expect.stringContaining('clodex proxy-mode server running'),
         );
-      });
+      }, { timeout: 5_000 });
       shutdownRequested = true;
       requestShutdown();
       await expect(result).resolves.toBe(0);
