@@ -30,6 +30,14 @@ describe('shouldHideModel', () => {
     })).toBe(true);
   });
 
+  it('hides removed OpenAI OAuth models from stale caches', () => {
+    expect(shouldHideModel({
+      providerId: 'openai-oauth',
+      modelId: 'gpt-5.3-codex-spark',
+      agent: 'claude',
+    })).toBe(true);
+  });
+
   it('exposes the blacklist reason', () => {
     const ctx = {
       providerId: 'openai',

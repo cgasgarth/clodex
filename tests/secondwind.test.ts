@@ -307,8 +307,8 @@ describe('Secondwind daemon service', () => {
     await service.rewrite({
       body: Buffer.from(JSON.stringify(request)),
       request,
-      sessionId: 'spark-session',
-      modelId: 'gpt-5.3-codex-spark',
+      sessionId: 'optimizer-session',
+      modelId: 'gpt-5.4',
     });
 
     expect(service.snapshot().shadow).toMatchObject({

@@ -21,8 +21,8 @@ const payload = {
   credits: { has_credits: true, unlimited: false, balance: 12.5 },
   additional_rate_limits: [
     {
-      limit_name: 'Spark',
-      metered_feature: 'spark',
+      limit_name: 'Extra model',
+      metered_feature: 'extra_model',
       rate_limit: {
         secondary_window: {
           used_percent: 1,
@@ -42,7 +42,7 @@ describe('OpenAI usage fetcher', () => {
     expect(usage.primary?.usedPercent).toBe(22);
     expect(usage.weekly?.limitWindowSeconds).toBe(604_800);
     expect(usage.credits?.balance).toBe(12.5);
-    expect(usage.additional[0]?.name).toBe('Spark');
+    expect(usage.additional[0]?.name).toBe('Extra model');
     expect(usage.additional).toHaveLength(1);
   });
 

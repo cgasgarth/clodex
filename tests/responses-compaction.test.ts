@@ -184,7 +184,7 @@ describe('Responses standalone compaction', () => {
     const error = await compactResponsesWindow({
       requestUrl: 'https://example.test/responses',
       headers: {},
-      payload: { model: 'gpt-5.3-codex-spark', input: [] },
+      payload: { model: 'gpt-5.4', input: [] },
       fetch: requestFetch as typeof fetch,
     }).catch(value => value as ResponsesCompactionError);
 

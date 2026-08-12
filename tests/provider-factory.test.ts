@@ -286,21 +286,6 @@ describe('effortProviderOptions + deepMergeProviderOptions', () => {
     });
   });
 
-  // gpt-5.3-codex-spark 400s on `reasoning.summary`; the AI SDK adds
-  // summary: 'detailed' for any effort but 'none' unless it is pinned to null.
-  it.each(['low', 'medium', 'high', 'xhigh'])(
-    'suppresses the reasoning summary for codex-spark at %s effort',
-    (effort) => {
-      expect(effortProviderOptions('@ai-sdk/openai', effort, 'gpt-5.3-codex-spark'))
-        .toEqual({
-          openai: {
-            reasoningEffort: effort === 'xhigh' ? 'high' : effort,
-            reasoningSummary: null,
-          },
-        });
-    },
-  );
-
   it('leaves the reasoning summary untouched for other Codex models', () => {
     expect(effortProviderOptions('@ai-sdk/openai', 'high', 'gpt-5.1-codex-max')).toEqual({
       openai: { reasoningEffort: 'high' },

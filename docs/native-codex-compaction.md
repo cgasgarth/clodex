@@ -180,24 +180,6 @@ CLODEX_LIVE_COMPACTION_PROBE=1 \
 bun run scripts/probe-openai-compaction.ts
 ```
 
-The guarded oversized-tool-turn probe is separate because it consumes a much
-larger synthetic Spark window:
-
-```sh
-CLODEX_LIVE_OVERFLOW_PROBE=1 \
-bun run scripts/probe-openai-overflow-recovery.ts
-```
-
-It runs in one isolated process with a temporary checkpoint directory and
-unique session, agent, and cache identifiers. It verifies one native prefix
-rebase followed by a delta-only `previous_response_id` continuation; it does
-not bind a daemon port or mutate an installed Clodex runtime.
-
-The probe reports trigger request bytes as `triggerWireBytes` and received SSE
-bytes as `responseWireBytes`; these are deliberately separate measurements. It
-also reports input, cached-input, cache-write, and output token usage when the
-backend supplies it.
-
 Live capability checks established that Sol and Luna accept
 `/responses/compact`, and Sol accepts an in-band `compaction_trigger`. A live
 Sol `/compact` over a warm 34K-token chain completed in 8.36s with 32,512 cached

@@ -2,6 +2,13 @@
   "schema_version": "1",
   "entries": [
     {
+      "provider": "openai-oauth",
+      "modelId": "gpt-5.3-codex-spark",
+      "category": "removed",
+      "reason": "Removed from Clodex; do not expose stale or live-discovered catalog entries",
+      "verifiedAt": "2026-08-12"
+    },
+    {
       "provider": "google",
       "modelId": "antigravity-preview-05-2026",
       "category": "managed_agent",
