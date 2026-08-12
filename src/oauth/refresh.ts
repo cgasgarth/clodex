@@ -1,6 +1,7 @@
 // oauth/refresh.ts — refresh OAuth tokens before inference
 
 import { refreshOpenAiAccessToken } from './openai.js';
+import { refreshXaiAccessToken } from './xai.js';
 import type { StoredOAuthCredential } from './types.js';
 import { accessTokenIsExpiring, NATIVE_OAUTH_PROVIDER_IDS, oauthCredentialNeedsRefresh, tokensToStoredCredential } from './types.js';
 
@@ -25,6 +26,8 @@ export async function refreshStoredOAuthCredential(
   let tokens;
   if (providerId === 'openai' || providerId === 'openai-oauth') {
     tokens = await refreshOpenAiAccessToken(cred.refresh);
+  } else if (providerId === 'xai' || providerId === 'xai-oauth') {
+    tokens = await refreshXaiAccessToken(cred.refresh);
   } else {
     throw new Error(`OAuth refresh not implemented for provider "${providerId}"`);
   }

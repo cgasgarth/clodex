@@ -218,4 +218,33 @@ describe('refreshProviderModels', () => {
     expect(first.previousModelCount).toBeUndefined();
     expect(second).toMatchObject({ ok: true, modelCount: 2, previousModelCount: 2 });
   });
+
+  it('keeps SuperGrok on the single static Grok 4.6 model', async () => {
+    const registry: ProviderRegistry = {
+      schemaVersion: 1,
+      providers: [{
+        id: 'xai-oauth',
+        templateId: 'xai-oauth',
+        name: 'xAI (SuperGrok)',
+        enabled: true,
+        authRef: 'keyring:oauth:provider:xai-oauth',
+        authType: 'oauth',
+        api: { npm: '@ai-sdk/xai', url: 'https://cli-chat-proxy.grok.com/v1' },
+        addedAt: '2026-08-12T00:00:00.000Z',
+      }],
+    };
+    asMocked(loadRegistryStrict).mockReturnValue(registry);
+
+    const result = await refreshProviderModels('xai-oauth', 'subscription-token', registry);
+
+    expect(result).toMatchObject({ ok: true, modelCount: 1 });
+    expect(fetchTemplateModels).not.toHaveBeenCalled();
+    expect(registry.providers[0]?.modelsCache?.models).toEqual([expect.objectContaining({
+      id: 'grok-4.6',
+      name: 'Grok 4.6',
+      contextWindow: 500_000,
+      npm: '@ai-sdk/xai',
+      reasoning: true,
+    })]);
+  });
 });

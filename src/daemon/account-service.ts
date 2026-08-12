@@ -31,6 +31,10 @@ import {
   type OpenAiUsageSnapshot,
 } from './openai-usage.js';
 import { fetchOpenAiProfileEmail } from './openai-profile.js';
+import {
+  fetchXaiUsage,
+  type XaiUsageSnapshot,
+} from './xai-usage.js';
 
 const LAUNCH_TICKET_TTL_MS = 30 * 24 * 60 * 60_000;
 const USAGE_REFRESH_MS = 90_000;
@@ -41,10 +45,17 @@ interface UsageState {
   error?: string;
 }
 
+interface XaiUsageState {
+  snapshot?: XaiUsageSnapshot;
+  fetchedAt?: number;
+  error?: string;
+}
+
 interface DaemonAccountServiceDependencies {
   resolveCredential: typeof resolveProviderCredential;
   resolveAccountId: typeof resolveProviderOAuthAccountId;
   fetchUsage: typeof fetchOpenAiUsage;
+  fetchXaiUsage: typeof fetchXaiUsage;
   fetchEmail: typeof fetchOpenAiProfileEmail;
   now: () => number;
 }
@@ -53,6 +64,7 @@ const defaultDependencies: DaemonAccountServiceDependencies = {
   resolveCredential: resolveProviderCredential,
   resolveAccountId: resolveProviderOAuthAccountId,
   fetchUsage: fetchOpenAiUsage,
+  fetchXaiUsage,
   fetchEmail: fetchOpenAiProfileEmail,
   now: Date.now,
 };
@@ -70,6 +82,7 @@ function accountIdentity(account: DaemonAccountRecord): string {
 export class DaemonAccountService implements DaemonAccountController {
   readonly store: DaemonAccountStore;
   private readonly usage = new Map<string, UsageState>();
+  private xaiUsage: XaiUsageState = {};
   private readonly ticketKey: Buffer;
   private readonly dependencies: DaemonAccountServiceDependencies;
 
@@ -85,7 +98,7 @@ export class DaemonAccountService implements DaemonAccountController {
 
   async list(): Promise<DaemonAccountView[]> {
     const state = this.store.load();
-    return Promise.all(state.accounts.map(async account => {
+    const openAiAccounts = await Promise.all(state.accounts.map(async account => {
       const usage = this.usage.get(account.id);
       let email = account.email;
       let accountId = account.accountId;
@@ -112,6 +125,8 @@ export class DaemonAccountService implements DaemonAccountController {
       }
       return {
         id: account.id,
+        providerId: 'openai-oauth' as const,
+        managed: true,
         email,
         selected: account.id === state.selectedAccountId,
         plan: usage?.snapshot?.plan,
@@ -131,6 +146,35 @@ export class DaemonAccountService implements DaemonAccountController {
           : undefined,
       };
     }));
+    const xaiProvider = loadRegistry().providers.find(provider =>
+      provider.id === 'xai-oauth' && provider.authType === 'oauth' && provider.enabled,
+    );
+    if (!xaiProvider) return openAiAccounts;
+    const usage = this.xaiUsage;
+    return [...openAiAccounts, {
+      id: 'provider:xai-oauth',
+      providerId: 'xai-oauth',
+      name: xaiProvider.name,
+      managed: false,
+      selected: false,
+      plan: usage.snapshot?.plan,
+      usage: usage.snapshot || usage.error
+        ? {
+            limitUsedPercent: usage.snapshot?.usedPercent,
+            limitResetAt: usage.snapshot?.resetAt,
+            limitPeriod: usage.snapshot?.period,
+            usedCents: usage.snapshot?.usedCents,
+            limitCents: usage.snapshot?.limitCents,
+            onDemandUsedCents: usage.snapshot?.onDemandUsedCents,
+            onDemandLimitCents: usage.snapshot?.onDemandLimitCents,
+            prepaidBalanceCents: usage.snapshot?.prepaidBalanceCents,
+            stale: !usage.fetchedAt
+              || this.dependencies.now() - usage.fetchedAt > USAGE_REFRESH_MS * 2,
+            error: usage.error,
+            fetchedAt: usage.snapshot?.fetchedAt,
+          }
+        : undefined,
+    }];
   }
 
   select(id: string): void {
@@ -216,7 +260,34 @@ export class DaemonAccountService implements DaemonAccountController {
   }
 
   async refreshUsage(): Promise<void> {
-    await Promise.all(this.store.list().map(account => this.refreshAccountUsage(account)));
+    const providers = loadRegistry().providers;
+    const xaiProvider = providers.find(provider =>
+      provider.id === 'xai-oauth' && provider.authType === 'oauth' && provider.enabled,
+    );
+    await Promise.all([
+      ...this.store.list().map(account => this.refreshAccountUsage(account)),
+      ...(xaiProvider ? [this.refreshXaiUsage(xaiProvider.authRef)] : []),
+    ]);
+  }
+
+  private async refreshXaiUsage(authRef: string): Promise<void> {
+    if (
+      this.xaiUsage.fetchedAt
+      && this.dependencies.now() - this.xaiUsage.fetchedAt < USAGE_REFRESH_MS
+    ) return;
+    const existing = this.xaiUsage;
+    try {
+      const token = await this.dependencies.resolveCredential('xai-oauth', authRef);
+      if (!token) throw new Error('credential unavailable');
+      const snapshot = await this.dependencies.fetchXaiUsage(token);
+      this.xaiUsage = { snapshot, fetchedAt: this.dependencies.now() };
+    } catch (error) {
+      this.xaiUsage = {
+        snapshot: existing.snapshot,
+        fetchedAt: existing.fetchedAt,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
   }
 
   private async refreshAccountUsage(account: DaemonAccountRecord): Promise<void> {

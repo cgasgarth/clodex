@@ -72,6 +72,9 @@ export interface MetricBucket {
 
 export interface Account {
   id: string;
+  providerId: 'openai-oauth' | 'xai-oauth';
+  name?: string;
+  managed: boolean;
   email?: string;
   selected: boolean;
   plan?: string;
@@ -80,6 +83,14 @@ export interface Account {
     primaryResetAt?: number;
     weeklyUsedPercent?: number;
     weeklyResetAt?: number;
+    limitUsedPercent?: number;
+    limitResetAt?: number;
+    limitPeriod?: 'weekly' | 'monthly' | 'usage';
+    usedCents?: number;
+    limitCents?: number;
+    onDemandUsedCents?: number;
+    onDemandLimitCents?: number;
+    prepaidBalanceCents?: number;
     stale?: boolean;
     error?: string;
   };
@@ -301,8 +312,8 @@ export function secondwindSessionSummary(
     + ` · ${session.requests} req`;
 }
 
-export function accountDisplayName(account: Pick<Account, 'email'>): string {
-  return account.email ?? 'Email unavailable';
+export function accountDisplayName(account: Pick<Account, 'email' | 'name'>): string {
+  return account.email ?? account.name ?? 'Account identity unavailable';
 }
 
 export function deviceCodeInstruction({ userCode }: DeviceCodePrompt): string {

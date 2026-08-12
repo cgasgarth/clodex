@@ -4,13 +4,15 @@
   "publishConfig": {
     "access": "public"
   },
-  "description": "Bridge Claude Code to OpenAI models — OpenAI API key or ChatGPT/Codex-plan OAuth, with prompt caching, auto-compaction, model switching, and a Claude Code binary patcher",
+  "description": "Bridge Claude Code to OpenAI and Grok models — OpenAI API key, ChatGPT OAuth, or SuperGrok OAuth, with prompt caching, auto-compaction, model switching, and a Claude Code binary patcher",
   "author": "Brandon Wallace",
   "license": "MIT",
   "keywords": [
     "claude",
     "claude-code",
     "openai",
+    "grok",
+    "xai",
     "chatgpt",
     "codex",
     "ai",
@@ -35,6 +37,7 @@
   },
   "scripts": {
     "build": "bun run scripts/build.ts",
+    "check:ci": "bun run typecheck && bun run lint && bun run lint:dead-code && bun run test && bun run build",
     "benchmark:secondwind-latency": "bun run benchmarks/secondwind/latency.ts",
     "dev": "bun run scripts/build.ts --watch",
     "install:global": "bun run scripts/install-global.ts",
@@ -51,6 +54,7 @@
     "@ai-sdk/openai": "4.0.11",
     "@ai-sdk/openai-compatible": "3.0.7",
     "@ai-sdk/provider-utils": "5.0.7",
+    "@ai-sdk/xai": "4.0.37",
     "@clack/prompts": "0.9.1",
     "ai": "7.0.22",
     "ink": "7.1.1",

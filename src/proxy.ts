@@ -513,7 +513,6 @@ export async function startProxyCatalog(
 ): Promise<ProxyHandle> {
   const proxyToken = getOrCreateProxyToken();
   silenceSdkWarnings();
-
   let catalog = createProxyCatalogState(routes, defaultAliasId, modelAliases);
   const plog = makeProxyLog(debug, debugLogPath);
 
@@ -867,9 +866,7 @@ export async function startProxyCatalog(
             openAiCompactThreshold: openAiOAuth
               ? resolveOpenAiCompactionThreshold(route.contextWindow)
               : undefined,
-            openAiContextWindow: openAiOAuth
-              ? resolveContextWindow(route.realModelId, route.contextWindow)
-              : undefined,
+            openAiContextWindow: openAiOAuth ? resolveContextWindow(route.realModelId, route.contextWindow) : undefined,
             onDebug: (msg: string) => plog(() => msg),
             onWebSocketDiagnostic: webSocketDiagnosticsLogPath
               ? event => {
@@ -877,10 +874,10 @@ export async function startProxyCatalog(
                   writeWebSocketDiagnosticLog(webSocketDiagnosticsLogPath, event);
                 }
               : undefined,
+            claudeSessionId,
           });
           translationLifecycle?.dispatched();
           if (clientWantsStream) {
-            // Internal override (primarily a test seam / operational tuning knob).
             const keepAliveMs =
               Number(process.env.CLODEX_STREAM_KEEPALIVE_INTERVAL_MS) || STREAM_KEEPALIVE_INTERVAL_MS;
             streamState.lastDownstreamWriteAt = Date.now();

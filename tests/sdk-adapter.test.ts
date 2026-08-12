@@ -481,20 +481,20 @@ describe('translateRequest', () => {
 
   it('applies reasoning effort using reasoningMetadata.upstreamModelId, not the gateway-aliased body.model', () => {
     const params = translateRequest({
-      model: 'anthropic-xai__grok-4.3',
+      model: 'anthropic-xai-oauth__grok-4.6',
       output_config: { effort: 'high' },
       messages: [{ role: 'user', content: 'hi' }],
-    }, '@ai-sdk/xai', { reasoningMetadata: { upstreamModelId: 'grok-4.3' } });
+    }, '@ai-sdk/xai', { reasoningMetadata: { upstreamModelId: 'grok-4.6' } });
     expect(params.providerOptions?.xai).toMatchObject({ reasoningEffort: 'high' });
   });
 
   it('does not apply reasoning effort when only the gateway-aliased model id is available (regression guard)', () => {
     const params = translateRequest({
-      model: 'anthropic-xai__grok-4.3',
+      model: 'anthropic-xai-oauth__grok-4.6',
       output_config: { effort: 'high' },
       messages: [{ role: 'user', content: 'hi' }],
     }, '@ai-sdk/xai');
-    expect(params.providerOptions?.xai).toBeUndefined();
+    expect(params.providerOptions?.xai).toEqual({ store: false });
   });
 
   it('reads effort from output_config via anthropicEffortFromRequest', () => {
@@ -513,14 +513,14 @@ describe('translateRequest', () => {
   });
   it('flattens array system prompts', () => {
     const params = translateRequest({
-      model: 'grok-4.3', system: [{ text: 'a' }, { text: 'b' }], messages: [],
+      model: 'grok-4.6', system: [{ text: 'a' }, { text: 'b' }], messages: [],
     }, '@ai-sdk/xai');
     expect(params.instructions).toBe('a\nb');
   });
 
   it('preserves inline role:system messages in their original position', () => {
     const params = translateRequest({
-      model: 'grok-4.3',
+      model: 'grok-4.6',
       system: 'base prompt',
       messages: [
         { role: 'user', content: 'hi' },
@@ -536,7 +536,7 @@ describe('translateRequest', () => {
 
   it('keeps an inline-only system message in the message sequence', () => {
     const params = translateRequest({
-      model: 'grok-4.3',
+      model: 'grok-4.6',
       messages: [{ role: 'system', content: 'only inline context' } as any],
     }, '@ai-sdk/xai');
     expect(params.instructions).toBeUndefined();
@@ -623,7 +623,7 @@ describe('translateRequest', () => {
 
   it('omits defer_loading tools until referenced in messages', () => {
     const params = translateRequest({
-      model: 'grok-4.3',
+      model: 'grok-4.6',
       messages: [{ role: 'user', content: 'hi' }],
       tools: [
         { name: 'Read', input_schema: { type: 'object' } },

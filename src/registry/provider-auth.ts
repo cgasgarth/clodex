@@ -1,4 +1,4 @@
-// provider-auth.ts — clodex providers auth (native OpenAI device-code flow)
+// provider-auth.ts — clodex providers auth (native subscription device-code flows)
 
 import { printOAuthStepsPanel } from '../ui.js';
 import pc from 'picocolors';
@@ -11,6 +11,7 @@ import {
 } from '../env.js';
 import { credentialInstanceAuthRef } from '../credential-helper.js';
 import { runOpenAiDeviceCodeFlow } from '../oauth/openai.js';
+import { runXaiDeviceCodeFlow } from '../oauth/xai.js';
 import {
   supportsNativeOAuth,
   tokensToStoredCredential,
@@ -19,7 +20,7 @@ import {
   type StoredOAuthCredential,
 } from '../oauth/types.js';
 import { getTemplateById } from '../provider-templates.js';
-import { oauthAuthRef, toOAuthRegistryId } from './import-build.js';
+import { oauthAuthRef, oauthTemplateId, toOAuthRegistryId } from './import-build.js';
 import {
   cancelCredentialDelete,
   journalCredentialWrite,
@@ -51,9 +52,12 @@ export interface ProviderAuthResult {
 }
 
 const OPENAI_DISPLAY = 'OpenAI ChatGPT Plus/Pro';
+const XAI_DISPLAY = 'xAI SuperGrok';
 const PROVIDER_DISPLAY: Record<NativeOAuthProviderId, string> = {
   openai: OPENAI_DISPLAY,
   'openai-oauth': OPENAI_DISPLAY,
+  xai: XAI_DISPLAY,
+  'xai-oauth': XAI_DISPLAY,
 };
 
 function openBrowser(url: string): void {
@@ -68,14 +72,17 @@ async function runNativeDeviceCode(providerId: NativeOAuthProviderId): Promise<S
   spinner.start('Waiting for authorization...');
 
   try {
-    const { tokens, accountId } = await runOpenAiDeviceCodeFlow(({ url, userCode }) => {
+    const runFlow = providerId === 'openai' || providerId === 'openai-oauth'
+      ? runOpenAiDeviceCodeFlow
+      : runXaiDeviceCodeFlow;
+    const { tokens, accountId } = await runFlow(({ url, userCode }) => {
       spinner.stop('');
       p.log.info(`Visit: ${pc.cyan(url)}`);
       p.log.info(`Enter code: ${pc.bold(userCode)}`);
       openBrowser(url);
       spinner.start('Waiting for authorization...');
     });
-    spinner.stop(pc.green('Signed in to OpenAI ChatGPT'));
+    spinner.stop(pc.green(`Signed in to ${label}`));
     return tokensToStoredCredential(tokens, undefined, accountId);
   } catch (err) {
     spinner.stop('');
@@ -89,6 +96,7 @@ async function runNativeDeviceCode(providerId: NativeOAuthProviderId): Promise<S
  */
 function oauthDisplayName(registryId: string, fallbackName: string): string {
   if (registryId === 'openai-oauth') return 'OpenAI (ChatGPT)';
+  if (registryId === 'xai-oauth') return 'xAI (SuperGrok)';
   return fallbackName;
 }
 
@@ -99,7 +107,7 @@ async function upsertOAuthProvider(
 ): Promise<RegistryProvider> {
   return withRegistryWriteLock(async () => {
     const registryId = toOAuthRegistryId(providerId);
-    const templateId = providerId.replace(/-oauth$/, '') || providerId;
+    const templateId = oauthTemplateId(providerId);
     const registry = loadRegistryStrict();
     const template = getTemplateById(templateId);
     let entry: RegistryProvider | undefined = registry.providers.find(pr => pr.id === registryId);
@@ -161,7 +169,7 @@ async function persistNativeOAuthCredential(
     const existingAuthRef = await withRegistryWriteLock(
       () => {
         const registry = loadRegistryStrict();
-        const templateId = providerId.replace(/-oauth$/, '') || providerId;
+        const templateId = oauthTemplateId(providerId);
         const existing = registry.providers.find(provider => provider.id === registryId);
         if (!existing && !getTemplateById(templateId)) {
           throw new Error(`Provider "${providerId}" is not in your registry and has no template`);
@@ -213,7 +221,7 @@ export async function authenticateProvider(
   const registryId = toOAuthRegistryId(providerId);
 
   if (!supportsNativeOAuth(providerId)) {
-    throw new Error('OAuth sign-in is only available for openai (ChatGPT Plus/Pro).');
+    throw new Error('OAuth sign-in is available for openai (ChatGPT Plus/Pro) and xai (SuperGrok).');
   }
 
   let storeDiagMsg = '';
@@ -252,7 +260,9 @@ export function providerAuthHelpText(): string {
 
 ${pc.bold('Usage:')}
   clodex providers auth openai
+  clodex providers auth xai
 
 ${pc.bold('Device code (works on SSH/VPS):')}
-  openai   ChatGPT Plus/Pro (device code at auth.openai.com/codex/device)`;
+  openai   ChatGPT Plus/Pro (device code at auth.openai.com/codex/device)
+  xai      SuperGrok (device code at auth.x.ai)`;
 }

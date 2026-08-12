@@ -332,7 +332,7 @@ describe('selective HTTP proxy', () => {
     }
   });
 
-  it('rewrites translated message requests before the local adapter', async () => {
+  it('sends Grok requests through Secondwind before provider translation', async () => {
     const certificates = ensureHttpProxyCertificates();
     let adapterBody = '';
     const observed: Array<Record<string, unknown>> = [];
@@ -346,14 +346,14 @@ describe('selective HTTP proxy', () => {
     });
     const adapterPort = await listen(adapterServer);
     const route = {
-      aliasId: 'clodex:test:optimized-model',
-      realModelId: 'gpt-5.6-sol',
-      displayName: 'Optimized Model',
+      aliasId: 'clodex:xai-oauth:grok-4.6',
+      realModelId: 'grok-4.6',
+      displayName: 'Grok 4.6',
       upstreamUrl: '',
       apiKey: 'unused',
       modelFormat: 'openai' as const,
       npm: '@ai-sdk/openai-compatible',
-      providerId: 'test',
+      providerId: 'xai-oauth',
     };
     const proxy = await startHttpProxy({
       routes: [route],

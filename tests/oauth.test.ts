@@ -197,8 +197,26 @@ describe('oauth refresh', () => {
     expect(oauthCredentialShouldRefresh(cred, 'openai-oauth')).toBe(false);
   });
 
+  it('refreshes xAI subscription tokens', async () => {
+    stubTestGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      access_token: 'new-xai-access',
+      refresh_token: 'new-xai-refresh',
+      expires_in: 3600,
+    }), { status: 200 })));
+
+    const cred = await refreshStoredOAuthCredential('xai-oauth', {
+      type: 'oauth',
+      access: 'old',
+      refresh: 'rt',
+      expires: 0,
+    });
+    expect(cred.access).toBe('new-xai-access');
+    const [, init] = (fetch as ReturnType<typeof vi.fn>).mock.calls[0]!;
+    expect(String(init.body)).toContain('client_id=b1a00492-073a-47ea-816f-4c329264a828');
+  });
+
   it('rejects unknown providers', async () => {
-    await expect(refreshStoredOAuthCredential('xai', {
+    await expect(refreshStoredOAuthCredential('unknown', {
       type: 'oauth',
       access: 'old',
       refresh: 'rt',

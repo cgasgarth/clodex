@@ -1,10 +1,10 @@
-# Run Codex models in Claude Code with clodex
+# Run Codex and Grok models in Claude Code with clodex
 
 [![npm version](https://img.shields.io/npm/v/%40bman654%2Fclodex.svg)](https://www.npmjs.com/package/@bman654/clodex)
 
-**clodex** lets you use OpenAI Codex models inside Claude Code with either a
-ChatGPT/Codex subscription or an OpenAI API key. Pick Sol, Terra, Luna, or other
-enabled OpenAI models from Claude's `/model` menu and keep the Claude Code
+**clodex** lets you use OpenAI Codex and Grok 4.6 inside Claude Code. Sign in
+with a ChatGPT/Codex or SuperGrok subscription, or use an OpenAI API key. Pick
+an enabled model from Claude's `/model` menu and keep the Claude Code
 experience around them:
 
 - main sessions, resumable sessions, subagents, workflows, and agent teams;
@@ -33,12 +33,14 @@ that every runtime artifact matches the checkout.
 This release supports Claude Code **2.1.227 only**. Clodex checks the installed
 version before it patches or launches Claude Code.
 
-Install clodex, sign in to OpenAI, choose the Codex models you want Claude to
+Install clodex, sign in to a provider, choose the models you want Claude to
 show, and patch Claude Code's model metadata:
 
 ```bash
 bun add --global @bman654/clodex
 clodex providers auth openai
+# Or use a SuperGrok subscription (no xAI API key):
+# clodex providers auth xai
 clodex models
 clodex models --alias sol=clodex:openai-oauth:gpt-5.6-sol
 clodex models --alias luna=clodex:openai-oauth:gpt-5.6-luna
@@ -52,7 +54,7 @@ Inside Claude Code, `/model` switches between your enabled Codex models. Bare
 `clodex` opens the daemon dashboard; `clodex start` starts it without opening
 the dashboard.
 
-OAuth credentials are stored in the OS credential store. API-key users can use
+OAuth credentials are stored in the OS credential store. OpenAI API-key users can use
 `clodex providers add` instead. Favorites and aliases feed `/model`, routing,
 subagent model selection, and patching. Re-run `clodex patch` after Claude Code
 updates, or restore the pristine Claude binary with `clodex patch --restore`.
@@ -63,7 +65,7 @@ updates, or restore the pristine Claude binary with `clodex patch --restore`.
 | --- | --- |
 | Main sessions, subagents, workflows, and agent teams | Yes |
 | Claude Code system prompt, skills, tools, and model frontmatter | Yes |
-| Anthropic and OpenAI models in the same Claude installation | Yes |
+| Anthropic, OpenAI, and Grok models in the same Claude installation | Yes |
 | Correct per-model context windows in patched Claude Code | Yes |
 | Persistent shared daemon and OpenAI WebSocket continuation | Yes |
 | Stable prompt-cache routing and explicit cache breakpoints | Yes |
@@ -73,13 +75,13 @@ updates, or restore the pristine Claude binary with `clodex patch --restore`.
 
 Clodex can also expose local Anthropic- and OpenAI-compatible endpoints, but
 the primary path is `clodex claude`: Claude Code remains the client and clodex
-routes only the selected OpenAI models.
+routes only the selected configured models.
 
 ### Claude Code Plans and ToS
 
 Clodex does not duplicate Claude Code's OAuth flow. In selective proxy mode,
 Anthropic requests pass through to `api.anthropic.com` with Claude Code's own
-credentials unchanged; only configured OpenAI models are rerouted.
+credentials unchanged; only configured OpenAI and Grok models are rerouted.
 
 ## How it works
 
@@ -99,7 +101,7 @@ flowchart LR
 
 Standalone `clodex server` supports:
 
-- **`--proxy`** — selectively reroutes saved OpenAI models while Anthropic
+- **`--proxy`** — selectively reroutes saved OpenAI and Grok models while Anthropic
   requests retain Claude Code's own login.
 - **`--endpoint`** — exposes local Anthropic- and OpenAI-format gateways plus a
   `/v1/models` catalog.
@@ -123,7 +125,8 @@ subagent waves:
 - unchanged request bytes when Secondwind has nothing to rewrite.
 
 The dashboard reports uncached input, cache reads, cache writes, output, cache
-share, and API-equivalent cost.
+share, API-equivalent cost, and subscription limits. The Accounts view shows
+OpenAI rate windows and the configured SuperGrok included-credit limit and reset.
 
 ### Native OpenAI/Codex compaction
 
@@ -192,7 +195,8 @@ Bare `clodex` starts the daemon if needed and opens six views: Overview, Usage,
 Accounts, Diagnostics, Secondwind, and Models. Press `1`–`6` to switch views. Usage
 supports active-account/all-account scope with `a`, plus day/last-7-days/last-30-days
 navigation with `Tab`, `Shift+Tab`, `←`, `→`, and `0`.
-Secondwind mode changes require confirmation. The Models view enables or disables OpenAI
+Secondwind mode changes require confirmation. Secondwind processes every translated
+OpenAI and Grok request before provider translation. The Models view enables or disables
 models in the live route catalog and the patched picker used by new Claude launches.
 The Diagnostics view switches between compact error-only logs and full lifecycle logs;
 full mode records native compaction start, completion, duration, and recovery details.
@@ -352,13 +356,16 @@ Manage favorite models (max 20) and short aliases. Favorites feed the endpoint-m
 | Subcommand | Effect |
 | --- | --- |
 | *(none)* | Provider hub wizard |
-| `add` | Add OpenAI with an API key (choose OAuth or API key) |
+| `add` | Choose subscription sign-in or add an OpenAI API key |
 | `auth openai` | Sign in with ChatGPT/Codex-plan OAuth (device code) |
+| `auth xai` | Sign in with a SuperGrok subscription (device code) |
 | `list` | Show configured providers |
 | `remove <id>` | Remove a provider by id |
 | `refresh-models [id]` | Update cached model lists |
 
-Providers supported: `openai` (API key, platform.openai.com) and `openai-oauth` (ChatGPT/Codex plan).
+Providers supported: `openai` (API key), `openai-oauth` (ChatGPT/Codex plan),
+and `xai-oauth` (SuperGrok subscription). The xAI provider exposes only
+`grok-4.6`; clodex does not support xAI API keys.
 
 ### Root
 
@@ -385,7 +392,7 @@ clodex --version    # version
 
 ## Known limitations
 
-- Cost display inside Claude Code is inaccurate for OpenAI models (Claude Code applies its own pricing table).
+- Cost display inside Claude Code is inaccurate for OpenAI and Grok models (Claude Code applies its own pricing table).
 - In the endpoint-mode switch menu, the displayed context window reflects the launch model and does not update on live `/model` switches (Claude Code fetches window metadata once at startup). Proxy mode with `clodex patch` reports correct per-model windows.
 - ChatGPT/Codex OAuth requires `store:false` upstream; some OpenAI cache controls are intentionally omitted on OAuth routes because they returned empty responses during compatibility testing.
 - An already-oversized legacy Claude transcript that never acquired a native

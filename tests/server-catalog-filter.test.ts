@@ -23,7 +23,7 @@ function model(partial: Partial<ServerModelInfo> & Pick<ServerModelInfo, 'id' | 
 describe('filterServerModelsByProviders', () => {
   const models = [
     model({ id: 'gemini-3', providerId: 'google', providerLabel: 'Google' }),
-    model({ id: 'grok-4', providerId: 'xai', providerLabel: 'xAI' }),
+    model({ id: 'grok-4.6', providerId: 'xai-oauth', providerLabel: 'xAI (SuperGrok)' }),
     model({ id: 'big-pickle', providerId: 'zen', providerLabel: 'OpenCode Zen' }),
   ];
 
@@ -43,7 +43,7 @@ describe('filterServerModelsByFavorites', () => {
   const models = [
     model({ id: 'gpt-5.5-fast', providerId: 'openai', providerLabel: 'OpenAI' }),
     model({ id: 'gemini-3.5-flash', providerId: 'google', providerLabel: 'Google' }),
-    model({ id: 'grok-4.3', providerId: 'xai', providerLabel: 'xAI' }),
+    model({ id: 'grok-4.6', providerId: 'xai-oauth', providerLabel: 'xAI (SuperGrok)' }),
   ];
 
   it('returns empty list when there are no favorites', () => {
@@ -53,16 +53,16 @@ describe('filterServerModelsByFavorites', () => {
   it('keeps only favorited provider/model pairs', () => {
     const filtered = filterServerModelsByFavorites(models, [
       { providerId: 'google', modelId: 'gemini-3.5-flash' },
-      { providerId: 'xai', modelId: 'grok-4.3' },
+      { providerId: 'xai-oauth', modelId: 'grok-4.6' },
     ]);
-    expect(filtered.map(m => m.id)).toEqual(['gemini-3.5-flash', 'grok-4.3']);
+    expect(filtered.map(m => m.id)).toEqual(['gemini-3.5-flash', 'grok-4.6']);
   });
 });
 
 describe('resolveInitialServerProviders', () => {
   const available = [
     { id: 'google', name: 'Google', modelCount: 18 },
-    { id: 'xai', name: 'xAI', modelCount: 8 },
+    { id: 'xai-oauth', name: 'xAI (SuperGrok)', modelCount: 1 },
     { id: 'openrouter', name: 'OpenRouter', modelCount: 338 },
   ];
 
@@ -72,7 +72,7 @@ describe('resolveInitialServerProviders', () => {
   });
 
   it('restores only saved providers that still exist', () => {
-    expect(resolveInitialServerProviders(['google', 'xai', 'gone'], available)).toEqual(['google', 'xai']);
+    expect(resolveInitialServerProviders(['google', 'xai-oauth', 'gone'], available)).toEqual(['google', 'xai-oauth']);
   });
 });
 
@@ -81,8 +81,8 @@ describe('summarizeServerProviders', () => {
     const summary = summarizeServerProviders([
       model({ id: 'a', providerId: 'google', providerLabel: 'Google' }),
       model({ id: 'b', providerId: 'google', providerLabel: 'Google' }),
-      model({ id: 'c', providerId: 'xai', providerLabel: 'xAI' }),
+      model({ id: 'c', providerId: 'xai-oauth', providerLabel: 'xAI (SuperGrok)' }),
     ]);
-    expect(summary).toBe('Google (2), xAI (1)');
+    expect(summary).toBe('Google (2), xAI (SuperGrok) (1)');
   });
 });

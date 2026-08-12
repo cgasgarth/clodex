@@ -15,6 +15,11 @@ import {
 } from './oauth/claude-identity.js';
 import { isCredentialBearingHeader } from './credential-headers.js';
 import { getResponsesCheckpointsPath } from './paths.js';
+import {
+  createXaiSubscriptionFetch,
+  XAI_SUBSCRIPTION_BASE_URL,
+  XAI_SUBSCRIPTION_MODEL,
+} from './oauth/xai-proxy.js';
 
 /** Models that must use /v1/responses instead of /v1/chat/completions. */
 const RESPONSES_ONLY_PREFIXES = [
@@ -53,7 +58,7 @@ const fetchWithoutCredentialHeaders: typeof fetch = Object.assign(
 );
 
 /**
- * True when a model id must use the OpenAI/xAI Responses API instead of
+ * True when an OpenAI model id must use the Responses API instead of
  * chat/completions. The SDK reflects this by selecting `provider.responses(id)`.
  */
 export function modelPrefersResponsesApi(modelId: string): boolean {
@@ -66,8 +71,6 @@ export function modelPrefersResponsesApi(modelId: string): boolean {
   if (gpt5Minor && Number(gpt5Minor[1]) >= 4) return true;
   // Versioned Codex IDs (e.g. gpt-5.3-codex) don't match the gpt-5-codex prefix.
   if (lower.startsWith('gpt-') && lower.includes('-codex')) return true;
-  // xAI multiagent models (e.g. grok-4.20-multi-agent, grok-4.2-multiagent).
-  if (lower.startsWith('grok-') && (lower.includes('multi-agent') || lower.includes('multiagent'))) return true;
   return false;
 }
 
@@ -122,13 +125,17 @@ export interface ProviderModelSpec {
   onDebug?: (msg: string) => void;
   /** Optional privacy-safe structured WebSocket diagnostics. */
   onWebSocketDiagnostic?: (event: ResponsesWebSocketDiagnosticEvent) => void;
+  /** Stable Claude session id used for SuperGrok proxy request correlation. */
+  claudeSessionId?: string;
 }
 
 export interface ProviderFactoryDependencies {
   createOpenAI?: typeof import('@ai-sdk/openai')['createOpenAI'];
   createAnthropic?: typeof import('@ai-sdk/anthropic')['createAnthropic'];
   createOpenAICompatible?: typeof import('@ai-sdk/openai-compatible')['createOpenAICompatible'];
+  createXai?: typeof import('@ai-sdk/xai')['createXai'];
   createResponsesWebSocketFetch?: typeof createResponsesWebSocketFetch;
+  createXaiSubscriptionFetch?: typeof createXaiSubscriptionFetch;
   loadSdkProviderFactory?: typeof loadSdkProviderFactory;
 }
 
@@ -234,6 +241,25 @@ export async function createLanguageModel(
     const openai = createOpenAI(oauthOptions);
     return useResponsesEndpoint ? openai.responses(modelId) : openai.chat(modelId);
   }
+  if (npm === '@ai-sdk/xai') {
+    if (spec.authType !== 'oauth' || spec.providerId !== 'xai-oauth') {
+      throw new Error('xAI API-key access is not supported; sign in with SuperGrok');
+    }
+    if (modelId !== XAI_SUBSCRIPTION_MODEL) {
+      throw new Error(`SuperGrok supports only ${XAI_SUBSCRIPTION_MODEL}`);
+    }
+    const createXai = dependencies.createXai ?? (await import('@ai-sdk/xai')).createXai;
+    const xai = createXai({
+      apiKey,
+      baseURL: XAI_SUBSCRIPTION_BASE_URL,
+      ...(spec.headers ? { headers: spec.headers } : {}),
+      fetch: (dependencies.createXaiSubscriptionFetch ?? createXaiSubscriptionFetch)(
+        modelId,
+        spec.claudeSessionId,
+      ),
+    });
+    return xai.responses(modelId);
+  }
   // Registry stores root URL (no /v1) for GET /v1/models discovery — passing it here
   // makes the SDK call https://api.anthropic.com/messages → 404.
   if (npm === '@ai-sdk/anthropic') {
@@ -324,8 +350,8 @@ export interface ReasoningMetadata {
   reasoning?: boolean;
   interleavedReasoningField?: string;
   /**
-   * Bare upstream model id (e.g. 'grok-4.5'), distinct from the request's `model`
-   * field which may be a gateway alias or catalog slug (e.g. 'xai-oauth__grok-4.5').
+   * Bare upstream model id (e.g. 'grok-4.6'), distinct from the request's `model`
+   * field which may be a gateway alias or catalog slug (e.g. 'xai-oauth__grok-4.6').
    * Reasoning-capability id-pattern checks must match against this, not body.model.
    */
   upstreamModelId?: string;
@@ -346,7 +372,7 @@ const OPENAI_EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh'] as const;
 const GPT_56_EFFORT_LEVELS = ['none', 'low', 'medium', 'high', 'xhigh', 'max'] as const;
 const GEMINI_EFFORT_LEVELS = ['low', 'medium', 'high'] as const;
 const MISTRAL_EFFORT_LEVELS = ['high', 'off'] as const;
-const XAI_EFFORT_LEVELS = ['none', 'low', 'medium', 'high'] as const;
+const XAI_EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh'] as const;
 const OPENROUTER_EFFORT_LEVELS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'] as const;
 /** DeepSeek V4 wire values (low/medium map to high; xhigh maps to max). */
 const DEEPSEEK_EFFORT_LEVELS = ['high', 'max', 'off'] as const;
@@ -405,30 +431,10 @@ function isMistralReasoningModel(modelId: string): boolean {
 }
 
 /**
- * xAI models that accept `reasoning_effort` on the wire (per xAI docs).
- * models.dev `reasoning: true` is broader — e.g. grok-build-0.1 reasons internally
- * but rejects reasoningEffort (HTTP 400).
+ * The only xAI model exposed by clodex accepts `reasoning_effort`.
  */
 function isXaiReasoningEffortModel(modelId: string): boolean {
-  const lower = modelId.toLowerCase();
-  if (lower.includes('non-reasoning')) return false;
-  if (lower.startsWith('grok-build')) return false;
-  if (lower.startsWith('grok-imagine')) return false;
-  if (modelPrefersResponsesApi(modelId)) return true;
-  if (lower === 'grok-4.3' || lower.startsWith('grok-4.3-')) return true;
-  if (lower === 'grok-4.5' || lower.startsWith('grok-4.5-')) return true;
-  if (lower.includes('-reasoning')) return true;
-  return false;
-}
-
-/**
- * xAI's own default reasoning_effort when the param is omitted (per xAI docs).
- * Varies by model — grok-4.3 defaults to 'low', grok-4.5 defaults to 'high'.
- */
-function xaiDefaultReasoningEffort(modelId: string): string {
-  const lower = modelId.toLowerCase();
-  if (lower === 'grok-4.5' || lower.startsWith('grok-4.5-')) return 'high';
-  return 'low';
+  return modelId.toLowerCase() === XAI_SUBSCRIPTION_MODEL;
 }
 
 /** DeepSeek V4 models with thinking mode + reasoning_effort (direct API). */
@@ -606,14 +612,14 @@ function mapCodexEffortToXai(effort: string): string | undefined {
   switch (effort) {
     case 'none':
     case 'minimal':
-      return undefined;   // xAI SDK only accepts 'low'|'high'; omit param for 'none'
+      return 'low';
     case 'low':
     case 'medium':
-      return 'low';       // 'medium' has no xAI equivalent — nearest valid value
     case 'high':
     case 'xhigh':
+      return effort;
     case 'max':
-      return 'high';
+      return 'xhigh';
     default:
       return undefined;
   }
@@ -722,12 +728,9 @@ export function getReasoningCapabilities(
 
   if (npm === '@ai-sdk/xai') {
     if (isXaiReasoningEffortModel(modelId)) {
-      const levels = modelPrefersResponsesApi(modelId)
-        ? ['low', 'medium', 'high', 'xhigh']
-        : [...XAI_EFFORT_LEVELS];
       return {
-        levels,
-        defaultLevel: xaiDefaultReasoningEffort(modelId),
+        levels: [...XAI_EFFORT_LEVELS],
+        defaultLevel: 'high',
         supportsSummaries: true,
         mode: 'controllable',
         source: 'provider-rule',
@@ -987,6 +990,9 @@ export function thinkingProviderOptions(npm: string): Record<string, Record<stri
         include: ['reasoning.encrypted_content'],
       },
     };
+  }
+  if (npm === '@ai-sdk/xai') {
+    return { xai: { store: false } };
   }
   return undefined;
 }

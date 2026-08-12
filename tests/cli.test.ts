@@ -30,6 +30,9 @@ describe('catalogUsesNativeContextOwner', () => {
       nativeRoute,
       { providerId: 'anthropic', modelFormat: 'anthropic', contextWindow: 200_000 },
     ], enabled)).toBe(false);
+    expect(catalogUsesNativeContextOwner([
+      { providerId: 'xai-oauth', modelFormat: 'openai', contextWindow: 500_000 },
+    ], enabled)).toBe(false);
     expect(catalogUsesNativeContextOwner([nativeRoute], {})).toBe(false);
     expect(catalogUsesNativeContextOwner([], enabled)).toBe(false);
   });
@@ -251,6 +254,11 @@ describe('help text', () => {
     expect(claudeHelpText()).toContain('single endpoint');
     expect(serverHelpText()).toContain('--no-discovery');
     expect(patchHelpText()).toContain('--restore');
+  });
+
+  it('documents SuperGrok as a Claude launch provider', () => {
+    expect(claudeHelpText()).toContain('xai-oauth');
+    expect(claudeHelpText()).toContain('clodex providers auth xai');
   });
 
   it('no longer mentions the removed --http-proxy alias', () => {

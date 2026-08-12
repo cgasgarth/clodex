@@ -18,6 +18,9 @@ const MAX_METRICS_BUCKETS = 1_000;
 
 export interface DaemonAccountView {
   id: string;
+  providerId: 'openai-oauth' | 'xai-oauth';
+  name?: string;
+  managed: boolean;
   email?: string;
   selected: boolean;
   plan?: string;
