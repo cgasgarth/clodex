@@ -46,6 +46,20 @@ export function checkpointStoreDirectory(
     : options.checkpointStoreDir;
 }
 
+function hasNativeWebSearch(payload: JsonObject): boolean {
+  return Array.isArray(payload.tools)
+    && payload.tools.some(tool => (
+      tool !== null
+      && typeof tool === 'object'
+      && (tool as JsonObject).type === 'web_search'
+    ));
+}
+
+function deleteHeader(headers: Record<string, string>, name: string): void {
+  const key = Object.keys(headers).find(candidate => candidate.toLowerCase() === name);
+  if (key) delete headers[key];
+}
+
 export function prepareResponsesRequest(
   wsUrl: string,
   init: RequestInit | undefined,
@@ -60,20 +74,32 @@ export function prepareResponsesRequest(
   } catch {
     payload = {};
   }
-  if (hasResponsesLiteHeader(headers)) payload = applyResponsesLiteShape(payload);
+  const bypassResponsesLite = hasResponsesLiteHeader(headers) && hasNativeWebSearch(payload);
+  if (bypassResponsesLite) {
+    // The ChatGPT Responses-Lite backend rejects hosted tools. The same model
+    // accepts native web_search on the full Responses protocol over the same
+    // WebSocket endpoint, so remove only the Lite negotiation headers for this
+    // request. Keep it in a separate socket partition because upgrade headers
+    // are connection-scoped.
+    deleteHeader(headers, 'x-openai-internal-codex-responses-lite');
+    deleteHeader(headers, 'version');
+  } else if (hasResponsesLiteHeader(headers)) {
+    payload = applyResponsesLiteShape(payload);
+  }
 
   const authorizationFingerprint = authorizationHeaderFingerprint(headers);
+  const partitionUrl = bypassResponsesLite ? `${wsUrl}#full-responses-web-search` : wsUrl;
   return {
     headers,
     payload,
     partitionKey: responsesWebSocketPartitionKey(
-      wsUrl,
+      partitionUrl,
       payload,
       options,
       authorizationFingerprint,
     ),
     checkpointKey: responsesCheckpointPartitionKey(
-      wsUrl,
+      partitionUrl,
       payload,
       options,
       authorizationFingerprint,

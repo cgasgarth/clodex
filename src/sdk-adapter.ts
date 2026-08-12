@@ -2,6 +2,7 @@
 import { createHash } from 'node:crypto';
 import { streamText, generateText, tool, jsonSchema } from 'ai';
 import type { LanguageModel, ModelMessage, ToolSet } from 'ai';
+import { openai } from '@ai-sdk/openai';
 import {
   sseChunk,
   encodeToolUseId,
@@ -63,8 +64,18 @@ interface AnthropicMsg { role: 'user' | 'assistant' | 'system'; content: string 
 interface AnthropicTool {
   name: string;
   description?: string;
-  input_schema: Record<string, unknown>;
+  input_schema?: Record<string, unknown>;
   cache_control?: { type?: string; ttl?: string };
+  type?: string;
+  allowed_domains?: string[];
+  blocked_domains?: string[];
+  user_location?: {
+    type?: string;
+    country?: string;
+    city?: string;
+    region?: string;
+    timezone?: string;
+  };
 }
 export interface AnthropicRequest {
   model: string;
@@ -538,11 +549,49 @@ function toolRequiredProps(tools?: SdkCallParams['tools']): Map<string, Readonly
   return map;
 }
 
-export function translateTools(anthropicTools?: AnthropicTool[]): ToolSet | undefined {
+function isAnthropicWebSearchTool(toolDefinition: AnthropicTool): boolean {
+  return toolDefinition.name === 'web_search'
+    && toolDefinition.type?.startsWith('web_search_') === true;
+}
+
+function translateOpenAiWebSearchTool(toolDefinition: AnthropicTool) {
+  if (toolDefinition.blocked_domains?.length) {
+    throw new Error('OpenAI native web search does not support blocked_domains');
+  }
+  const location = toolDefinition.user_location;
+  return openai.tools.webSearch({
+    ...(toolDefinition.allowed_domains?.length
+      ? { filters: { allowedDomains: toolDefinition.allowed_domains } }
+      : {}),
+    ...(location?.type === 'approximate'
+      ? {
+          userLocation: {
+            type: 'approximate' as const,
+            country: location.country,
+            city: location.city,
+            region: location.region,
+            timezone: location.timezone,
+          },
+        }
+      : {}),
+  });
+}
+
+export function translateTools(
+  anthropicTools?: AnthropicTool[],
+  npm?: string,
+): ToolSet | undefined {
   if (!anthropicTools?.length) return undefined;
   const tools: ToolSet = {};
   for (const t of anthropicTools) {
-    tools[t.name] = tool({ description: t.description ?? '', inputSchema: jsonSchema(t.input_schema) });
+    if (npm === '@ai-sdk/openai' && isAnthropicWebSearchTool(t)) {
+      tools[t.name] = translateOpenAiWebSearchTool(t);
+      continue;
+    }
+    tools[t.name] = tool({
+      description: t.description ?? '',
+      inputSchema: jsonSchema(t.input_schema ?? { type: 'object', properties: {} }),
+    });
   }
   return Object.keys(tools).length ? tools : undefined;
 }
@@ -681,7 +730,7 @@ export function translateRequest(
       ),
     ],
     allowSystemInMessages: true,
-    tools: translateTools(upstreamTools.length ? upstreamTools : undefined),
+    tools: translateTools(upstreamTools.length ? upstreamTools : undefined, npm),
     toolChoice: compactRequest ? 'none' : translateToolChoice(body.tool_choice),
     maxOutputTokens: options?.openAiOAuth ? undefined : body.max_tokens,
     temperature: body.temperature,
@@ -782,7 +831,7 @@ export async function writeAnthropicStream(
   const requiredProps = toolRequiredProps(tools);
   let blockIndex = -1;
   let started = false;
-  let openType: 'text' | 'thinking' | 'tool' | null = null;
+  let openType: 'text' | 'thinking' | 'tool' | 'server-tool' | 'server-tool-result' | null = null;
   let pendingThinkingSig: string | undefined;
   const idToBlock = new Map<string, number>();
   // Tool input deltas are buffered (not forwarded raw) so the complete input
@@ -840,7 +889,10 @@ export async function writeAnthropicStream(
     openType = null;
     openToolId = null;
   };
-  const openBlock = (type: 'text' | 'thinking' | 'tool', contentBlock: unknown) => {
+  const openBlock = (
+    type: 'text' | 'thinking' | 'tool' | 'server-tool' | 'server-tool-result',
+    contentBlock: unknown,
+  ) => {
     ensureStart(); closeOpen(); blockIndex++; openType = type;
     emit('content_block_start', { type: 'content_block_start', index: blockIndex, content_block: contentBlock });
   };
@@ -851,6 +903,53 @@ export async function writeAnthropicStream(
   // Read through a function because stream callbacks mutate this state between
   // iterations; TypeScript's local narrowing cannot model that mutation.
   const currentOpenType = () => openType;
+  const providerWebSearchIds = new Set<string>();
+  const isProviderWebSearch = (part: FullStreamPart): boolean =>
+    part.toolName === 'web_search' && part.providerExecuted === true;
+  const serverToolUseId = (id: string): string =>
+    id.startsWith('srvtoolu_') ? id : `srvtoolu_${id}`;
+  const handleWebSearchResult = (part: FullStreamPart): void => {
+    const toolCallId = part.toolCallId ?? '';
+    const output = part.output as {
+      action?: {
+        type?: string;
+        query?: string;
+        queries?: string[];
+        url?: string | null;
+        pattern?: string | null;
+      };
+      sources?: Array<{ type?: string; url?: string; name?: string }>;
+    } | undefined;
+    const action = output?.action;
+    const query = action?.query
+      ?? action?.queries?.join(' OR ')
+      ?? action?.url
+      ?? action?.pattern
+      ?? '';
+    const id = serverToolUseId(toolCallId);
+    openBlock('server-tool', {
+      type: 'server_tool_use', id, name: 'web_search', input: {},
+    });
+    emit('content_block_delta', {
+      type: 'content_block_delta', index: blockIndex,
+      delta: { type: 'input_json_delta', partial_json: JSON.stringify({ query }) },
+    });
+    closeOpen();
+    openBlock('server-tool-result', {
+      type: 'web_search_tool_result',
+      tool_use_id: id,
+      content: (output?.sources ?? [])
+        .filter(source => source.type === 'url' && typeof source.url === 'string')
+        .map(source => ({
+          type: 'web_search_result',
+          url: source.url,
+          title: source.url,
+          encrypted_content: '',
+          page_age: null,
+        })),
+    });
+    closeOpen();
+  };
   const handleToolCall = (part: FullStreamPart): void => {
     const id = part.toolCallId ?? '';
     const required = requiredProps.get(part.toolName ?? '');
@@ -935,6 +1034,10 @@ export async function writeAnthropicStream(
       case 'text-end': break;
 
       case 'tool-input-start': {
+        if (isProviderWebSearch(part)) {
+          providerWebSearchIds.add(part.id ?? '');
+          break;
+        }
         const sig = grabRoundTripSignature(part);
         openBlock('tool', {
           type: 'tool_use', id: encodeToolUseId(part.id ?? '', sig), name: part.toolName, input: {},
@@ -945,16 +1048,25 @@ export async function writeAnthropicStream(
       }
       case 'tool-input-delta': {
         const id = part.id ?? '';
+        if (providerWebSearchIds.has(id)) break;
         toolJsonBuffer.set(id, (toolJsonBuffer.get(id) ?? '') + (part.delta ?? part.text ?? ''));
         break;
       }
       case 'tool-input-end': break;
 
       case 'tool-call': {
+        if (isProviderWebSearch(part)) {
+          providerWebSearchIds.add(part.toolCallId ?? '');
+          break;
+        }
         finishReason = 'tool_use';
         handleToolCall(part);
         break;
       }
+
+      case 'tool-result':
+        if (isProviderWebSearch(part)) handleWebSearchResult(part);
+        break;
 
       case 'finish':
         if (part.totalUsage) {

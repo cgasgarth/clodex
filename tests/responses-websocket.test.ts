@@ -330,6 +330,34 @@ describe('createResponsesWebSocketFetch', () => {
     expect(sent).toEqual({ type: 'response.create', model: 'gpt-5.6-sol' });
   });
 
+  it('uses the full Responses protocol for native web search on a Lite model', async () => {
+    const wsFetch = createResponsesWebSocketFetch(WS_URL);
+    await wsFetch('https://x', {
+      method: 'POST',
+      headers: {
+        version: '0.144.1',
+        'x-openai-internal-codex-responses-lite': 'true',
+      },
+      body: JSON.stringify({
+        model: 'gpt-5.6-sol',
+        tools: [{ type: 'web_search' }],
+        reasoning: { effort: 'high' },
+      }),
+    });
+
+    const socket = lastSocket();
+    expect(socket.options.headers).not.toHaveProperty('version');
+    expect(socket.options.headers).not.toHaveProperty('x-openai-internal-codex-responses-lite');
+    socket.emit('open');
+    const sent = JSON.parse(socket.send.mock.calls[0]![0] as string);
+    expect(sent).toEqual({
+      type: 'response.create',
+      model: 'gpt-5.6-sol',
+      tools: [{ type: 'web_search' }],
+      reasoning: { effort: 'high' },
+    });
+  });
+
   it('collapses each frame onto a single SSE data line and closes on response.completed', async () => {
     const wsFetch = createResponsesWebSocketFetch(WS_URL);
     const res = await wsFetch('https://x', {
