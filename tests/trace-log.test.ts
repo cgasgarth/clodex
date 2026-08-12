@@ -1,5 +1,5 @@
 import { afterEach, describe, it, expect } from 'bun:test';
-import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, statSync, truncateSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -10,6 +10,7 @@ import {
   redactTraceLine,
   redactTraceLog,
   registerTraceSecret,
+  TRACE_LOG_MAX_BYTES,
   writeInferenceRequestLog,
   writeInferenceRouteUnavailableLog,
   writeInferenceResponseLifecycleLog,
@@ -60,6 +61,21 @@ describe('trace log redaction', () => {
 });
 
 describe('inference request log', () => {
+  it('resets a temporary trace log before it exceeds 50 MiB', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'clodex-capped-log-'));
+    const path = join(dir, 'capped.jsonl');
+    try {
+      writeFileSync(path, '');
+      truncateSync(path, TRACE_LOG_MAX_BYTES);
+      writeSecureLogLine(path, JSON.stringify({ afterReset: true }));
+
+      expect((await readLog(path)).trim()).toBe('{"afterReset":true}');
+      expect(statSync(path).size).toBeLessThan(TRACE_LOG_MAX_BYTES);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('flushes queued records in order with private file permissions', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'clodex-batched-log-'));
     const path = join(dir, 'batched.jsonl');

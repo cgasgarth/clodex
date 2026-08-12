@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'bun:test';
 import {
   AgentStreamTransaction,
+  commitProviderStreamLive,
   isResponseStreamRetryEligible,
   responseStreamRetryDelayMs,
   waitForResponseStreamRetry,
@@ -59,6 +60,27 @@ describe('AgentStreamTransaction', () => {
 });
 
 describe('response stream retry timing', () => {
+  it('commits SuperGrok live only after semantic output starts', () => {
+    const committed: string[] = [];
+    const transaction = new AgentStreamTransaction({
+      enabled: true,
+      commitChunk: chunk => committed.push(chunk),
+    });
+    transaction.write('buffered');
+
+    expect(commitProviderStreamLive(transaction, 'xai-oauth', 'start')).toBe(false);
+    expect(commitProviderStreamLive(transaction, 'openai-oauth', 'reasoning-start')).toBe(false);
+    expect(commitProviderStreamLive(transaction, 'xai-oauth', 'tool-input-start')).toBe(false);
+    expect(committed).toEqual([]);
+
+    expect(commitProviderStreamLive(transaction, 'xai-oauth', 'reasoning-start')).toBe(true);
+    expect(committed).toEqual(['buffered']);
+    expect(transaction.replaySafe).toBe(false);
+    transaction.write('live');
+    expect(committed).toEqual(['buffered', 'live']);
+    expect(commitProviderStreamLive(transaction, 'xai-oauth', 'text-delta')).toBe(false);
+  });
+
   it('uses bounded exponential delays and honors retry-after', () => {
     expect(responseStreamRetryDelayMs(1)).toBe(250);
     expect(responseStreamRetryDelayMs(2)).toBe(500);

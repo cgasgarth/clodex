@@ -42,6 +42,7 @@ function postToProxy(
   path = '/v1/messages',
   claudeSessionId?: string,
   claudeAgentId?: string,
+  onChunk?: (chunk: string) => void,
 ): Promise<{ status: number; body: string; headers: http.IncomingHttpHeaders }> {
   return new Promise((resolve, reject) => {
     const payload = JSON.stringify(body);
@@ -63,7 +64,11 @@ function postToProxy(
       },
       (res) => {
         let data = '';
-        res.on('data', (chunk) => { data += chunk; });
+        res.on('data', (chunk) => {
+          const text = chunk.toString();
+          data += text;
+          onChunk?.(text);
+        });
         res.on('end', () => resolve({ status: res.statusCode ?? 0, body: data, headers: res.headers }));
       },
     );
@@ -1301,6 +1306,126 @@ describe('SDK translated error logging', () => {
       }));
       expect(entries.some(entry => entry.event === 'translation_failed')).toBe(false);
       expect(entries.some(entry => entry.event === 'upstream_error')).toBe(false);
+    } finally {
+      handle.close();
+      await new Promise<void>(resolve => upstream.close(() => resolve()));
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 20_000);
+
+  it('streams SuperGrok output before the upstream response completes', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'clodex-xai-live-stream-'));
+    const inferenceLogPath = join(dir, 'inference.jsonl');
+    let releaseUpstream!: () => void;
+    const upstreamRelease = new Promise<void>(resolve => { releaseUpstream = resolve; });
+    let upstreamCompleted = false;
+    const upstream = http.createServer((req, res) => {
+      req.resume();
+      req.once('end', async () => {
+        res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Connection': 'close' });
+        res.write('data: {"id":"grok-live","object":"chat.completion.chunk","created":1,"model":"grok-4.6","choices":[{"index":0,"delta":{"role":"assistant","content":"visible before completion"},"finish_reason":null}]}\n\n');
+        await upstreamRelease;
+        res.write('data: {"id":"grok-live","object":"chat.completion.chunk","created":1,"model":"grok-4.6","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\n');
+        res.end('data: [DONE]\n\n');
+        upstreamCompleted = true;
+      });
+    });
+    await new Promise<void>((resolve, reject) => {
+      upstream.once('error', reject);
+      upstream.listen(0, '127.0.0.1', () => resolve());
+    });
+    const address = upstream.address();
+    if (!address || typeof address === 'string') throw new Error('test upstream did not bind');
+    const route: ProxyRoute = {
+      aliasId: 'grok',
+      realModelId: 'grok-4.6',
+      displayName: 'Grok 4.6',
+      upstreamUrl: '',
+      apiKey: 'subscription-token',
+      modelFormat: 'openai',
+      npm: '@ai-sdk/openai-compatible',
+      baseURL: `http://127.0.0.1:${address.port}/v1`,
+      providerId: 'xai-oauth',
+    };
+    const handle = await startProxyCatalog([route], route.aliasId, false, inferenceLogPath);
+
+    try {
+      let visibleOutput = '';
+      const completed = postToProxy(handle.port, handle.token, {
+        model: route.aliasId,
+        max_tokens: 100,
+        messages: [{ role: 'user', content: 'stream live' }],
+        stream: true,
+      }, 'req-xai-live', '/v1/messages', undefined, undefined, chunk => { visibleOutput += chunk; });
+
+      await waitForCondition(() => visibleOutput.includes('visible before completion'));
+      expect(upstreamCompleted).toBe(false);
+      releaseUpstream();
+
+      const response = await completed;
+      expect(response.status).toBe(200);
+      expect(response.body).toContain('visible before completion');
+      expect(response.body).toContain('event: message_stop');
+    } finally {
+      releaseUpstream();
+      handle.close();
+      await new Promise<void>(resolve => upstream.close(() => resolve()));
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 20_000);
+
+  it('does not replay SuperGrok after live output is visible', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'clodex-xai-live-failure-'));
+    const inferenceLogPath = join(dir, 'inference.jsonl');
+    let requestCount = 0;
+    const upstream = http.createServer((req, res) => {
+      requestCount += 1;
+      req.resume();
+      req.once('end', () => {
+        res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Connection': 'close' });
+        res.write('data: {"id":"grok-partial","object":"chat.completion.chunk","created":1,"model":"grok-4.6","choices":[{"index":0,"delta":{"role":"assistant","content":"one visible answer"},"finish_reason":null}]}\n\n');
+        res.end('data: {"error":{"type":"transport_error","code":"websocket_transport_error","message":"connection ended"}}\n\n');
+      });
+    });
+    await new Promise<void>((resolve, reject) => {
+      upstream.once('error', reject);
+      upstream.listen(0, '127.0.0.1', () => resolve());
+    });
+    const address = upstream.address();
+    if (!address || typeof address === 'string') throw new Error('test upstream did not bind');
+    const route: ProxyRoute = {
+      aliasId: 'grok',
+      realModelId: 'grok-4.6',
+      displayName: 'Grok 4.6',
+      upstreamUrl: '',
+      apiKey: 'subscription-token',
+      modelFormat: 'openai',
+      npm: '@ai-sdk/openai-compatible',
+      baseURL: `http://127.0.0.1:${address.port}/v1`,
+      providerId: 'xai-oauth',
+    };
+    const handle = await startProxyCatalog([route], route.aliasId, false, inferenceLogPath);
+
+    try {
+      const response = await postToProxy(handle.port, handle.token, {
+        model: route.aliasId,
+        max_tokens: 100,
+        messages: [{ role: 'user', content: 'fail after live output' }],
+        stream: true,
+      }, 'req-xai-live-failure');
+
+      expect(requestCount).toBe(1);
+      expect(response.status).toBe(200);
+      expect(response.body).toContain('one visible answer');
+      expect(response.body).toContain('event: error');
+      const entries = (await readFlushedLog(inferenceLogPath)).trim().split('\n').map(line => JSON.parse(line));
+      expect(entries).toContainEqual(expect.objectContaining({
+        event: 'translation_failed',
+        requestId: 'req-xai-live-failure',
+        partialResponse: true,
+        replaySafe: false,
+      }));
+      expect(entries.some(entry => entry.event === 'translation_retrying')).toBe(false);
     } finally {
       handle.close();
       await new Promise<void>(resolve => upstream.close(() => resolve()));
