@@ -8,6 +8,16 @@ export interface AnthropicToolDefinition {
   defer_loading?: boolean;
   /** Anthropic tool-search tool types (e.g. tool_search_tool_regex_20251119). */
   type?: string;
+  /** Server-side web-search controls. */
+  allowed_domains?: string[];
+  blocked_domains?: string[];
+  user_location?: {
+    type?: string;
+    country?: string;
+    city?: string;
+    region?: string;
+    timezone?: string;
+  };
 }
 
 export interface AnthropicRequestMessage {

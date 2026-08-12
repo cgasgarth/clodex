@@ -8,6 +8,8 @@ export type FullStreamPart = {
   toolName?: string;
   toolCallId?: string;
   input?: unknown;
+  output?: unknown;
+  providerExecuted?: boolean;
   finishReason?: string;
   totalUsage?: {
     inputTokens?: number;

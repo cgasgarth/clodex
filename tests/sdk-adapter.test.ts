@@ -57,6 +57,41 @@ describe('translateTools', () => {
     expect(translateTools(undefined)).toBeUndefined();
     expect(translateTools([])).toBeUndefined();
   });
+
+  it('maps Anthropic server web search to the OpenAI provider tool', () => {
+    const tools = translateTools([{
+      type: 'web_search_20260209',
+      name: 'web_search',
+      allowed_domains: ['openai.com'],
+      user_location: { type: 'approximate', country: 'US', timezone: 'America/Chicago' },
+    }], '@ai-sdk/openai');
+
+    expect(tools?.web_search).toMatchObject({
+      type: 'provider',
+      id: 'openai.web_search',
+      args: {
+        filters: { allowedDomains: ['openai.com'] },
+        userLocation: { type: 'approximate', country: 'US', timezone: 'America/Chicago' },
+      },
+    });
+  });
+
+  it('keeps client tools named web_search as ordinary functions', () => {
+    const tools = translateTools([{
+      name: 'web_search',
+      input_schema: { type: 'object', properties: { query: { type: 'string' } } },
+    }], '@ai-sdk/openai');
+    expect(tools?.web_search).not.toHaveProperty('id');
+    expect(tools?.web_search.execute).toBeUndefined();
+  });
+
+  it('rejects server web-search exclusions that OpenAI cannot enforce', () => {
+    expect(() => translateTools([{
+      type: 'web_search_20260209',
+      name: 'web_search',
+      blocked_domains: ['example.com'],
+    }], '@ai-sdk/openai')).toThrow('does not support blocked_domains');
+  });
 });
 
 describe('annotateToolNames', () => {
@@ -921,6 +956,74 @@ describe('writeAnthropicStream', () => {
       cache_creation_input_tokens: 0,
       cache_read_input_tokens: 0,
     });
+  });
+
+  it('maps OpenAI native web search to Anthropic server-tool blocks', async () => {
+    const { events } = await collect([
+      { type: 'start' },
+      {
+        type: 'tool-input-start',
+        id: 'ws_123',
+        toolName: 'web_search',
+        providerExecuted: true,
+      },
+      { type: 'tool-input-end', id: 'ws_123' },
+      {
+        type: 'tool-call',
+        toolCallId: 'ws_123',
+        toolName: 'web_search',
+        input: {},
+        providerExecuted: true,
+      },
+      {
+        type: 'tool-result',
+        toolCallId: 'ws_123',
+        toolName: 'web_search',
+        input: {},
+        output: {
+          action: { type: 'search', query: 'latest OpenAI news' },
+          sources: [
+            { type: 'url', url: 'https://openai.com/news/' },
+            { type: 'api', name: 'ignored-api-source' },
+          ],
+        },
+        providerExecuted: true,
+      },
+      { type: 'text-start', id: 'text_1' },
+      { type: 'text-delta', id: 'text_1', text: 'OpenAI published an update.' },
+      { type: 'text-end', id: 'text_1' },
+      { type: 'finish', finishReason: 'stop' },
+    ]);
+
+    const starts = events
+      .filter(event => event.event === 'content_block_start')
+      .map(event => event.data.content_block);
+    expect(starts).toEqual([
+      {
+        type: 'server_tool_use',
+        id: 'srvtoolu_ws_123',
+        name: 'web_search',
+        input: {},
+      },
+      {
+        type: 'web_search_tool_result',
+        tool_use_id: 'srvtoolu_ws_123',
+        content: [{
+          type: 'web_search_result',
+          url: 'https://openai.com/news/',
+          title: 'https://openai.com/news/',
+          encrypted_content: '',
+          page_age: null,
+        }],
+      },
+      { type: 'text', text: '' },
+    ]);
+    expect(events.find(event =>
+      event.event === 'content_block_delta'
+      && event.data.delta.type === 'input_json_delta'
+    )?.data.delta.partial_json).toBe('{"query":"latest OpenAI news"}');
+    expect(events.find(event => event.event === 'message_delta')?.data.delta.stop_reason)
+      .toBe('end_turn');
   });
 
   it('does not double-count the local estimate when final input is fully cached', async () => {
