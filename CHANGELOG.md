@@ -1,5 +1,85 @@
 # Changelog
 
+## [3.0.0](https://github.com/cgasgarth/clodex/compare/v2.1.6...v3.0.0) (2026-08-12)
+
+
+### ⚠ BREAKING CHANGES
+
+* **runtime:** migrate clodex to Bun
+
+### Features
+
+* add account-scoped usage and cost dashboard ([dee7431](https://github.com/cgasgarth/clodex/commit/dee7431e606407b53c5f3ab9cdcb02f4c89d23e6))
+* add account-scoped usage and cost dashboard ([c277e63](https://github.com/cgasgarth/clodex/commit/c277e6389884ca596c1a6398a45b0b4e0d2ecce8))
+* add daemon-wide Secondwind controls ([0ffc838](https://github.com/cgasgarth/clodex/commit/0ffc83880e1bb399b5b9b11d971184d85d353480))
+* add persistent daemon and native compact bridge ([63134c1](https://github.com/cgasgarth/clodex/commit/63134c1ada027ae697f770e7bc59480b48bd4b46))
+* add persistent daemon and native compact bridge ([22430b8](https://github.com/cgasgarth/clodex/commit/22430b8c6bfc2cdc651d828776ae509f65164e39))
+* add safe dashboard configuration ([174e1eb](https://github.com/cgasgarth/clodex/commit/174e1ebcc0c1110a68154e242f7aa77b6401d30d))
+* **dashboard:** toggle usage account scope ([#61](https://github.com/cgasgarth/clodex/issues/61)) ([e74ab69](https://github.com/cgasgarth/clodex/commit/e74ab69356bcfca4160afb891f5d955450f588b5))
+* let native compaction own OpenAI context lifecycle ([f19fba2](https://github.com/cgasgarth/clodex/commit/f19fba21bd0762d09f24e2d4e73d6f1c1b43c78f))
+* **models:** add Spark OAuth fallback ([00ed045](https://github.com/cgasgarth/clodex/commit/00ed045a52cfedab9900bf26640d5bfbdaa5cff9))
+* persist cache-aware Secondwind savings metrics ([04475df](https://github.com/cgasgarth/clodex/commit/04475df6ca486b8108767d977204a78d00542864))
+* persist Secondwind savings metrics ([a708bfe](https://github.com/cgasgarth/clodex/commit/a708bfe1f87b0302b5e8899c5b51cd4ad38823db))
+* **runtime:** migrate Clodex completely to Bun ([0e42d03](https://github.com/cgasgarth/clodex/commit/0e42d03dfba65fe9a48c77c5bd889b8328502d57))
+* **runtime:** migrate clodex to Bun ([70b2eef](https://github.com/cgasgarth/clodex/commit/70b2eefcf6b4167dac22b90c807a031f5b699e86))
+* show detailed compaction diagnostics ([#64](https://github.com/cgasgarth/clodex/issues/64)) ([68bdce4](https://github.com/cgasgarth/clodex/commit/68bdce4bc75a13017cd52436900912a6b0f8b3be))
+* support Claude Code 2.1.224 ([#65](https://github.com/cgasgarth/clodex/issues/65)) ([fb5ce39](https://github.com/cgasgarth/clodex/commit/fb5ce39e92a9bd68ed118797fb2695bb979dc6be))
+* use rolling dashboard usage ranges ([#52](https://github.com/cgasgarth/clodex/issues/52)) ([91d47d0](https://github.com/cgasgarth/clodex/commit/91d47d04d90de04dfe8c25f308f15f73231035d8))
+
+
+### Bug Fixes
+
+* align steering and streaming reliability ([#68](https://github.com/cgasgarth/clodex/issues/68)) ([301be8f](https://github.com/cgasgarth/clodex/commit/301be8fb335c131c1a133f2a1e6a9f7d39a5ad0f))
+* bound daemon native memory ([#57](https://github.com/cgasgarth/clodex/issues/57)) ([7cc75bc](https://github.com/cgasgarth/clodex/commit/7cc75bcbc04ec947200356a98c0b9d21b9972aca))
+* clarify dashboard view keys ([6f359de](https://github.com/cgasgarth/clodex/commit/6f359de3231054b54bfe8a551e0083919415d1a1))
+* clarify dashboard view keys ([afbf0ea](https://github.com/cgasgarth/clodex/commit/afbf0ea88cceba8a4886cf69823dd7c1ac68c139))
+* classify interrupted stream recovery ([#42](https://github.com/cgasgarth/clodex/issues/42)) ([a0978d5](https://github.com/cgasgarth/clodex/commit/a0978d5d69f4655d8dbb8e7a02d86da526c601b0))
+* **compaction:** cap thresholds by model window ([eed173c](https://github.com/cgasgarth/clodex/commit/eed173c3367560f84354f1156de3d0080b2a18fb))
+* **compaction:** harden durable agent recovery ([16a95c5](https://github.com/cgasgarth/clodex/commit/16a95c51d8f0ed884edccbc029252372e29df8f3))
+* **compaction:** preserve recovered live heads ([292c9fc](https://github.com/cgasgarth/clodex/commit/292c9fc913bd810b517225b10ee43cb8c2f6f770))
+* **compaction:** recover agent sessions across restarts ([8391d3f](https://github.com/cgasgarth/clodex/commit/8391d3f94c9caa3dbae1c29b706ae4cac8ab6019))
+* **compaction:** recover oversized tool turns ([5b59125](https://github.com/cgasgarth/clodex/commit/5b5912576de3d770234cbccf72378cb83182f92e))
+* **compaction:** recover oversized tool turns ([575c26a](https://github.com/cgasgarth/clodex/commit/575c26ada3adb905eb8853a1b4ad38ba268f5e88))
+* handle interrupted streams safely ([2577f27](https://github.com/cgasgarth/clodex/commit/2577f27a3bef1f4255b96017c253b28d05e8a0b0))
+* improve mid-turn steering and support Claude 2.1.227 ([#66](https://github.com/cgasgarth/clodex/issues/66)) ([2d5e2ca](https://github.com/cgasgarth/clodex/commit/2d5e2ca2e95189c407ed62233cbdf1e6a9248edf))
+* invalidate stale Claude timeout patches ([a1da28f](https://github.com/cgasgarth/clodex/commit/a1da28fafa23e0bb035efa418670d8443e9af9f4))
+* invalidate stale Claude timeout patches ([c01411c](https://github.com/cgasgarth/clodex/commit/c01411cd77a9c0978d452afc308246f65d16433d))
+* isolate daemon control plane ([#49](https://github.com/cgasgarth/clodex/issues/49)) ([e4b5e27](https://github.com/cgasgarth/clodex/commit/e4b5e27f33c20097f927442a426444026f78b71d))
+* keep daemon API key approval stable ([dcc9c33](https://github.com/cgasgarth/clodex/commit/dcc9c33e1a658ec7d879ef7dac6f2541b072f748))
+* keep dashboard available during panel timeouts ([1932353](https://github.com/cgasgarth/clodex/commit/193235383b72251b6d366c634546ef88e930a4d2))
+* keep dashboard available during panel timeouts ([8fb7ac1](https://github.com/cgasgarth/clodex/commit/8fb7ac14bae916addef723f7204faed98de28e4f))
+* keep dashboard device code visible ([85be7f7](https://github.com/cgasgarth/clodex/commit/85be7f7721734e571fb63ae5657c4b785f300e2f))
+* keep dashboard device code visible ([e428ef4](https://github.com/cgasgarth/clodex/commit/e428ef488d3efd28f1199a1a29760523a5c833f5))
+* keep transient MCP state out of replay history ([#63](https://github.com/cgasgarth/clodex/issues/63)) ([ef60868](https://github.com/cgasgarth/clodex/commit/ef6086894e0ea0407903931fb0ada3c9d5736501))
+* make local global installs repeatable ([#50](https://github.com/cgasgarth/clodex/issues/50)) ([d0e494c](https://github.com/cgasgarth/clodex/commit/d0e494c11d12ecb30d85d38f843f57c4ff2ad763))
+* make long operations timeout tolerant ([9a4c411](https://github.com/cgasgarth/clodex/commit/9a4c4114af5ecc5afe0e6a5e89648c6d169561e3))
+* make mid-turn steering reliable ([#67](https://github.com/cgasgarth/clodex/issues/67)) ([9a7a3e4](https://github.com/cgasgarth/clodex/commit/9a7a3e4bee607c35f6d1f3c494821beadf28745c))
+* make Secondwind savings auditable ([885e2a6](https://github.com/cgasgarth/clodex/commit/885e2a67e655e9514cef34e0d33ac5d7464c899b))
+* **oauth:** restore compact checkpoints after transcript replay ([#60](https://github.com/cgasgarth/clodex/issues/60)) ([b3f209a](https://github.com/cgasgarth/clodex/commit/b3f209a4bf20586fa0fff4e702adb00608774539))
+* **oauth:** surface in-band request rejections instead of an empty 200 ([#67](https://github.com/cgasgarth/clodex/issues/67)) ([53a83ba](https://github.com/cgasgarth/clodex/commit/53a83baade59a01c74ee1ad073831c366f25872b))
+* preserve compact anchors across account handoffs ([#62](https://github.com/cgasgarth/clodex/issues/62)) ([527827e](https://github.com/cgasgarth/clodex/commit/527827edb47e2475bb3fb4fbf76544f383f35eb2))
+* preserve transient steering priority ([#69](https://github.com/cgasgarth/clodex/issues/69)) ([f7c1c63](https://github.com/cgasgarth/clodex/commit/f7c1c6393201f24bfd49743168fb9a59c2faa81d))
+* **reasoning:** suppress reasoning.summary for gpt-5.3-codex-spark ([#65](https://github.com/cgasgarth/clodex/issues/65)) ([2a65c6b](https://github.com/cgasgarth/clodex/commit/2a65c6b8df164c704cb4cd6e3dc52a95e4d5e52a))
+* recover provider message and status from mid-stream error frames ([#68](https://github.com/cgasgarth/clodex/issues/68)) ([6934585](https://github.com/cgasgarth/clodex/commit/6934585f828b3fb46fd3bc99cdb2782869aafbab))
+* relax daemon and model idle timeouts ([e0c057f](https://github.com/cgasgarth/clodex/commit/e0c057fd2544a2b6d6d83bf64d0bdc53b25d94ba))
+* relax daemon and model idle timeouts ([cd26fb0](https://github.com/cgasgarth/clodex/commit/cd26fb061d3d17a9588ef8df3630a9bb6a6d1807))
+* **release:** use valid fork bootstrap ([#72](https://github.com/cgasgarth/clodex/issues/72)) ([cfdf168](https://github.com/cgasgarth/clodex/commit/cfdf16811d429217bfd314d4f7dea1509724b868))
+* report measured Secondwind token savings ([0a96a85](https://github.com/cgasgarth/clodex/commit/0a96a85785d19c5d7fb865090fbfc1e891e2e1cd))
+* restore compacted resumes without idle disconnects ([#51](https://github.com/cgasgarth/clodex/issues/51)) ([454bfa1](https://github.com/cgasgarth/clodex/commit/454bfa10626574f3a5c46abcf29b0fabfe8e9b57))
+* retry buffered child-agent streams ([#44](https://github.com/cgasgarth/clodex/issues/44)) ([e5a1b71](https://github.com/cgasgarth/clodex/commit/e5a1b7132b9d4a789f9cebeca651094afc897191))
+* route background Claude requests ([#56](https://github.com/cgasgarth/clodex/issues/56)) ([62d8edd](https://github.com/cgasgarth/clodex/commit/62d8edd1e6188e822a0d24e7c40b32a330649196))
+* scope Secondwind savings percentage ([a57479e](https://github.com/cgasgarth/clodex/commit/a57479e6a847f2c97b0d9c19c1aaae1f929a7d12))
+* update Luna and Terra API pricing ([e43770a](https://github.com/cgasgarth/clodex/commit/e43770a0f96591b77c30e4275f8ed46c57f4e1f9))
+
+
+### Performance Improvements
+
+* aggregate daemon metrics writes ([ee87704](https://github.com/cgasgarth/clodex/commit/ee87704b10f5d2d16dfb1eb4ab45b2c22d70a13b))
+* **oauth:** cache canonical conversation items ([#59](https://github.com/cgasgarth/clodex/issues/59)) ([8141c99](https://github.com/cgasgarth/clodex/commit/8141c9923243fd3964f5f666f49da2700c5a62f0))
+* randomly schedule Secondwind rewrites ([#53](https://github.com/cgasgarth/clodex/issues/53)) ([79a63ad](https://github.com/cgasgarth/clodex/commit/79a63ad5e66b3af5fa7ed26768a757af1743369f))
+* reduce Secondwind and logging overhead ([#54](https://github.com/cgasgarth/clodex/issues/54)) ([b67b5b0](https://github.com/cgasgarth/clodex/commit/b67b5b0fac052ab73dfbe2d3dc7f85abab43eaee))
+* **secondwind:** reuse conversation sessions ([#58](https://github.com/cgasgarth/clodex/issues/58)) ([d530f45](https://github.com/cgasgarth/clodex/commit/d530f459ab870a26de7cc9f5cc6eaca1ec700f6a))
+
 ## [2.1.6](https://github.com/bman654/clodex/compare/v2.1.5...v2.1.6) (2026-07-29)
 
 
