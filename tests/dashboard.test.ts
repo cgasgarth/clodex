@@ -91,9 +91,10 @@ describe('dashboard usage chart', () => {
 });
 
 describe('dashboard account identity', () => {
-  it('uses only the OpenAI email and never a legacy account label', () => {
+  it('uses an OpenAI email or a provider account name', () => {
     expect(accountDisplayName({ email: 'person@example.com' })).toBe('person@example.com');
-    expect(accountDisplayName({})).toBe('Email unavailable');
+    expect(accountDisplayName({ name: 'xAI (SuperGrok)' })).toBe('xAI (SuperGrok)');
+    expect(accountDisplayName({})).toBe('Account identity unavailable');
   });
 });
 

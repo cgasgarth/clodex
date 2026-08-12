@@ -99,6 +99,42 @@ function UsageBar({
   );
 }
 
+function formatCents(value: number | undefined): string {
+  return value === undefined ? 'unknown' : `$${(value / 100).toFixed(2)}`;
+}
+
+function AccountUsageDetails({ usage }: { usage: NonNullable<Account['usage']> }): React.ReactNode {
+  return (
+    <Box paddingLeft={4} flexDirection="column">
+      {usage.primaryUsedPercent !== undefined && (
+        <UsageBar label="5-hour" used={usage.primaryUsedPercent} resetAt={usage.primaryResetAt} />
+      )}
+      {usage.weeklyUsedPercent !== undefined && (
+        <UsageBar label="weekly" used={usage.weeklyUsedPercent} resetAt={usage.weeklyResetAt} />
+      )}
+      {usage.monthlyUsedPercent !== undefined && (
+        <UsageBar label="monthly" used={usage.monthlyUsedPercent} resetAt={usage.monthlyResetAt} />
+      )}
+      {(usage.usedCents !== undefined || usage.limitCents !== undefined) && (
+        <Text>
+          included {formatCents(usage.usedCents)} used
+          {usage.limitCents !== undefined ? ` of ${formatCents(usage.limitCents)}` : ''}
+        </Text>
+      )}
+      {(usage.onDemandUsedCents !== undefined || usage.onDemandLimitCents !== undefined) && (
+        <Text>
+          on-demand {formatCents(usage.onDemandUsedCents)} used
+          {usage.onDemandLimitCents !== undefined ? ` of ${formatCents(usage.onDemandLimitCents)}` : ''}
+        </Text>
+      )}
+      {usage.prepaidBalanceCents !== undefined && (
+        <Text>prepaid balance {formatCents(usage.prepaidBalanceCents)}</Text>
+      )}
+      {usage.stale && <Text color="yellow">usage stale{usage.error ? ` · ${usage.error}` : ''}</Text>}
+    </Box>
+  );
+}
+
 function Chart({
   title,
   values,
@@ -500,6 +536,10 @@ function Dashboard(): React.ReactNode {
       }
       if (input === 'x' && accounts[selectedIndex]) {
         const account = accounts[selectedIndex];
+        if (!account.managed) {
+          setMessage(`${accountDisplayName(account)} sign-in is managed under Providers.`);
+          return;
+        }
         if (pendingLogoutId === account.id) {
           logout(account);
         } else {
@@ -516,7 +556,12 @@ function Dashboard(): React.ReactNode {
         setSelectedIndex(index => Math.max(0, index - 1));
         return;
       }
-      if (key.return && accounts[selectedIndex] && !accounts[selectedIndex].selected) {
+      if (
+        key.return
+        && accounts[selectedIndex]
+        && accounts[selectedIndex].managed
+        && !accounts[selectedIndex].selected
+      ) {
         const account = accounts[selectedIndex];
         if (accountAction) return;
         setAccountAction(true);
@@ -760,31 +805,21 @@ function Dashboard(): React.ReactNode {
       </>
     );
   } else if (view === 'accounts') {
-    controls = `↑/↓ account · Enter select · l login · x x logout · ${VIEW_SWITCH_HINT} · r refresh · q quit`;
+    controls = `↑/↓ account · Enter select OpenAI · l login OpenAI · x x logout · ${VIEW_SWITCH_HINT} · r refresh · q quit`;
     content = (
       <>
         <Box borderStyle="round" paddingX={1} flexDirection="column">
-          <Text bold>Accounts <Text dimColor>(manual selection; no failover)</Text></Text>
-          <Text dimColor>Changes affect new Claude launches; existing sessions remain pinned.</Text>
+          <Text bold>Accounts and subscription limits</Text>
+          <Text dimColor>OpenAI selection affects new Claude launches; provider accounts are read-only here.</Text>
           {accounts.length === 0
             ? <Text dimColor>No managed accounts. Press l to sign in.</Text>
             : accounts.map((account, index) => (
                 <Box key={account.id} flexDirection="column">
                   <Text color={index === selectedIndex ? 'cyan' : undefined}>
-                    {index === selectedIndex ? '›' : ' '} {account.selected ? '●' : '○'} {accountDisplayName(account)}
+                    {index === selectedIndex ? '›' : ' '} {account.selected ? '●' : account.managed ? '○' : '◇'} {accountDisplayName(account)}
                     {account.plan ? ` · ${account.plan}` : ''}
                   </Text>
-                  {account.usage && (
-                    <Box paddingLeft={4} flexDirection="column">
-                      {account.usage.primaryUsedPercent !== undefined && (
-                        <UsageBar label="5-hour" used={account.usage.primaryUsedPercent} resetAt={account.usage.primaryResetAt} />
-                      )}
-                      {account.usage.weeklyUsedPercent !== undefined && (
-                        <UsageBar label="weekly" used={account.usage.weeklyUsedPercent} resetAt={account.usage.weeklyResetAt} />
-                      )}
-                      {account.usage.stale && <Text color="yellow">usage stale{account.usage.error ? ` · ${account.usage.error}` : ''}</Text>}
-                    </Box>
-                  )}
+                  {account.usage && <AccountUsageDetails usage={account.usage} />}
                 </Box>
               ))}
         </Box>

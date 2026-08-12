@@ -138,7 +138,7 @@ export function parseProvidersArgs(args: string[]): {
 }
 
 export function providersHelpText(): string {
-  return `${pc.bold('clodex providers')} — manage your OpenAI providers
+  return `${pc.bold('clodex providers')} — manage OpenAI and Grok providers
 
 ${pc.bold('Usage:')}
   clodex providers
@@ -147,11 +147,12 @@ ${pc.bold('Usage:')}
   clodex providers remove <id>
   clodex providers refresh-models [id]
   clodex providers auth openai
+  clodex providers auth xai
 
 ${pc.bold('Subcommands:')}
   (none)      Provider hub wizard
-  add         Add OpenAI with an API key
-  auth        Sign in with ChatGPT/Codex-plan OAuth (device code)
+  add         Choose subscription sign-in or add an OpenAI API key
+  auth        Sign in with ChatGPT or SuperGrok OAuth (device code)
   list        Show configured providers
   remove      Remove a provider by id
   refresh-models  Update cached model lists`;
@@ -262,7 +263,7 @@ async function runProvidersRefreshModels(providerId?: string): Promise<number> {
 function runProvidersList(): number {
   const entries = resolveProvidersForDisplay();
   if (entries.length === 0) {
-    p.log.info('No providers configured. Run clodex providers add or clodex providers auth openai.');
+    p.log.info('No providers configured. Run clodex providers add, or sign in with openai or xai.');
     return 0;
   }
 
@@ -333,9 +334,14 @@ async function runProvidersAddWithCleanupState(
     message: 'Add a provider',
     options: [
       {
-        value: 'oauth',
+        value: 'openai-oauth',
         label: 'Sign in with ChatGPT (Plus/Pro plan)',
         hint: 'OAuth device code — no API key needed',
+      },
+      {
+        value: 'xai-oauth',
+        label: 'Sign in with SuperGrok',
+        hint: 'OAuth device code — Grok 4.6 only',
       },
       {
         value: 'apikey',
@@ -349,8 +355,11 @@ async function runProvidersAddWithCleanupState(
     return 0;
   }
 
-  if (choice === 'oauth') {
+  if (choice === 'openai-oauth') {
     return runProvidersAuthWithCleanupState('openai', undefined, cleanupState);
+  }
+  if (choice === 'xai-oauth') {
+    return runProvidersAuthWithCleanupState('xai', undefined, cleanupState);
   }
   if (choice === 'apikey') return runTemplateAddFlow(cleanupState);
   return 0;
@@ -524,7 +533,7 @@ async function runProvidersHub(): Promise<number> {
     options.push({ value: 'done', label: 'Done', hint: '' });
 
     const choice = await p.select({
-      message: entries.length > 0 ? 'Your OpenAI providers' : 'Get started',
+      message: entries.length > 0 ? 'Your providers' : 'Get started',
       options,
     });
     if (p.isCancel(choice) || choice === 'done') {
@@ -592,6 +601,6 @@ export async function runProvidersCommand(args: string[]): Promise<number> {
       runProvidersAuthWithCleanupState(parsed.removeId!, parsed.authMethod, state));
   }
 
-  relayIntro('Your OpenAI providers');
+  relayIntro('Your providers');
   return runProvidersHub();
 }

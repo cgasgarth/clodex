@@ -23,11 +23,17 @@ describe('provider templates', () => {
   it('looks up template by id', () => {
     expect(getTemplateById('openai')?.npm).toBe('@ai-sdk/openai');
     expect(getTemplateById('openai-oauth')?.authType).toBe('oauth');
+    expect(getTemplateById('xai-oauth')).toMatchObject({
+      authType: 'oauth',
+      npm: '@ai-sdk/xai',
+      staticModels: [{ id: 'grok-4.6', name: 'Grok 4.6' }],
+    });
+    expect(getTemplateById('xai')).toBeUndefined();
     expect(getTemplateById('groq')).toBeUndefined();
   });
 
-  it('lists only the OpenAI OAuth template for discovery surfaces', () => {
-    expect(listVisibleOAuthTemplates().map(t => t.id)).toEqual(['openai-oauth']);
+  it('lists the subscription OAuth templates for discovery surfaces', () => {
+    expect(listVisibleOAuthTemplates().map(t => t.id)).toEqual(['openai-oauth', 'xai-oauth']);
     expect(listVisibleOAuthTemplates(['openai-oauth']).map(t => t.id)).not.toContain('openai-oauth');
   });
 

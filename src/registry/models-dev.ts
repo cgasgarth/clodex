@@ -64,7 +64,6 @@ const REGISTRY_TO_MODELS_DEV: Record<string, string> = {
   togetherai: 'together',
   cerebras: 'cerebras',
   deepinfra: 'deepinfra',
-  xai: 'xai',
   'xai-oauth': 'xai',
   perplexity: 'perplexity',
   cohere: 'cohere',

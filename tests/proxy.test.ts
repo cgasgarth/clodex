@@ -201,7 +201,7 @@ describe('aliasModelId', () => {
   });
 
   it('prefixes non-claude ids with anthropic-{providerId}__', () => {
-    expect(aliasModelId('grok-4.3', 'xai')).toBe('anthropic-xai__grok-4.3');
+    expect(aliasModelId('grok-4.6', 'xai-oauth')).toBe('anthropic-xai-oauth__grok-4.6');
   });
 
   it('uses stable provider id slug in alias', () => {

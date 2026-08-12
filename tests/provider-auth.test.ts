@@ -33,6 +33,15 @@ vi.mock('../src/oauth/openai.js', () => ({
     accountId: 'acct-123',
   })),
 }));
+vi.mock('../src/oauth/xai.js', () => ({
+  runXaiDeviceCodeFlow: vi.fn(async () => ({
+    tokens: {
+      access_token: 'xai-access',
+      refresh_token: 'xai-refresh',
+      expires_in: 3600,
+    },
+  })),
+}));
 vi.mock('../src/env.js', () => {
   const importOriginal = <T>() => importActual<T>('../src/env.js', import.meta.url);
   const actual = importOriginal<typeof import('../src/env.js')>();
@@ -129,6 +138,7 @@ import {
   saveProviderCredential,
 } from '../src/env.js';
 import { runOpenAiDeviceCodeFlow } from '../src/oauth/openai.js';
+import { runXaiDeviceCodeFlow } from '../src/oauth/xai.js';
 import { reconcilePendingCredentialDeletes } from '../src/registry/credential-lifecycle.js';
 import * as cleanupJournal from '../src/registry/credential-cleanup-journal.js';
 import { loadRegistryStrict, saveRegistry } from '../src/registry/io.js';
@@ -180,6 +190,13 @@ describe('authenticateProvider', () => {
     asMocked(runOpenAiDeviceCodeFlow).mockReset().mockResolvedValue({
       tokens: { access_token: 'openai-access', refresh_token: 'openai-refresh', expires_in: 3600 },
       accountId: 'acct-123',
+    });
+    asMocked(runXaiDeviceCodeFlow).mockReset().mockResolvedValue({
+      tokens: {
+        access_token: 'xai-access',
+        refresh_token: 'xai-refresh',
+        expires_in: 3600,
+      },
     });
     asMocked(refreshProviderModels).mockReset().mockResolvedValue({
       id: 'openai-oauth',
@@ -528,7 +545,24 @@ describe('authenticateProvider', () => {
     expect(registryState.current.providers).toHaveLength(1);
   });
 
-  it('rejects non-OpenAI providers', async () => {
-    await expect(authenticateProvider('xai')).rejects.toThrow('only available for openai');
+  it('runs the xAI device flow and creates a subscription-only provider', async () => {
+    const result = await authenticateProvider('xai');
+
+    expect(runXaiDeviceCodeFlow).toHaveBeenCalledOnce();
+    expect(result.registryProvider).toMatchObject({
+      id: 'xai-oauth',
+      templateId: 'xai-oauth',
+      name: 'xAI (SuperGrok)',
+      authType: 'oauth',
+      api: {
+        npm: '@ai-sdk/xai',
+        url: 'https://cli-chat-proxy.grok.com/v1',
+      },
+    });
+    expect(refreshProviderModels).toHaveBeenCalledWith('xai-oauth', 'xai-access');
+  });
+
+  it('rejects providers without a native OAuth flow', async () => {
+    await expect(authenticateProvider('github-copilot')).rejects.toThrow('available for openai');
   });
 });

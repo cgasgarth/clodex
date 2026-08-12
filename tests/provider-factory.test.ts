@@ -87,7 +87,7 @@ describe('isSdkMigratedNpm', () => {
 });
 
 describe('modelPrefersResponsesApi', () => {
-  it('detects OpenAI and xAI responses-only models', () => {
+  it('detects OpenAI responses-only models', () => {
     expect(modelPrefersResponsesApi('gpt-5.5')).toBe(true);
     expect(modelPrefersResponsesApi('gpt-5.5-fast')).toBe(true);
     expect(modelPrefersResponsesApi('gpt-5.6')).toBe(true);
@@ -96,7 +96,6 @@ describe('modelPrefersResponsesApi', () => {
     expect(modelPrefersResponsesApi('gpt-5.6-terra')).toBe(true);
     expect(modelPrefersResponsesApi('gpt-5.6-luna')).toBe(true);
     expect(modelPrefersResponsesApi('gpt-5.2-pro')).toBe(true);
-    expect(modelPrefersResponsesApi('grok-4.20-multi-agent')).toBe(true);
     expect(modelPrefersResponsesApi('gpt-4o')).toBe(false);
     expect(modelPrefersResponsesApi('gpt-5.2')).toBe(false);
   });
@@ -227,21 +226,14 @@ describe('getReasoningCapabilities', () => {
     expect(caps.levels).toEqual(['low', 'medium', 'high']);
   });
 
-  it('returns empty levels for grok-build-0.1 (internal reasoning only)', () => {
-    const caps = getReasoningCapabilities('@ai-sdk/xai', 'grok-build-0.1');
-    expect(caps.levels).toEqual([]);
-  });
-
-  it('returns effort levels for grok-4.3, defaulting to low per xAI docs', () => {
-    const caps = getReasoningCapabilities('@ai-sdk/xai', 'grok-4.3');
-    expect(caps.levels).toEqual(['none', 'low', 'medium', 'high']);
-    expect(caps.defaultLevel).toBe('low');
-  });
-
-  it('returns effort levels for grok-4.5, defaulting to high per xAI docs', () => {
-    const caps = getReasoningCapabilities('@ai-sdk/xai', 'grok-4.5');
-    expect(caps.levels).toEqual(['none', 'low', 'medium', 'high']);
+  it('returns the documented SuperGrok effort levels for Grok 4.6', () => {
+    const caps = getReasoningCapabilities('@ai-sdk/xai', 'grok-4.6');
+    expect(caps.levels).toEqual(['low', 'medium', 'high', 'xhigh']);
     expect(caps.defaultLevel).toBe('high');
+  });
+
+  it('does not expose old Grok models', () => {
+    expect(getReasoningCapabilities('@ai-sdk/xai', 'grok-4.5').levels).toEqual([]);
   });
 
   it('returns high/max/off for deepseek-v4-flash', () => {
@@ -338,6 +330,15 @@ describe('effortProviderOptions + deepMergeProviderOptions', () => {
     });
   });
 
+  it('keeps Grok 4.6 reasoning replay private and preserves each effort level', () => {
+    expect(thinkingProviderOptions('@ai-sdk/xai')).toEqual({ xai: { store: false } });
+    for (const effort of ['low', 'medium', 'high', 'xhigh']) {
+      expect(effortProviderOptions('@ai-sdk/xai', effort, 'grok-4.6')).toEqual({
+        xai: { reasoningEffort: effort },
+      });
+    }
+  });
+
   it('maps Vertex Claude effort to Anthropic thinking options', () => {
     expect(effortProviderOptions(VERTEX_ANTHROPIC_NPM, 'medium', 'claude-sonnet-4-6')).toEqual({
       anthropic: { thinking: { type: 'adaptive', effort: 'medium' } },
@@ -346,6 +347,52 @@ describe('effortProviderOptions + deepMergeProviderOptions', () => {
 });
 
 describe('createLanguageModel', () => {
+  it('routes only Grok 4.6 OAuth through the SuperGrok Responses proxy', async () => {
+    const responses = vi.fn((modelId: string) => ({ modelId, provider: 'xai-responses' }));
+    const createXai = vi.fn(() => ({ responses }));
+    const xaiFetch = vi.fn();
+    const createXaiFetch = vi.fn(() => xaiFetch);
+
+    const model = await createLanguageModel({
+      npm: '@ai-sdk/xai',
+      modelId: 'grok-4.6',
+      apiKey: 'subscription-token',
+      authType: 'oauth',
+      providerId: 'xai-oauth',
+      claudeSessionId: 'session-123',
+    }, {
+      createXai: createXai as never,
+      createXaiSubscriptionFetch: createXaiFetch as never,
+    });
+
+    expect(createXaiFetch).toHaveBeenCalledWith('grok-4.6', 'session-123');
+    expect(createXai).toHaveBeenCalledWith({
+      apiKey: 'subscription-token',
+      baseURL: 'https://cli-chat-proxy.grok.com/v1',
+      fetch: xaiFetch,
+    });
+    expect(responses).toHaveBeenCalledWith('grok-4.6');
+    expect(model).toEqual({ modelId: 'grok-4.6', provider: 'xai-responses' } as never);
+  });
+
+  it('rejects xAI API keys and old Grok models', async () => {
+    await expect(createLanguageModel({
+      npm: '@ai-sdk/xai',
+      modelId: 'grok-4.6',
+      apiKey: 'api-key',
+      authType: 'api',
+      providerId: 'xai',
+    })).rejects.toThrow('API-key access is not supported');
+
+    await expect(createLanguageModel({
+      npm: '@ai-sdk/xai',
+      modelId: 'grok-4.5',
+      apiKey: 'subscription-token',
+      authType: 'oauth',
+      providerId: 'xai-oauth',
+    })).rejects.toThrow('only grok-4.6');
+  });
+
   it('passes the resolved native-compaction threshold into the OAuth transport', async () => {
     const responsesFetch = vi.fn();
     const createResponsesWebSocketFetch = vi.fn(() => responsesFetch);

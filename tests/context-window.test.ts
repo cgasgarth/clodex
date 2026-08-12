@@ -23,11 +23,7 @@ describe('contextWindowFromHeuristics', () => {
     ['minimax-m2.7', 204_800],
     ['mistral-large', 262_144],
     ['llama-3.3-70b', 131_072],
-    ['grok-4.20-0309-reasoning', 1_000_000],
-    ['grok-4.5', 500_000],
-    ['grok-4.5-latest', 500_000],
-    ['grok-4', 131_072],
-    ['grok-3-mini', 131_072],
+    ['grok-4.6', 500_000],
     ['solar-mini', 32_768],
     ['totally-unknown-model-xyz', DEFAULT_CONTEXT_WINDOW],
   ])('%s → %i', (id, expected) => {

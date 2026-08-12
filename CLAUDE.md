@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-**clodex** bridges Claude Code to OpenAI models — OpenAI API key (`openai`) or ChatGPT/Codex-plan OAuth (`openai-oauth`). It is a trimmed fork of relay-ai (full commit history preserved). Prime directive of the fork applies to future work too: the translation, caching, auto-compaction, and OAuth-continuation code took extensive real-world testing — prefer surgical changes over restructuring.
+**clodex** bridges Claude Code to OpenAI and Grok models — OpenAI API key (`openai`), ChatGPT/Codex-plan OAuth (`openai-oauth`), or SuperGrok OAuth (`xai-oauth`). It is a trimmed fork of relay-ai (full commit history preserved). Prime directive of the fork applies to future work too: the translation, caching, auto-compaction, and OAuth-continuation code took extensive real-world testing — prefer surgical changes over restructuring.
 
 ## Release workflow
 
@@ -77,7 +77,9 @@ clodex-claude [args...]     # second bin: launch claude bridged to a running clo
 
 **Critical URL constraint:** Anthropic-passthrough base URLs must NOT include `/v1` — the Anthropic SDK appends `/v1/messages` itself.
 
-**Provider registry** (`src/registry/`): only two providers exist — templates in `src/provider-templates.ts` (`openai` API-key template with `https://api.openai.com/v1`, and `openai-oauth`). `provider-auth.ts` implements the OpenAI device-code OAuth flow; `refresh-models.ts` fetches the model list (3-tier fetch for OAuth). Materialization (`materialize.ts`) turns registry providers into `LocalProvider`s with per-model `npm`/`baseUrl`/`upstreamModelId`.
+**Provider registry** (`src/registry/`): templates in `src/provider-templates.ts` are `openai` (API key), `openai-oauth` (ChatGPT/Codex plan), and `xai-oauth` (SuperGrok subscription only). There is no xAI API-key provider. `provider-auth.ts` implements the native device-code flows. OpenAI OAuth uses 3-tier model discovery; xAI OAuth uses one static `grok-4.6` model. SuperGrok inference must use the Responses endpoint at `https://cli-chat-proxy.grok.com/v1` with the Grok CLI token headers; never send its OAuth token to `api.x.ai`. Materialization (`materialize.ts`) turns registry providers into `LocalProvider`s with per-model `npm`/`baseUrl`/`upstreamModelId`.
+
+**SuperGrok dashboard + Secondwind:** `src/daemon/xai-usage.ts` reads the pinned CLI proxy `/user` and `/billing?format=credits` contracts. The Accounts view shows SuperGrok as a read-only provider account; OpenAI remains the only multi-account selection system. The daemon's provider-independent optimizer runs before SDK translation, so Grok requests pass through Secondwind exactly like other translated routes.
 
 Registry writes use atomic hard-link lock publication, so the filesystem containing `CLODEX_HOME` must support hard links. A parseable lock owned by a live PID is never reclaimed based on age; contenders wait for a bounded interval and fail with the owner PID. Malformed locks and locks owned by dead PIDs remain reclaimable. This live-owner rule is what makes the final ownership check before `providers.json` publication meaningful because a concurrent process cannot invalidate a live writer between its check and rename.
 
@@ -120,6 +122,6 @@ Registry writes use atomic hard-link lock publication, so the filesystem contain
 - `--dry-run` skips all writes (including bridge-mode persistence).
 - The `::ts::` separator in tool_use ids encodes reasoning signatures for round-tripping; would only break if a signature literally contained `::ts::`.
 - In endpoint switch-menu mode the displayed context window reflects the **launch** model and does not update on live `/model` switch (Claude Code fetches `/v1/models` once at startup). Proxy mode + `clodex patch` reports correct per-model windows.
-- Cost display in Claude Code is always inaccurate for OpenAI models (Claude Code applies its own pricing table).
+- Cost display in Claude Code is always inaccurate for OpenAI and Grok models (Claude Code applies its own pricing table).
 - `MAX_MODEL_CATALOG = 20` (`constants.ts`) — favorites cap and max catalog routes.
 - OpenAI catalog ids may differ from upstream API ids — `upstreamModelId` carries the real API id.

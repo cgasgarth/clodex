@@ -26,6 +26,7 @@ import {
   CHATGPT_CODEX_UNSUPPORTED_MODELS,
   GPT_5_6_CONTEXT_WINDOW,
 } from '../data/openai-oauth-models.js';
+import { buildXaiOAuthModels } from '../data/xai-oauth-models.js';
 import { modelPrefersResponsesApi } from '../provider-factory.js';
 import { deriveBrand } from '../models.js';
 import { resolveContextWindow } from '../context-window.js';
@@ -52,6 +53,7 @@ export interface RefreshModelsResult {
  * - OpenAI OAuth: Fetch from chatgpt.com/backend-api/models using the OAuth access token.
  *   Falls back to static seed on network failure or unexpected response format.
  *   Note: api.openai.com/v1/models rejects OAuth tokens — never call that endpoint here.
+ * - xAI OAuth: Keep the single supported SuperGrok model from the static seed.
  */
 async function refreshOAuthProvider(
   provider: RegistryProvider,
@@ -59,6 +61,7 @@ async function refreshOAuthProvider(
 ): Promise<{ models: CachedModel[]; baseUrl?: string; source: 'live' | 'seed'; failureReason?: string }> {
   const tpl = provider.templateId;
   if (tpl === 'openai' || tpl === 'openai-oauth') return refreshOpenAiOAuthModels(accessToken);
+  if (tpl === 'xai-oauth') return { models: buildXaiOAuthModels(), source: 'seed' };
   throw new Error(`refreshOAuthProvider: unsupported template "${tpl}"`);
 }
 
@@ -357,7 +360,12 @@ export async function refreshProviderModels(
     let baseUrl: string | undefined;
     let oauthFallbackReason: string | undefined;
 
-    if (provider.authType === 'oauth' && (provider.templateId === 'openai' || provider.id === 'openai-oauth')) {
+    if (provider.authType === 'oauth' && (
+      provider.templateId === 'openai'
+      || provider.id === 'openai-oauth'
+      || provider.templateId === 'xai-oauth'
+      || provider.id === 'xai-oauth'
+    )) {
       // OAuth tokens are not valid API keys for the developer endpoints.
       // OpenAI: ChatGPT JWT rejected by api.openai.com; no /v1/models on ChatGPT backend.
       if (!apiKey) {
@@ -369,8 +377,9 @@ export async function refreshProviderModels(
         };
       }
       const oauthResult = await refreshOAuthProvider(provider, apiKey);
+      const staticOnly = provider.templateId === 'xai-oauth' || provider.id === 'xai-oauth';
       const failureDetail = oauthResult.failureReason ? ` (${oauthResult.failureReason})` : '';
-      if (oauthResult.source === 'seed' && cachedModelCount(provider) > 0) {
+      if (!staticOnly && oauthResult.source === 'seed' && cachedModelCount(provider) > 0) {
         // Live discovery failed — keep the existing cache (which may already include
         // models newer than the built-in fallback list) instead of overwriting it.
         return skipWithCachedModels(
@@ -379,7 +388,7 @@ export async function refreshProviderModels(
           + "overwriting it with clodex's built-in fallback list. Try refreshing again later.",
         );
       }
-      if (oauthResult.source === 'seed') {
+      if (!staticOnly && oauthResult.source === 'seed') {
         oauthFallbackReason = `Live model discovery failed${failureDetail} — showing clodex's built-in fallback `
           + 'model list, which may not include the newest models yet. Try refreshing again later.';
       }

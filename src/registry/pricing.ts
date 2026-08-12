@@ -59,7 +59,6 @@ const TEMPLATE_TO_PRICING_PLATFORM: Record<string, string> = {
   togetherai: 'together',
   cerebras: 'cerebras',
   deepinfra: 'deepinfra',
-  xai: 'xai',
   'xai-oauth': 'xai',
   perplexity: 'perplexity',
   cohere: 'cohere',
