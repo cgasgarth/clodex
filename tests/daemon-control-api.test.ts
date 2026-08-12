@@ -122,7 +122,7 @@ describe('daemon control API', () => {
         select,
         createLaunchTicket: () => ({
           ticket: 'opaque',
-          accountId: 'one',
+          accountIds: { 'openai-oauth': 'one' },
           accountLabel: 'One',
         }),
       },
@@ -226,12 +226,16 @@ describe('daemon control API', () => {
         + '&bucketMinutes=invalid',
         { socketPath },
       )).rejects.toThrow('bucketMinutes must be a finite number');
-      const launch = await daemonControlRequest<{ ticket: string }>('/v1/launches/attach', {
+      const launch = await daemonControlRequest<{
+        ticket: string;
+        accountIds: Record<string, string>;
+      }>('/v1/launches/attach', {
         socketPath,
         method: 'POST',
         body: {},
       });
       expect(launch.ticket).toBe('opaque');
+      expect(launch.accountIds).toEqual({ 'openai-oauth': 'one' });
       await daemonControlRequest('/v1/accounts/one/select', {
         socketPath,
         method: 'POST',

@@ -3,9 +3,10 @@ import { Box, Text, render, useApp, useInput } from 'ink';
 import { daemonControlRequest } from './daemon/control-client.js';
 import { DASHBOARD_USAGE_REQUEST_TIMEOUT_MS } from './timeouts.js';
 import {
-  loginOpenAiAccount,
-  logoutOpenAiAccount,
+  loginProviderAccount,
+  logoutProviderAccount,
 } from './daemon/account-command.js';
+import type { ManagedOAuthProviderId } from './daemon/account-store.js';
 import {
   API_PRICING_AS_OF,
   API_PRICING_SOURCE,
@@ -233,8 +234,7 @@ function Dashboard(): React.ReactNode {
       else if (!snapshot.reachable) setStatus(null);
       if (snapshot.accounts) {
         setAccounts(snapshot.accounts);
-        const current = snapshot.accounts.findIndex(account => account.selected);
-        if (current >= 0) setSelectedIndex(current);
+        setSelectedIndex(index => Math.min(index, Math.max(0, snapshot.accounts!.length - 1)));
       }
       if (snapshot.diagnostics) setDiagnostics(snapshot.diagnostics);
       if (snapshot.diagnosticLogMode) setDiagnosticLogMode(snapshot.diagnosticLogMode);
@@ -280,8 +280,7 @@ function Dashboard(): React.ReactNode {
       );
       if (sequence !== usageRefreshSequence.current) return;
       setAccounts(nextAccounts.accounts);
-      const current = nextAccounts.accounts.findIndex(account => account.selected);
-      if (current >= 0) setSelectedIndex(current);
+      setSelectedIndex(index => Math.min(index, Math.max(0, nextAccounts.accounts.length - 1)));
     } catch (error) {
       if (sequence !== usageRefreshSequence.current) return;
       setMessage(`Account usage refresh failed · ${requestFailure(error)}`);
@@ -290,15 +289,16 @@ function Dashboard(): React.ReactNode {
     }
   }, []);
 
-  const login = useCallback(() => {
+  const login = useCallback((providerId: ManagedOAuthProviderId) => {
     if (accountAction) return;
     setAccountAction(true);
     setDeviceCode(undefined);
-    setMessage('Starting OpenAI sign-in…');
-    loginOpenAiAccount({
+    const providerName = providerId === 'openai-oauth' ? 'OpenAI' : 'xAI';
+    setMessage(`Starting ${providerName} sign-in…`);
+    loginProviderAccount(providerId, {
       onDeviceCode: ({ url, userCode }) => {
         setDeviceCode({ url, userCode });
-        setMessage('Browser opened; complete OpenAI sign-in below.');
+        setMessage(`Browser opened; complete ${providerName} sign-in below.`);
       },
     }).then(
       account => {
@@ -356,7 +356,7 @@ function Dashboard(): React.ReactNode {
   const logout = useCallback((account: Account) => {
     if (accountAction) return;
     setAccountAction(true);
-    logoutOpenAiAccount(account.id).then(
+    logoutProviderAccount(account.id).then(
       email => {
         setPendingLogoutId(undefined);
         setMessage(`Signed out ${email}`);
@@ -534,16 +534,16 @@ function Dashboard(): React.ReactNode {
       }
     }
     if (view === 'accounts') {
-      if (input === 'l') {
-        login();
+      if (input === 'o') {
+        login('openai-oauth');
+        return;
+      }
+      if (input === 'g') {
+        login('xai-oauth');
         return;
       }
       if (input === 'x' && accounts[selectedIndex]) {
         const account = accounts[selectedIndex];
-        if (!account.managed) {
-          setMessage(`${accountDisplayName(account)} sign-in is managed under Providers.`);
-          return;
-        }
         if (pendingLogoutId === account.id) {
           logout(account);
         } else {
@@ -563,7 +563,6 @@ function Dashboard(): React.ReactNode {
       if (
         key.return
         && accounts[selectedIndex]
-        && accounts[selectedIndex].managed
         && !accounts[selectedIndex].selected
       ) {
         const account = accounts[selectedIndex];
@@ -650,7 +649,14 @@ function Dashboard(): React.ReactNode {
     fastCost: 0,
   }), [metrics]);
   const logicalInput = totals.input + totals.cached + totals.cacheWrite;
-  const activeAccount = accounts.find(account => account.selected);
+  const selectedAccounts = accounts.filter(account => account.selected);
+  const activeAccount = selectedAccounts[0];
+  const accountGroups = (['openai-oauth', 'xai-oauth'] as const).map(providerId => ({
+    providerId,
+    accounts: accounts
+      .map((account, index) => ({ account, index }))
+      .filter(entry => entry.account.providerId === providerId),
+  })).filter(group => group.accounts.length > 0);
 
   if (daemonReachable === false) {
     return (
@@ -705,23 +711,18 @@ function Dashboard(): React.ReactNode {
           <Text dimColor>{ws.partitions} partitions · {ws.checkpoints} compact checkpoints · {status.activeSessions} active sessions</Text>
         </Box>
         <Box borderStyle="round" paddingX={1} flexDirection="column">
-          <Text bold>Active account</Text>
-          {!activeAccount
-            ? <Text dimColor>No managed OpenAI account.</Text>
-            : (
-              <>
-                <Text color="cyan">● {accountDisplayName(activeAccount)}{activeAccount.plan ? ` · ${activeAccount.plan}` : ''}</Text>
-                {activeAccount.usage?.primaryUsedPercent !== undefined && (
-                  <UsageBar label="5-hour" used={activeAccount.usage.primaryUsedPercent} resetAt={activeAccount.usage.primaryResetAt} />
-                )}
-                {activeAccount.usage?.weeklyUsedPercent !== undefined && (
-                  <UsageBar label="weekly" used={activeAccount.usage.weeklyUsedPercent} resetAt={activeAccount.usage.weeklyResetAt} />
-                )}
-                {activeAccount.usage?.stale && (
-                  <Text color="yellow">usage stale{activeAccount.usage.error ? ` · ${activeAccount.usage.error}` : ''}</Text>
-                )}
-              </>
-            )}
+          <Text bold>Selected provider accounts</Text>
+          {selectedAccounts.length === 0
+            ? <Text dimColor>No managed subscription accounts.</Text>
+            : selectedAccounts.map(account => (
+                <Box key={account.id} flexDirection="column">
+                  <Text color="cyan">
+                    ● {account.name ?? account.providerId} · {accountDisplayName(account)}
+                    {account.plan ? ` · ${account.plan}` : ''}
+                  </Text>
+                  {account.usage && <AccountUsageDetails usage={account.usage} />}
+                </Box>
+              ))}
         </Box>
         <Box borderStyle="round" paddingX={1} flexDirection="column">
           <Text bold>Recent diagnostics</Text>
@@ -809,27 +810,32 @@ function Dashboard(): React.ReactNode {
       </>
     );
   } else if (view === 'accounts') {
-    controls = `↑/↓ account · Enter select OpenAI · l login OpenAI · x x logout · ${VIEW_SWITCH_HINT} · r refresh · q quit`;
+    controls = `↑/↓ account · Enter select · o login OpenAI · g login xAI · x x logout · ${VIEW_SWITCH_HINT} · r refresh · q quit`;
     content = (
       <>
         <Box borderStyle="round" paddingX={1} flexDirection="column">
           <Text bold>Accounts and subscription limits</Text>
-          <Text dimColor>OpenAI selection affects new Claude launches; provider accounts are read-only here.</Text>
+          <Text dimColor>Each provider has one selected default for new Claude launches; existing sessions stay pinned.</Text>
           {accounts.length === 0
-            ? <Text dimColor>No managed accounts. Press l to sign in.</Text>
-            : accounts.map((account, index) => (
-                <Box key={account.id} flexDirection="column">
-                  <Text color={index === selectedIndex ? 'cyan' : undefined}>
-                    {index === selectedIndex ? '›' : ' '} {account.selected ? '●' : account.managed ? '○' : '◇'} {accountDisplayName(account)}
-                    {account.plan ? ` · ${account.plan}` : ''}
-                  </Text>
-                  {account.usage && <AccountUsageDetails usage={account.usage} />}
+            ? <Text dimColor>No managed accounts. Press o for OpenAI or g for xAI.</Text>
+            : accountGroups.map(group => (
+                <Box key={group.providerId} flexDirection="column">
+                  <Text bold>{group.accounts[0]!.account.name ?? group.providerId}</Text>
+                  {group.accounts.map(({ account, index }) => (
+                    <Box key={account.id} flexDirection="column">
+                      <Text color={index === selectedIndex ? 'cyan' : undefined}>
+                        {index === selectedIndex ? '›' : ' '} {account.selected ? '●' : '○'} {accountDisplayName(account)}
+                        {account.plan ? ` · ${account.plan}` : ''}
+                      </Text>
+                      {account.usage && <AccountUsageDetails usage={account.usage} />}
+                    </Box>
+                  ))}
                 </Box>
               ))}
         </Box>
         {deviceCode && (
           <Box borderStyle="round" borderColor="yellow" paddingX={1} flexDirection="column">
-            <Text bold color="yellow">OpenAI sign-in</Text>
+            <Text bold color="yellow">Subscription sign-in</Text>
             <Text>{deviceCodeInstruction(deviceCode)}</Text>
             <Text dimColor>{deviceCode.url}</Text>
             <Text dimColor>The code stays visible until sign-in finishes.</Text>

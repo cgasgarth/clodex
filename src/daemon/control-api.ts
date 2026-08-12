@@ -20,7 +20,6 @@ export interface DaemonAccountView {
   id: string;
   providerId: 'openai-oauth' | 'xai-oauth';
   name?: string;
-  managed: boolean;
   email?: string;
   selected: boolean;
   plan?: string;
@@ -33,7 +32,7 @@ export interface DaemonAccountController {
   refreshUsage?(): Promise<void>;
   createLaunchTicket(accountId?: string): {
     ticket: string;
-    accountId: string;
+    accountIds: Partial<Record<'openai-oauth' | 'xai-oauth', string>>;
     accountLabel: string;
   } | null;
 }

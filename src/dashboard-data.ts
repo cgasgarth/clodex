@@ -74,7 +74,6 @@ export interface Account {
   id: string;
   providerId: 'openai-oauth' | 'xai-oauth';
   name?: string;
-  managed: boolean;
   email?: string;
   selected: boolean;
   plan?: string;

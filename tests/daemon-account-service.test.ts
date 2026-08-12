@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import { DaemonAccountService } from '../src/daemon/account-service.js';
 import { DaemonAccountStore } from '../src/daemon/account-store.js';
-import { saveRegistry } from '../src/registry/io.js';
+import { loadRegistry, saveRegistry } from '../src/registry/io.js';
 import { withRegistryWriteLockSync } from '../src/registry/lock.js';
 
 let root: string;
@@ -78,7 +78,7 @@ describe('DaemonAccountService launch tickets', () => {
     };
 
     await expect(service.routeForTicket(route, launch!.ticket))
-      .rejects.toThrow('OAuth credential is unavailable for managed OpenAI account');
+      .rejects.toThrow('OAuth credential is unavailable for One');
   });
 
   it('tags resolved routes with the pinned local account for metrics', async () => {
@@ -118,7 +118,7 @@ describe('DaemonAccountService launch tickets', () => {
     expect(service.createLaunchTicket()).toBeNull();
   });
 
-  it('shows SuperGrok usage as a read-only provider account', async () => {
+  it('imports SuperGrok as a managed provider account and shows its usage', async () => {
     withRegistryWriteLockSync(() => saveRegistry({
       schemaVersion: 1,
       providers: [{
@@ -151,11 +151,9 @@ describe('DaemonAccountService launch tickets', () => {
 
     await service.refreshUsage();
     await expect(service.list()).resolves.toEqual([expect.objectContaining({
-      id: 'provider:xai-oauth',
       providerId: 'xai-oauth',
       name: 'xAI (SuperGrok)',
-      managed: false,
-      selected: false,
+      selected: true,
       plan: 'SuperGrok',
       usage: expect.objectContaining({
         limitUsedPercent: 25,
@@ -165,5 +163,104 @@ describe('DaemonAccountService launch tickets', () => {
         limitCents: 2_000,
       }),
     })]);
+  });
+
+  it('pins OpenAI and SuperGrok accounts independently for one launch', async () => {
+    const store = new DaemonAccountStore(
+      { CLODEX_HOME: root },
+      join(root, 'accounts.json'),
+    );
+    const openAi = store.add({ label: 'OpenAI one', authRef: 'keyring:openai-one' });
+    const xaiOne = store.add({
+      providerId: 'xai-oauth',
+      label: 'xAI one',
+      authRef: 'keyring:xai-one',
+    });
+    const xaiTwo = store.add({
+      providerId: 'xai-oauth',
+      label: 'xAI two',
+      authRef: 'keyring:xai-two',
+    });
+    const service = new DaemonAccountService(store, {
+      resolveCredential: async (_providerId, authRef) => `${authRef}-token`,
+    });
+    const launch = service.createLaunchTicket();
+
+    store.select(xaiTwo.id);
+
+    expect(service.accountForTicket(launch!.ticket, 'openai-oauth')?.id).toBe(openAi.id);
+    expect(service.accountForTicket(launch!.ticket, 'xai-oauth')?.id).toBe(xaiOne.id);
+    await expect(service.routeForTicket({
+      aliasId: 'claude-grok',
+      realModelId: 'grok-4.6',
+      displayName: 'Grok 4.6',
+      upstreamUrl: 'https://cli-chat-proxy.grok.com/v1',
+      apiKey: 'boot-token',
+      modelFormat: 'openai' as const,
+      providerId: 'xai-oauth',
+      authType: 'oauth' as const,
+    }, launch!.ticket)).resolves.toEqual(expect.objectContaining({
+      apiKey: 'keyring:xai-one-token',
+      metricsAccountId: xaiOne.id,
+    }));
+  });
+
+  it('updates only the selected provider bootstrap credential', () => {
+    const store = new DaemonAccountStore(
+      { CLODEX_HOME: root },
+      join(root, 'accounts.json'),
+    );
+    store.add({ label: 'OpenAI one', authRef: 'keyring:openai-one' });
+    store.add({
+      providerId: 'xai-oauth',
+      label: 'xAI one',
+      authRef: 'keyring:xai-one',
+    });
+    const xaiTwo = store.add({
+      providerId: 'xai-oauth',
+      label: 'xAI two',
+      authRef: 'keyring:xai-two',
+    });
+    withRegistryWriteLockSync(() => saveRegistry({
+      schemaVersion: 1,
+      providers: [],
+    }));
+    const service = new DaemonAccountService(store);
+
+    service.select(xaiTwo.id);
+
+    expect(store.selected('openai-oauth')?.authRef).toBe('keyring:openai-one');
+    expect(store.selected('xai-oauth')?.authRef).toBe('keyring:xai-two');
+    expect(loadRegistry().providers).toEqual([
+      expect.objectContaining({
+        id: 'xai-oauth',
+        authRef: 'keyring:xai-two',
+        enabled: true,
+      }),
+    ]);
+  });
+
+  it('does not re-import a signed-out provider credential', () => {
+    withRegistryWriteLockSync(() => saveRegistry({
+      schemaVersion: 1,
+      providers: [{
+        id: 'xai-oauth',
+        templateId: 'xai-oauth',
+        name: 'xAI (SuperGrok)',
+        enabled: false,
+        authRef: 'keyring:deleted-xai',
+        authType: 'oauth',
+        api: { npm: '@ai-sdk/xai', url: 'https://cli-chat-proxy.grok.com/v1' },
+        addedAt: '2026-08-12T00:00:00.000Z',
+      }],
+    }));
+    const store = new DaemonAccountStore(
+      { CLODEX_HOME: root },
+      join(root, 'accounts.json'),
+    );
+
+    new DaemonAccountService(store);
+
+    expect(store.list('xai-oauth')).toEqual([]);
   });
 });

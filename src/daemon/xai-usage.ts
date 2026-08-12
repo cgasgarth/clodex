@@ -1,13 +1,15 @@
 import { VERSION } from '../constants.js';
 import { PROVIDER_METADATA_TIMEOUT_MS } from '../timeouts.js';
 
-const XAI_USER_URL = 'https://cli-chat-proxy.grok.com/v1/user';
+const XAI_USER_URL = 'https://cli-chat-proxy.grok.com/v1/user?include=subscription';
 const XAI_BILLING_URL = 'https://cli-chat-proxy.grok.com/v1/billing?format=credits';
 const XAI_SETTINGS_URL = 'https://cli-chat-proxy.grok.com/v1/settings';
 const MAX_USAGE_RESPONSE_BYTES = 64 * 1024;
 
 export interface XaiUsageSnapshot {
   fetchedAt: string;
+  email?: string;
+  accountId?: string;
   plan?: string;
   period?: 'weekly' | 'monthly' | 'usage';
   usedPercent?: number;
@@ -17,6 +19,12 @@ export interface XaiUsageSnapshot {
   onDemandUsedCents?: number;
   onDemandLimitCents?: number;
   prepaidBalanceCents?: number;
+}
+
+export interface XaiIdentity {
+  email?: string;
+  accountId: string;
+  plan?: string;
 }
 
 function record(value: unknown): Record<string, unknown> | undefined {
@@ -80,7 +88,8 @@ export function parseXaiUsage(
   const onDemandLimitCents = boundedCents(config?.onDemandCap);
   const prepaidBalanceCents = boundedCents(config?.prepaidBalance);
   const settingsPlan = settings?.subscription_tier_display ?? settings?.subscription_tier;
-  const planValue = root.subscriptionTier ?? settingsPlan;
+  // Settings reflects subscription upgrades sooner than the billing response.
+  const planValue = settingsPlan ?? root.subscriptionTier;
   const plan = typeof planValue === 'string' && planValue.trim()
     ? planValue.trim().slice(0, 80)
     : undefined;
@@ -147,6 +156,56 @@ async function getJson(
   }
 }
 
+function parseXaiIdentity(value: unknown): XaiIdentity {
+  const identity = record(value);
+  const userId = identity?.userId;
+  if (
+    typeof userId !== 'string'
+    || !userId
+    || userId.length > 256
+    || !/^[\x21-\x7e]+$/.test(userId)
+  ) {
+    throw new Error('xAI account identity response is invalid');
+  }
+  const emailValue = identity.email;
+  const email = typeof emailValue === 'string'
+    && emailValue.length <= 320
+    && /^[\x20-\x7e]+$/.test(emailValue)
+    ? emailValue.toLowerCase()
+    : undefined;
+  const planValue = identity.subscriptionTier;
+  const plan = typeof planValue === 'string' && planValue.trim()
+    ? planValue.trim().slice(0, 80)
+    : undefined;
+  return {
+    accountId: userId,
+    ...(email ? { email } : {}),
+    ...(plan ? { plan } : {}),
+  };
+}
+
+export async function fetchXaiIdentity(
+  accessToken: string,
+  options: { fetch?: typeof fetch; timeoutMs?: number } = {},
+): Promise<XaiIdentity> {
+  const controller = new AbortController();
+  const timer = setTimeout(
+    () => controller.abort(),
+    options.timeoutMs ?? PROVIDER_METADATA_TIMEOUT_MS,
+  );
+  timer.unref();
+  try {
+    return parseXaiIdentity(await getJson(
+      XAI_USER_URL,
+      accessToken,
+      controller.signal,
+      options.fetch ?? fetch,
+    ));
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export async function fetchXaiUsage(
   accessToken: string,
   options: { fetch?: typeof fetch; timeoutMs?: number; now?: () => Date } = {},
@@ -159,28 +218,24 @@ export async function fetchXaiUsage(
   timer.unref();
   const fetchImpl = options.fetch ?? fetch;
   try {
-    const identity = record(await getJson(XAI_USER_URL, accessToken, controller.signal, fetchImpl));
-    const userId = identity?.userId;
-    if (
-      typeof userId !== 'string'
-      || !userId
-      || userId.length > 256
-      || !/^[\x21-\x7e]+$/.test(userId)
-    ) {
-      throw new Error('xAI account identity response is invalid');
-    }
-    const emailValue = identity.email;
-    const email = typeof emailValue === 'string'
-      && emailValue.length <= 320
-      && /^[\x20-\x7e]+$/.test(emailValue)
-      ? emailValue
-      : undefined;
-    const requestIdentity = { userId, ...(email ? { email } : {}) };
+    const identity = parseXaiIdentity(await getJson(
+      XAI_USER_URL,
+      accessToken,
+      controller.signal,
+      fetchImpl,
+    ));
+    const requestIdentity = {
+      userId: identity.accountId,
+      ...(identity.email ? { email: identity.email } : {}),
+    };
     const [billing, settings] = await Promise.all([
       getJson(XAI_BILLING_URL, accessToken, controller.signal, fetchImpl, requestIdentity),
       getJson(XAI_SETTINGS_URL, accessToken, controller.signal, fetchImpl, requestIdentity),
     ]);
-    return parseXaiUsage(billing, settings, options.now?.() ?? new Date());
+    return {
+      ...parseXaiUsage(billing, settings, options.now?.() ?? new Date()),
+      ...identity,
+    };
   } finally {
     clearTimeout(timer);
   }
