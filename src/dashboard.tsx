@@ -112,8 +112,12 @@ function AccountUsageDetails({ usage }: { usage: NonNullable<Account['usage']> }
       {usage.weeklyUsedPercent !== undefined && (
         <UsageBar label="weekly" used={usage.weeklyUsedPercent} resetAt={usage.weeklyResetAt} />
       )}
-      {usage.monthlyUsedPercent !== undefined && (
-        <UsageBar label="monthly" used={usage.monthlyUsedPercent} resetAt={usage.monthlyResetAt} />
+      {usage.limitUsedPercent !== undefined && (
+        <UsageBar
+          label={usage.limitPeriod ?? 'usage'}
+          used={usage.limitUsedPercent}
+          resetAt={usage.limitResetAt}
+        />
       )}
       {(usage.usedCents !== undefined || usage.limitCents !== undefined) && (
         <Text>

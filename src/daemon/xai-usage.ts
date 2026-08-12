@@ -3,11 +3,13 @@ import { PROVIDER_METADATA_TIMEOUT_MS } from '../timeouts.js';
 
 const XAI_USER_URL = 'https://cli-chat-proxy.grok.com/v1/user';
 const XAI_BILLING_URL = 'https://cli-chat-proxy.grok.com/v1/billing?format=credits';
+const XAI_SETTINGS_URL = 'https://cli-chat-proxy.grok.com/v1/settings';
 const MAX_USAGE_RESPONSE_BYTES = 64 * 1024;
 
 export interface XaiUsageSnapshot {
   fetchedAt: string;
   plan?: string;
+  period?: 'weekly' | 'monthly' | 'usage';
   usedPercent?: number;
   resetAt?: number;
   usedCents?: number;
@@ -24,12 +26,13 @@ function record(value: unknown): Record<string, unknown> | undefined {
 }
 
 function boundedCents(value: unknown): number | undefined {
-  const amount = record(value)?.val;
+  const cents = record(value);
+  if (!cents) return undefined;
+  const amount = cents.val ?? 0;
   return typeof amount === 'number'
     && Number.isSafeInteger(amount)
-    && amount >= 0
-    && amount <= 1_000_000_000_000
-    ? amount
+    && Math.abs(amount) <= 1_000_000_000_000
+    ? Math.abs(amount)
     : undefined;
 }
 
@@ -45,9 +48,21 @@ function resetAt(value: unknown): number | undefined {
   return Number.isFinite(millis) ? Math.round(millis / 1000) : undefined;
 }
 
-export function parseXaiUsage(value: unknown, now = new Date()): XaiUsageSnapshot {
+function usagePeriod(value: unknown): 'weekly' | 'monthly' | 'usage' | undefined {
+  if (typeof value !== 'string') return undefined;
+  if (value.includes('WEEKLY')) return 'weekly';
+  if (value.includes('MONTHLY')) return 'monthly';
+  return 'usage';
+}
+
+export function parseXaiUsage(
+  value: unknown,
+  settingsValue: unknown,
+  now = new Date(),
+): XaiUsageSnapshot {
   const root = record(value);
   if (!root) throw new Error('xAI usage response is not an object');
+  const settings = record(settingsValue);
   const config = record(root.config);
   const usedCents = boundedCents(config?.used);
   const limitCents = boundedCents(config?.monthlyLimit);
@@ -57,16 +72,22 @@ export function parseXaiUsage(value: unknown, now = new Date()): XaiUsageSnapsho
     : undefined;
   const currentPeriod = record(config?.currentPeriod);
   const periodResetAt = resetAt(currentPeriod?.end ?? config?.billingPeriodEnd);
-  const usedPercent = reportedPercent ?? derivedPercent;
+  // proto3 omits a zero-valued creditUsagePercent. A current period with no
+  // percentage or legacy cents therefore means 0%, not unknown usage.
+  const usedPercent = reportedPercent ?? derivedPercent ?? (currentPeriod ? 0 : undefined);
+  const period = usagePeriod(currentPeriod?.type);
   const onDemandUsedCents = boundedCents(config?.onDemandUsed);
   const onDemandLimitCents = boundedCents(config?.onDemandCap);
   const prepaidBalanceCents = boundedCents(config?.prepaidBalance);
-  const plan = typeof root.subscriptionTier === 'string' && root.subscriptionTier.trim()
-    ? root.subscriptionTier.trim().slice(0, 80)
+  const settingsPlan = settings?.subscription_tier_display ?? settings?.subscription_tier;
+  const planValue = root.subscriptionTier ?? settingsPlan;
+  const plan = typeof planValue === 'string' && planValue.trim()
+    ? planValue.trim().slice(0, 80)
     : undefined;
   return {
     fetchedAt: now.toISOString(),
     ...(plan ? { plan } : {}),
+    ...(period ? { period } : {}),
     ...(usedPercent !== undefined ? { usedPercent } : {}),
     ...(periodResetAt !== undefined ? { resetAt: periodResetAt } : {}),
     ...(usedCents !== undefined ? { usedCents } : {}),
@@ -77,15 +98,20 @@ export function parseXaiUsage(value: unknown, now = new Date()): XaiUsageSnapsho
   };
 }
 
-function usageHeaders(accessToken: string, userId?: string): Record<string, string> {
+function usageHeaders(
+  accessToken: string,
+  identity?: { userId: string; email?: string },
+): Record<string, string> {
   return {
     Accept: 'application/json',
     Authorization: `Bearer ${accessToken}`,
     'User-Agent': `clodex/${VERSION}`,
     'X-XAI-Token-Auth': 'xai-grok-cli',
+    'x-grok-client-identifier': 'clodex',
     'x-grok-client-version': VERSION,
     'x-grok-client-mode': process.stdin.isTTY && process.stdout.isTTY ? 'interactive' : 'headless',
-    ...(userId ? { 'x-userid': userId } : {}),
+    ...(identity ? { 'x-userid': identity.userId } : {}),
+    ...(identity?.email ? { 'x-email': identity.email } : {}),
   };
 }
 
@@ -94,10 +120,10 @@ async function getJson(
   accessToken: string,
   signal: AbortSignal,
   fetchImpl: typeof fetch,
-  userId?: string,
+  identity?: { userId: string; email?: string },
 ): Promise<unknown> {
   const response = await fetchImpl(url, {
-    headers: usageHeaders(accessToken, userId),
+    headers: usageHeaders(accessToken, identity),
     redirect: 'error',
     signal,
   });
@@ -143,14 +169,18 @@ export async function fetchXaiUsage(
     ) {
       throw new Error('xAI account identity response is invalid');
     }
-    const billing = await getJson(
-      XAI_BILLING_URL,
-      accessToken,
-      controller.signal,
-      fetchImpl,
-      userId,
-    );
-    return parseXaiUsage(billing, options.now?.() ?? new Date());
+    const emailValue = identity.email;
+    const email = typeof emailValue === 'string'
+      && emailValue.length <= 320
+      && /^[\x20-\x7e]+$/.test(emailValue)
+      ? emailValue
+      : undefined;
+    const requestIdentity = { userId, ...(email ? { email } : {}) };
+    const [billing, settings] = await Promise.all([
+      getJson(XAI_BILLING_URL, accessToken, controller.signal, fetchImpl, requestIdentity),
+      getJson(XAI_SETTINGS_URL, accessToken, controller.signal, fetchImpl, requestIdentity),
+    ]);
+    return parseXaiUsage(billing, settings, options.now?.() ?? new Date());
   } finally {
     clearTimeout(timer);
   }

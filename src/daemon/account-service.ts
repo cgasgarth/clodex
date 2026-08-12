@@ -160,8 +160,9 @@ export class DaemonAccountService implements DaemonAccountController {
       plan: usage.snapshot?.plan,
       usage: usage.snapshot || usage.error
         ? {
-            monthlyUsedPercent: usage.snapshot?.usedPercent,
-            monthlyResetAt: usage.snapshot?.resetAt,
+            limitUsedPercent: usage.snapshot?.usedPercent,
+            limitResetAt: usage.snapshot?.resetAt,
+            limitPeriod: usage.snapshot?.period,
             usedCents: usage.snapshot?.usedCents,
             limitCents: usage.snapshot?.limitCents,
             onDemandUsedCents: usage.snapshot?.onDemandUsedCents,

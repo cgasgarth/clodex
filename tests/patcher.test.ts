@@ -129,6 +129,31 @@ describe('buildPatchModelConfig', () => {
     expect(unknownWindows).toEqual([]);
   });
 
+  it('patches Grok 4.6 with its SuperGrok context and effort metadata', () => {
+    const { config, unknownWindows } = buildPatchModelConfig(
+      [{ providerId: 'xai-oauth', modelId: 'grok-4.6' }],
+      [],
+      () => ({
+        contextWindow: 500_000,
+        displayName: 'Grok 4.6 (xAI (SuperGrok))',
+        effort: {
+          levels: ['low', 'medium', 'high', 'xhigh'],
+          defaultLevel: 'high',
+        },
+      }),
+    );
+
+    expect(config['clodex:xai-oauth:grok-4.6']).toEqual({
+      context: 500_000,
+      display: 'Grok 4.6 (xAI (SuperGrok))',
+      effort: {
+        levels: ['low', 'medium', 'high', 'xhigh'],
+        defaultLevel: 'high',
+      },
+    });
+    expect(unknownWindows).toEqual([]);
+  });
+
   it('omits a blank display label rather than baking an empty string', () => {
     const { config } = buildPatchModelConfig(
       [{ providerId: 'openai', modelId: 'davinci-002' }],

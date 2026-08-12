@@ -74,6 +74,7 @@ ${pc.bold('Options:')}
 ${pc.bold('Providers:')}
   openai         OpenAI API key (platform.openai.com)
   openai-oauth   ChatGPT/Codex plan OAuth — sign in with clodex providers auth openai
+  xai-oauth      SuperGrok subscription OAuth — sign in with clodex providers auth xai
 
 ${pc.bold('Model switching:')}
   Run clodex models to save favorites (max ${MAX_MODEL_CATALOG}).

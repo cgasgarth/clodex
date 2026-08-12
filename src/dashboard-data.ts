@@ -83,8 +83,9 @@ export interface Account {
     primaryResetAt?: number;
     weeklyUsedPercent?: number;
     weeklyResetAt?: number;
-    monthlyUsedPercent?: number;
-    monthlyResetAt?: number;
+    limitUsedPercent?: number;
+    limitResetAt?: number;
+    limitPeriod?: 'weekly' | 'monthly' | 'usage';
     usedCents?: number;
     limitCents?: number;
     onDemandUsedCents?: number;

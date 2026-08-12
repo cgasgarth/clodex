@@ -141,6 +141,7 @@ describe('DaemonAccountService launch tickets', () => {
       fetchXaiUsage: async () => ({
         fetchedAt: '2026-08-12T00:00:00.000Z',
         plan: 'SuperGrok',
+        period: 'weekly',
         usedPercent: 25,
         resetAt: 2_000_000_000,
         usedCents: 500,
@@ -157,8 +158,9 @@ describe('DaemonAccountService launch tickets', () => {
       selected: false,
       plan: 'SuperGrok',
       usage: expect.objectContaining({
-        monthlyUsedPercent: 25,
-        monthlyResetAt: 2_000_000_000,
+        limitUsedPercent: 25,
+        limitResetAt: 2_000_000_000,
+        limitPeriod: 'weekly',
         usedCents: 500,
         limitCents: 2_000,
       }),
