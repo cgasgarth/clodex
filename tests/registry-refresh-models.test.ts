@@ -253,18 +253,9 @@ describe('registry/refresh-models', () => {
 
       const savedRegistry = asMocked(io.saveRegistry).mock.calls[0]?.[0] as ProviderRegistry;
       const luna = savedRegistry.providers[0]?.modelsCache?.models.find(m => m.id === 'gpt-5.6-luna');
-      const spark = savedRegistry.providers[0]?.modelsCache?.models.find(
-        m => m.id === 'gpt-5.3-codex-spark',
-      );
       expect(luna?.contextWindow).toBe(1_000_000);
       expect(luna?.useResponsesLite).toBe(true);
       expect(luna?.preferWebSockets).toBe(true);
-      expect(spark).toMatchObject({
-        name: 'GPT-5.3 Codex Spark',
-        contextWindow: 128_000,
-        reasoning: true,
-        preferWebSockets: true,
-      });
     });
 
     it('returns error if OAuth token is missing', async () => {

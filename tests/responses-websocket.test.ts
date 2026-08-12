@@ -1113,7 +1113,7 @@ describe('createResponsesWebSocketFetch', () => {
       error: {
         type: 'invalid_request_error',
         code: 'unsupported_parameter',
-        message: "Unsupported parameter: 'reasoning.summary' is not supported with the 'gpt-5.3-codex-spark' model.",
+        message: "Unsupported parameter: 'reasoning.summary' is not supported with the 'test-model' model.",
         param: 'reasoning.summary',
       },
       status: 400,
@@ -1126,7 +1126,7 @@ describe('createResponsesWebSocketFetch', () => {
       error: {
         type: 'invalid_request_error',
         code: '400',
-        message: "Unsupported parameter: 'reasoning.summary' is not supported with the 'gpt-5.3-codex-spark' model.",
+        message: "Unsupported parameter: 'reasoning.summary' is not supported with the 'test-model' model.",
         param: null,
       },
     });
@@ -5478,9 +5478,9 @@ describe('createResponsesWebSocketFetch', () => {
       .toBe(responsesWebSocketPromptFingerprint({ tools: [{ parameters: { a: 1, b: 2 }, name: 'x' }], model: 'm', input: ['different'] }));
   });
 
-  it('rebases a known-oversized Spark tool turn without dispatching the full history', async () => {
+  it('rebases a known-oversized tool turn without dispatching the full history', async () => {
     const diagnostics: ResponsesWebSocketDiagnosticEvent[] = [];
-    const canonical = [{ type: 'compaction', encrypted_content: 'spark-prefix' }];
+    const canonical = [{ type: 'compaction', encrypted_content: 'overflow-prefix' }];
     const compactFetch = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
       const body = JSON.parse(String(init?.body));
       expect(body.input).toEqual(root);
@@ -5497,7 +5497,7 @@ describe('createResponsesWebSocketFetch', () => {
       });
     });
     const wsFetch = createResponsesWebSocketFetch(WS_URL, undefined, {
-      accountId: 'acct-spark-overflow',
+      accountId: 'acct-overflow',
       compactThreshold: 115_200,
       contextWindow: 128_000,
       compactFetch: compactFetch as typeof fetch,
@@ -5508,16 +5508,16 @@ describe('createResponsesWebSocketFetch', () => {
       content: [{ type: 'input_text', text: 'p'.repeat(350_000) }],
     }];
     const first = await withResponsesWebSocketDiagnosticContext(
-      { estimatedInputTokens: 80_000, claudeAgentId: 'workflow-spark-a' },
+      { estimatedInputTokens: 80_000, claudeAgentId: 'workflow-overflow-a' },
       () => wsFetch('https://example.test/responses', {
         method: 'POST',
         headers: {},
-        body: JSON.stringify(sessionPayload(root, { model: 'gpt-5.3-codex-spark' })),
+        body: JSON.stringify(sessionPayload(root, { model: 'gpt-5.4' })),
       }),
     );
     const original = lastSocket();
     original.emit('open');
-    emitToolCallResponse(original, 'resp_spark_call', 'call_build', {
+    emitToolCallResponse(original, 'resp_overflow_call', 'call_build', {
       input_tokens: 90_000,
       output_tokens: 5,
     });
@@ -5535,13 +5535,13 @@ describe('createResponsesWebSocketFetch', () => {
       output: 'x'.repeat(200_000),
     };
     const second = await withResponsesWebSocketDiagnosticContext(
-      { estimatedInputTokens: 140_713, claudeAgentId: 'workflow-spark-a' },
+      { estimatedInputTokens: 140_713, claudeAgentId: 'workflow-overflow-a' },
       () => wsFetch('https://example.test/responses', {
         method: 'POST',
         headers: {},
         body: JSON.stringify(sessionPayload(
           [...root, echoedCall, toolOutput],
-          { model: 'gpt-5.3-codex-spark' },
+          { model: 'gpt-5.4' },
         )),
       }),
     );
@@ -5556,7 +5556,7 @@ describe('createResponsesWebSocketFetch', () => {
     expect(sent.input[0]).toEqual(canonical[0]);
     expect(sent.input.at(-1)).toEqual(toolOutput);
     expect(sent.input).not.toEqual([...root, echoedCall, toolOutput]);
-    emitTextResponse(replacement, 'resp_spark_recovered', 'done', {
+    emitTextResponse(replacement, 'resp_overflow_recovered', 'done', {
       input_tokens: 108_000,
       input_tokens_details: { cached_tokens: 20, cache_write_tokens: 3 },
       output_tokens: 5,
@@ -5586,22 +5586,22 @@ describe('createResponsesWebSocketFetch', () => {
       content: [{ type: 'input_text', text: 'continue after recovery' }],
     };
     const third = await withResponsesWebSocketDiagnosticContext(
-      { estimatedInputTokens: 155_000, claudeAgentId: 'workflow-spark-a' },
+      { estimatedInputTokens: 155_000, claudeAgentId: 'workflow-overflow-a' },
       () => wsFetch('https://example.test/responses', {
         method: 'POST',
         headers: {},
         body: JSON.stringify(sessionPayload(
           [...root, echoedCall, toolOutput, echoedRecoveredAssistant, nextUser],
-          { model: 'gpt-5.3-codex-spark' },
+          { model: 'gpt-5.4' },
         )),
       }),
     );
     expect(compactFetch).toHaveBeenCalledOnce();
     expect(replacement.send).toHaveBeenCalledTimes(2);
     const continued = JSON.parse(replacement.send.mock.calls[1]![0] as string);
-    expect(continued.previous_response_id).toBe('resp_spark_recovered');
+    expect(continued.previous_response_id).toBe('resp_overflow_recovered');
     expect(continued.input).toEqual([nextUser]);
-    emitTextResponse(replacement, 'resp_spark_continued', 'continued', {
+    emitTextResponse(replacement, 'resp_overflow_continued', 'continued', {
       input_tokens: 108_100,
       output_tokens: 5,
     });
@@ -5640,7 +5640,7 @@ describe('createResponsesWebSocketFetch', () => {
       () => wsFetch('https://example.test/responses', {
         method: 'POST',
         headers: {},
-        body: JSON.stringify(sessionPayload(input, { model: 'gpt-5.3-codex-spark' })),
+        body: JSON.stringify(sessionPayload(input, { model: 'gpt-5.4' })),
       }),
     );
 
@@ -5685,7 +5685,7 @@ describe('createResponsesWebSocketFetch', () => {
     ];
     const first = await wsFetch('https://example.test/responses', {
       method: 'POST', headers: {},
-      body: JSON.stringify(sessionPayload(root, { model: 'gpt-5.3-codex-spark' })),
+      body: JSON.stringify(sessionPayload(root, { model: 'gpt-5.4' })),
     });
     const original = lastSocket();
     original.emit('open');
@@ -5703,7 +5703,7 @@ describe('createResponsesWebSocketFetch', () => {
         method: 'POST', headers: {},
         body: JSON.stringify(sessionPayload(
           [...root, echoedCall, toolOutput],
-          { model: 'gpt-5.3-codex-spark' },
+          { model: 'gpt-5.4' },
         )),
       }),
     );
@@ -5726,7 +5726,7 @@ describe('createResponsesWebSocketFetch', () => {
         toolOutput,
         { role: 'assistant', content: [{ type: 'output_text', text: 'done' }] },
         nextUser,
-      ], { model: 'gpt-5.3-codex-spark' })),
+      ], { model: 'gpt-5.4' })),
     });
     const continuationSocket = lastSocket();
     const continuationPayload = JSON.parse(
@@ -5976,7 +5976,7 @@ describe('createResponsesWebSocketFetch', () => {
     ];
     const first = await wsFetch('https://example.test/responses', {
       method: 'POST', headers: {},
-      body: JSON.stringify(sessionPayload(root, { model: 'gpt-5.3-codex-spark' })),
+      body: JSON.stringify(sessionPayload(root, { model: 'gpt-5.4' })),
     });
     const original = lastSocket();
     original.emit('open');
@@ -5997,7 +5997,7 @@ describe('createResponsesWebSocketFetch', () => {
         method: 'POST', headers: {},
         body: JSON.stringify(sessionPayload(
           [...root, echoedCall, toolOutput],
-          { model: 'gpt-5.3-codex-spark' },
+          { model: 'gpt-5.4' },
         )),
       }),
     );
@@ -6055,7 +6055,7 @@ describe('createResponsesWebSocketFetch', () => {
     ];
     const first = await wsFetch('https://example.test/responses', {
       method: 'POST', headers: {},
-      body: JSON.stringify(sessionPayload(root, { model: 'gpt-5.3-codex-spark' })),
+      body: JSON.stringify(sessionPayload(root, { model: 'gpt-5.4' })),
     });
     const original = lastSocket();
     original.emit('open');
@@ -6076,7 +6076,7 @@ describe('createResponsesWebSocketFetch', () => {
         method: 'POST', headers: {},
         body: JSON.stringify(sessionPayload(
           [...root, echoedCall, toolOutput],
-          { model: 'gpt-5.3-codex-spark' },
+          { model: 'gpt-5.4' },
         )),
       }),
     );
@@ -6101,7 +6101,7 @@ describe('createResponsesWebSocketFetch', () => {
         method: 'POST', headers: {},
         body: JSON.stringify(sessionPayload(
           [...root, echoedCall, toolOutput],
-          { model: 'gpt-5.3-codex-spark' },
+          { model: 'gpt-5.4' },
         )),
       }),
     );
@@ -6138,7 +6138,7 @@ describe('createResponsesWebSocketFetch', () => {
     ];
     const first = await wsFetch('https://example.test/responses', {
       method: 'POST', headers: {},
-      body: JSON.stringify(sessionPayload(root, { model: 'gpt-5.3-codex-spark' })),
+      body: JSON.stringify(sessionPayload(root, { model: 'gpt-5.4' })),
     });
     const original = lastSocket();
     original.emit('open');
@@ -6159,7 +6159,7 @@ describe('createResponsesWebSocketFetch', () => {
         method: 'POST', headers: {},
         body: JSON.stringify(sessionPayload(
           [...root, echoedCall, toolOutput],
-          { model: 'gpt-5.3-codex-spark' },
+          { model: 'gpt-5.4' },
         )),
       }),
     );
@@ -6438,7 +6438,7 @@ describe('createResponsesWebSocketFetch', () => {
       () => beforeRestartFetch('https://example.test/responses', {
         method: 'POST',
         headers: {},
-        body: JSON.stringify(sessionPayload(root, { model: 'gpt-5.3-codex-spark' })),
+        body: JSON.stringify(sessionPayload(root, { model: 'gpt-5.4' })),
       }),
     );
     const firstSocket = lastSocket();
@@ -6495,7 +6495,7 @@ describe('createResponsesWebSocketFetch', () => {
         headers: {},
         body: JSON.stringify(sessionPayload(
           [...root, echoedReasoning, echoedCall, echoedCustomCall, toolOutput, customOutput],
-          { model: 'gpt-5.3-codex-spark' },
+          { model: 'gpt-5.4' },
         )),
       }),
     );
@@ -6530,7 +6530,7 @@ describe('createResponsesWebSocketFetch', () => {
         customOutput,
         { role: 'assistant', content: [{ type: 'output_text', text: 'done' }] },
         nextUser,
-      ], { model: 'gpt-5.3-codex-spark' })),
+      ], { model: 'gpt-5.4' })),
     });
     const continuationPayload = JSON.parse(recoveredSocket.send.mock.calls.at(-1)![0] as string);
     expect(continuationPayload.previous_response_id).toBe('resp_overflow_after_restart');

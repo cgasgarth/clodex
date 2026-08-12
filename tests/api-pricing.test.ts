@@ -31,7 +31,7 @@ describe('API-equivalent pricing', () => {
     expect(canonicalPricedModelId('gpt-5.6-luna')).toBe('gpt-5.6-luna');
     expect(canonicalPricedModelId('anthropic-openai__gpt-5.6-sol[1m]'))
       .toBe('gpt-5.6-sol');
-    expect(canonicalPricedModelId('gpt-5.3-codex-spark')).toBeUndefined();
+    expect(canonicalPricedModelId('gpt-unpriced')).toBeUndefined();
   });
 
   it('breaks standard Sol pricing into uncached input, cache, and output', () => {
