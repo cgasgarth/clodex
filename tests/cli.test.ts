@@ -258,7 +258,7 @@ describe('help text', () => {
 
   it('documents SuperGrok as a Claude launch provider', () => {
     expect(claudeHelpText()).toContain('xai-oauth');
-    expect(claudeHelpText()).toContain('clodex providers auth xai');
+    expect(claudeHelpText()).toContain('clodex accounts add xai');
   });
 
   it('no longer mentions the removed --http-proxy alias', () => {

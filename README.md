@@ -224,18 +224,20 @@ reads do not force disk writes, and shutdown flushes immediately. Cost figures
 for Sol, Terra, and Luna include Standard/Fast, cache, and long-context pricing.
 They are API-equivalent estimates, not ChatGPT subscription charges.
 
-Up to five ChatGPT/Codex logins can be stored:
+Up to five logins per subscription provider can be stored:
 
 ```bash
-clodex accounts add
+clodex accounts add openai
+clodex accounts add xai
 clodex accounts list
 clodex accounts select person@example.com
 clodex accounts usage
 ```
 
-Accounts are identified by OpenAI sign-in email. Selection is manual and affects
-new launches only; existing sessions and their children remain pinned. Clodex
-does not fail over after quota, capacity, or authentication errors.
+Accounts are identified by sign-in email. OpenAI and SuperGrok keep independent
+defaults. Selection is manual and affects new launches only; existing sessions
+and their children remain pinned. Clodex does not fail over after quota,
+capacity, or authentication errors.
 
 ## CLI reference
 

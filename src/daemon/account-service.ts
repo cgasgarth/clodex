@@ -20,11 +20,14 @@ import {
 } from '../oauth/openai.js';
 import type { ProxyRoute } from '../proxy.js';
 import { getDaemonTicketKeyPath } from '../paths.js';
-import { loadRegistry } from '../registry/io.js';
+import { getTemplateById } from '../provider-templates.js';
+import { loadRegistry, loadRegistryStrict, saveRegistry } from '../registry/io.js';
+import { withRegistryWriteLockSync } from '../registry/lock.js';
 import type { DaemonAccountController, DaemonAccountView } from './control-api.js';
 import {
   DaemonAccountStore,
   type DaemonAccountRecord,
+  type ManagedOAuthProviderId,
 } from './account-store.js';
 import {
   fetchOpenAiUsage,
@@ -38,15 +41,10 @@ import {
 
 const LAUNCH_TICKET_TTL_MS = 30 * 24 * 60 * 60_000;
 const USAGE_REFRESH_MS = 90_000;
+const MANAGED_PROVIDER_IDS = ['openai-oauth', 'xai-oauth'] as const;
 
-interface UsageState {
-  snapshot?: OpenAiUsageSnapshot;
-  fetchedAt?: number;
-  error?: string;
-}
-
-interface XaiUsageState {
-  snapshot?: XaiUsageSnapshot;
+interface UsageState<T> {
+  snapshot?: T;
   fetchedAt?: number;
   error?: string;
 }
@@ -71,18 +69,72 @@ const defaultDependencies: DaemonAccountServiceDependencies = {
 
 export interface LaunchTicket {
   ticket: string;
-  accountId: string;
+  accountIds: Partial<Record<ManagedOAuthProviderId, string>>;
   accountLabel: string;
 }
 
+export function providerDisplayName(providerId: ManagedOAuthProviderId): string {
+  return providerId === 'openai-oauth' ? 'OpenAI (ChatGPT)' : 'xAI (SuperGrok)';
+}
+
 function accountIdentity(account: DaemonAccountRecord): string {
-  return account.email ?? 'managed OpenAI account';
+  return account.email ?? account.label;
+}
+
+function registryTemplateId(providerId: ManagedOAuthProviderId): string {
+  return providerId === 'openai-oauth' ? 'openai' : 'xai-oauth';
+}
+
+/** Keep the registry bootstrap credential aligned with the selected managed account. */
+export function syncManagedProviderCredential(
+  providerId: ManagedOAuthProviderId,
+  authRef: string | undefined,
+): void {
+  withRegistryWriteLockSync(() => {
+    const registry = loadRegistryStrict();
+    const index = registry.providers.findIndex(provider => provider.id === providerId);
+    if (!authRef) {
+      if (index >= 0) {
+        registry.providers[index] = { ...registry.providers[index]!, enabled: false };
+        saveRegistry(registry);
+      }
+      return;
+    }
+    const existing = index >= 0 ? registry.providers[index] : undefined;
+    if (existing) {
+      registry.providers[index] = {
+        ...existing,
+        enabled: true,
+        authRef,
+        authType: 'oauth',
+      };
+    } else {
+      const templateId = registryTemplateId(providerId);
+      const template = getTemplateById(templateId);
+      if (!template) throw new Error(`OAuth provider template is unavailable: ${providerId}`);
+      registry.providers.push({
+        id: providerId,
+        templateId,
+        name: providerDisplayName(providerId),
+        enabled: true,
+        authRef,
+        authType: 'oauth',
+        api: {
+          npm: template.npm,
+          url: template.defaultBaseUrl ?? '',
+          ...(template.headers ? { headers: template.headers } : {}),
+        },
+        addedAt: new Date().toISOString(),
+      });
+    }
+    saveRegistry(registry);
+  });
 }
 
 export class DaemonAccountService implements DaemonAccountController {
   readonly store: DaemonAccountStore;
-  private readonly usage = new Map<string, UsageState>();
-  private xaiUsage: XaiUsageState = {};
+  private readonly openAiUsage = new Map<string, UsageState<OpenAiUsageSnapshot>>();
+  private readonly xaiUsage = new Map<string, UsageState<XaiUsageSnapshot>>();
   private readonly ticketKey: Buffer;
   private readonly dependencies: DaemonAccountServiceDependencies;
 
@@ -93,51 +145,61 @@ export class DaemonAccountService implements DaemonAccountController {
     this.store = store;
     this.dependencies = { ...defaultDependencies, ...dependencies };
     this.ticketKey = loadOrCreateTicketKey();
-    migrateLegacyOpenAiAccount(store);
+    migrateLegacyOAuthAccounts(store);
   }
 
   async list(): Promise<DaemonAccountView[]> {
     const state = this.store.load();
-    const openAiAccounts = await Promise.all(state.accounts.map(async account => {
-      const usage = this.usage.get(account.id);
-      let email = account.email;
-      let accountId = account.accountId;
-      if (!email || !accountId) {
-        try {
-          const token = await this.dependencies.resolveCredential(
-            'openai-oauth',
-            account.authRef,
-          );
-          if (token) {
-            email ??= extractOpenAiEmail({ access_token: token });
-            email ??= await this.dependencies.fetchEmail(token);
-            accountId ??= extractOpenAiAccountId({ access_token: token });
-            if (
-              (email && email !== account.email)
-              || (accountId && accountId !== account.accountId)
-            ) {
-              this.store.updateIdentity(account.id, { email, accountId });
-            }
-          }
-        } catch {
-          // Identity enrichment must not hide the account row.
-        }
+    const accounts = MANAGED_PROVIDER_IDS.flatMap(providerId => (
+      state.accounts.filter(account => account.providerId === providerId)
+    ));
+    return Promise.all(accounts.map(async account => {
+      if (account.providerId === 'openai-oauth') {
+        await this.enrichOpenAiIdentity(account);
+        const current = this.store.list().find(item => item.id === account.id) ?? account;
+        const usage = this.openAiUsage.get(account.id);
+        return {
+          id: current.id,
+          providerId: current.providerId,
+          name: providerDisplayName(current.providerId),
+          email: current.email,
+          selected: current.id === state.selectedAccountIds[current.providerId],
+          plan: usage?.snapshot?.plan,
+          usage: usage?.snapshot || usage?.error
+            ? {
+                primaryUsedPercent: usage.snapshot?.primary?.usedPercent,
+                primaryResetAt: usage.snapshot?.primary?.resetAt,
+                weeklyUsedPercent: usage.snapshot?.weekly?.usedPercent,
+                weeklyResetAt: usage.snapshot?.weekly?.resetAt,
+                credits: usage.snapshot?.credits,
+                additional: usage.snapshot?.additional,
+                stale: !usage.fetchedAt
+                  || this.dependencies.now() - usage.fetchedAt > USAGE_REFRESH_MS * 2,
+                error: usage.error,
+                fetchedAt: usage.snapshot?.fetchedAt,
+              }
+            : undefined,
+        };
       }
+
+      const usage = this.xaiUsage.get(account.id);
       return {
         id: account.id,
-        providerId: 'openai-oauth' as const,
-        managed: true,
-        email,
-        selected: account.id === state.selectedAccountId,
+        providerId: account.providerId,
+        name: providerDisplayName(account.providerId),
+        email: account.email,
+        selected: account.id === state.selectedAccountIds[account.providerId],
         plan: usage?.snapshot?.plan,
         usage: usage?.snapshot || usage?.error
           ? {
-              primaryUsedPercent: usage.snapshot?.primary?.usedPercent,
-              primaryResetAt: usage.snapshot?.primary?.resetAt,
-              weeklyUsedPercent: usage.snapshot?.weekly?.usedPercent,
-              weeklyResetAt: usage.snapshot?.weekly?.resetAt,
-              credits: usage.snapshot?.credits,
-              additional: usage.snapshot?.additional,
+              limitUsedPercent: usage.snapshot?.usedPercent,
+              limitResetAt: usage.snapshot?.resetAt,
+              limitPeriod: usage.snapshot?.period,
+              usedCents: usage.snapshot?.usedCents,
+              limitCents: usage.snapshot?.limitCents,
+              onDemandUsedCents: usage.snapshot?.onDemandUsedCents,
+              onDemandLimitCents: usage.snapshot?.onDemandLimitCents,
+              prepaidBalanceCents: usage.snapshot?.prepaidBalanceCents,
               stale: !usage.fetchedAt
                 || this.dependencies.now() - usage.fetchedAt > USAGE_REFRESH_MS * 2,
               error: usage.error,
@@ -146,62 +208,46 @@ export class DaemonAccountService implements DaemonAccountController {
           : undefined,
       };
     }));
-    const xaiProvider = loadRegistry().providers.find(provider =>
-      provider.id === 'xai-oauth' && provider.authType === 'oauth' && provider.enabled,
-    );
-    if (!xaiProvider) return openAiAccounts;
-    const usage = this.xaiUsage;
-    return [...openAiAccounts, {
-      id: 'provider:xai-oauth',
-      providerId: 'xai-oauth',
-      name: xaiProvider.name,
-      managed: false,
-      selected: false,
-      plan: usage.snapshot?.plan,
-      usage: usage.snapshot || usage.error
-        ? {
-            limitUsedPercent: usage.snapshot?.usedPercent,
-            limitResetAt: usage.snapshot?.resetAt,
-            limitPeriod: usage.snapshot?.period,
-            usedCents: usage.snapshot?.usedCents,
-            limitCents: usage.snapshot?.limitCents,
-            onDemandUsedCents: usage.snapshot?.onDemandUsedCents,
-            onDemandLimitCents: usage.snapshot?.onDemandLimitCents,
-            prepaidBalanceCents: usage.snapshot?.prepaidBalanceCents,
-            stale: !usage.fetchedAt
-              || this.dependencies.now() - usage.fetchedAt > USAGE_REFRESH_MS * 2,
-            error: usage.error,
-            fetchedAt: usage.snapshot?.fetchedAt,
-          }
-        : undefined,
-    }];
   }
 
   select(id: string): void {
-    this.store.select(id);
+    const account = this.store.select(id);
+    syncManagedProviderCredential(account.providerId, account.authRef);
   }
 
   createLaunchTicket(accountId?: string): LaunchTicket | null {
-    const account = accountId ? findAccount(this.store, accountId) : this.store.selected();
-    if (!account) {
-      if (accountId) throw new Error(`Managed account not found: ${accountId}`);
-      return null;
+    const selected = Object.fromEntries(MANAGED_PROVIDER_IDS.flatMap(providerId => {
+      const account = this.store.selected(providerId);
+      return account ? [[providerId, account.id]] : [];
+    })) as LaunchTicket['accountIds'];
+    if (accountId) {
+      const account = findAccount(this.store, accountId);
+      if (!account) throw new Error(`Managed account not found: ${accountId}`);
+      selected[account.providerId] = account.id;
     }
+    if (Object.keys(selected).length === 0) return null;
     const payload = Buffer.from(JSON.stringify({
-      v: 1,
-      a: account.id,
+      v: 2,
+      a: selected,
       i: this.dependencies.now(),
       n: randomBytes(12).toString('base64url'),
     })).toString('base64url');
     const signature = createHmac('sha256', this.ticketKey).update(payload).digest('base64url');
-    const ticket = `${payload}.${signature}`;
-    return { ticket, accountId: account.id, accountLabel: accountIdentity(account) };
+    const labels = Object.values(selected).flatMap(id => {
+      const account = this.store.list().find(item => item.id === id);
+      return account ? [accountIdentity(account)] : [];
+    });
+    return {
+      ticket: `${payload}.${signature}`,
+      accountIds: selected,
+      accountLabel: labels.join(', '),
+    };
   }
 
-  accountForTicket(ticket: string | undefined): DaemonAccountRecord | null {
-    // Once managed accounts exist, every OAuth request must carry a durable
-    // launch ticket. Falling back to the mutable default would silently move a
-    // running session when the user selects another account.
+  accountForTicket(
+    ticket: string | undefined,
+    providerId: ManagedOAuthProviderId = 'openai-oauth',
+  ): DaemonAccountRecord | null {
     if (!ticket) return null;
     const [payload, signature, extra] = ticket.split('.');
     if (!payload || !signature || extra !== undefined) return null;
@@ -220,98 +266,112 @@ export class DaemonAccountService implements DaemonAccountController {
         i?: unknown;
       };
       if (
-        parsed.v !== 1
-        || typeof parsed.a !== 'string'
+        parsed.v !== 2
+        || !parsed.a
+        || typeof parsed.a !== 'object'
         || typeof parsed.i !== 'number'
         || !Number.isFinite(parsed.i)
         || parsed.i > this.dependencies.now() + 60_000
         || this.dependencies.now() - parsed.i > LAUNCH_TICKET_TTL_MS
       ) return null;
-      return findAccount(this.store, parsed.a);
+      const id = (parsed.a as Record<string, unknown>)[providerId];
+      return typeof id === 'string'
+        ? this.store.list(providerId).find(account => account.id === id) ?? null
+        : null;
     } catch {
       return null;
     }
   }
 
   async routeForTicket(route: ProxyRoute, ticket: string | undefined): Promise<ProxyRoute> {
-    if (route.providerId !== 'openai-oauth' || route.authType !== 'oauth') return route;
-    const account = this.accountForTicket(ticket);
-    if (!account) throw new Error('The Clodex launch ticket is missing or expired');
-    const apiKey = await this.dependencies.resolveCredential(
-      'openai-oauth',
-      account.authRef,
-    );
+    if (
+      route.authType !== 'oauth'
+      || (route.providerId !== 'openai-oauth' && route.providerId !== 'xai-oauth')
+    ) return route;
+    const providerId = route.providerId;
+    const managedAccounts = this.store.list(providerId);
+    if (managedAccounts.length === 0) return route;
+    const account = this.accountForTicket(ticket, providerId);
+    if (!account) throw new Error(`The ${providerDisplayName(providerId)} launch ticket is missing or expired`);
+    const apiKey = await this.dependencies.resolveCredential(providerId, account.authRef);
     if (!apiKey) throw new Error(`OAuth credential is unavailable for ${accountIdentity(account)}`);
-    const oauthAccountId = account.accountId
-      ?? await this.dependencies.resolveAccountId(account.authRef)
-      ?? extractOpenAiAccountId({ access_token: apiKey });
-    return {
+    const common = {
       ...route,
       apiKey,
-      oauthAccountId,
       metricsAccountId: account.id,
-      refreshToken: rejectedAccessToken => this.dependencies.resolveCredential(
-        'openai-oauth',
+      refreshToken: (rejectedAccessToken?: string) => this.dependencies.resolveCredential(
+        providerId,
         account.authRef,
         undefined,
         rejectedAccessToken ? { rejectedAccessToken } : {},
       ),
     };
+    if (providerId === 'xai-oauth') return common;
+    const oauthAccountId = account.accountId
+      ?? await this.dependencies.resolveAccountId(account.authRef)
+      ?? extractOpenAiAccountId({ access_token: apiKey });
+    return { ...common, oauthAccountId };
   }
 
   async refreshUsage(): Promise<void> {
-    const providers = loadRegistry().providers;
-    const xaiProvider = providers.find(provider =>
-      provider.id === 'xai-oauth' && provider.authType === 'oauth' && provider.enabled,
-    );
-    await Promise.all([
-      ...this.store.list().map(account => this.refreshAccountUsage(account)),
-      ...(xaiProvider ? [this.refreshXaiUsage(xaiProvider.authRef)] : []),
-    ]);
+    await Promise.all(this.store.list().map(account => this.refreshAccountUsage(account)));
   }
 
-  private async refreshXaiUsage(authRef: string): Promise<void> {
-    if (
-      this.xaiUsage.fetchedAt
-      && this.dependencies.now() - this.xaiUsage.fetchedAt < USAGE_REFRESH_MS
-    ) return;
-    const existing = this.xaiUsage;
+  private async enrichOpenAiIdentity(account: DaemonAccountRecord): Promise<void> {
+    if (account.email && account.accountId) return;
     try {
-      const token = await this.dependencies.resolveCredential('xai-oauth', authRef);
-      if (!token) throw new Error('credential unavailable');
-      const snapshot = await this.dependencies.fetchXaiUsage(token);
-      this.xaiUsage = { snapshot, fetchedAt: this.dependencies.now() };
-    } catch (error) {
-      this.xaiUsage = {
-        snapshot: existing.snapshot,
-        fetchedAt: existing.fetchedAt,
-        error: error instanceof Error ? error.message : String(error),
-      };
+      const token = await this.dependencies.resolveCredential(account.providerId, account.authRef);
+      if (!token) return;
+      const email = account.email
+        ?? extractOpenAiEmail({ access_token: token })
+        ?? await this.dependencies.fetchEmail(token);
+      const accountId = account.accountId
+        ?? extractOpenAiAccountId({ access_token: token });
+      if ((email && email !== account.email) || (accountId && accountId !== account.accountId)) {
+        this.store.updateIdentity(account.id, { email, accountId });
+      }
+    } catch {
+      // Identity enrichment must not hide the account row.
     }
   }
 
   private async refreshAccountUsage(account: DaemonAccountRecord): Promise<void> {
-    const existing = this.usage.get(account.id);
-    if (
-      existing?.fetchedAt
-      && this.dependencies.now() - existing.fetchedAt < USAGE_REFRESH_MS
-    ) return;
+    if (account.providerId === 'xai-oauth') {
+      const existing = this.xaiUsage.get(account.id);
+      if (existing?.fetchedAt && this.dependencies.now() - existing.fetchedAt < USAGE_REFRESH_MS) return;
+      try {
+        const token = await this.dependencies.resolveCredential(account.providerId, account.authRef);
+        if (!token) throw new Error('credential unavailable');
+        const snapshot = await this.dependencies.fetchXaiUsage(token);
+        if (snapshot.email || snapshot.accountId) {
+          this.store.updateIdentity(account.id, {
+            email: snapshot.email,
+            accountId: snapshot.accountId,
+          });
+        }
+        this.xaiUsage.set(account.id, { snapshot, fetchedAt: this.dependencies.now() });
+      } catch (error) {
+        this.xaiUsage.set(account.id, {
+          snapshot: existing?.snapshot,
+          fetchedAt: existing?.fetchedAt,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+      return;
+    }
+
+    const existing = this.openAiUsage.get(account.id);
+    if (existing?.fetchedAt && this.dependencies.now() - existing.fetchedAt < USAGE_REFRESH_MS) return;
     try {
-      const token = await this.dependencies.resolveCredential(
-        'openai-oauth',
-        account.authRef,
-      );
+      const token = await this.dependencies.resolveCredential(account.providerId, account.authRef);
       if (!token) throw new Error('credential unavailable');
       const accountId = account.accountId
         ?? await this.dependencies.resolveAccountId(account.authRef)
         ?? extractOpenAiAccountId({ access_token: token });
       const snapshot = await this.dependencies.fetchUsage(token, accountId);
-      this.usage.set(account.id, {
-        snapshot,
-        fetchedAt: this.dependencies.now(),
-      });
+      this.openAiUsage.set(account.id, { snapshot, fetchedAt: this.dependencies.now() });
     } catch (error) {
-      this.usage.set(account.id, {
+      this.openAiUsage.set(account.id, {
         snapshot: existing?.snapshot,
         fetchedAt: existing?.fetchedAt,
         error: error instanceof Error ? error.message : String(error),
@@ -340,30 +400,35 @@ function loadOrCreateTicketKey(path = getDaemonTicketKeyPath()): Buffer {
   }
 }
 
-function findAccount(
-  store: DaemonAccountStore,
-  idOrLabel: string,
-): DaemonAccountRecord | null {
+function findAccount(store: DaemonAccountStore, idOrLabel: string): DaemonAccountRecord | null {
   const lookup = idOrLabel.toLowerCase();
-  return store.list().find(account =>
+  const matches = store.list().filter(account => (
     account.id === idOrLabel
     || account.email?.toLowerCase() === lookup
-    || account.label.toLowerCase() === lookup,
-  ) ?? null;
+    || account.label.toLowerCase() === lookup
+  ));
+  if (matches.length > 1) throw new Error(`Managed account is ambiguous: ${idOrLabel}`);
+  return matches[0] ?? null;
 }
 
-export function migrateLegacyOpenAiAccount(
+export function migrateLegacyOAuthAccounts(
   store = new DaemonAccountStore(),
-): DaemonAccountRecord | null {
-  if (store.list().length > 0) return null;
-  const provider = loadRegistry().providers.find(item =>
-    item.id === 'openai-oauth' && item.authType === 'oauth',
-  );
-  if (!provider?.authRef) return null;
-  return store.add({
-    label: 'Default',
-    authRef: provider.authRef,
-  });
+): DaemonAccountRecord[] {
+  const migrated: DaemonAccountRecord[] = [];
+  const registry = loadRegistry();
+  for (const providerId of MANAGED_PROVIDER_IDS) {
+    if (store.list(providerId).length > 0) continue;
+    const provider = registry.providers.find(item => (
+      item.id === providerId && item.authType === 'oauth' && item.enabled
+    ));
+    if (!provider?.authRef) continue;
+    migrated.push(store.add({
+      providerId,
+      label: 'Default',
+      authRef: provider.authRef,
+    }));
+  }
+  return migrated;
 }
 
 let singleton: DaemonAccountService | undefined;

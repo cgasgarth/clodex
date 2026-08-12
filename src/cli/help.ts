@@ -3,7 +3,7 @@ import { MAX_MODEL_CATALOG, VERSION } from '../constants.js';
 
 export function rootHelpText(): string {
   return `${pc.bold('clodex')} v${VERSION}
-Bridge Claude Code to OpenAI models — OpenAI API key or ChatGPT/Codex-plan OAuth.
+Bridge Claude Code to OpenAI and Grok models with API-key or subscription access.
 
 ${pc.bold('Usage:')}
   clodex
@@ -30,12 +30,12 @@ ${pc.bold('Commands:')}
   stop        Stop the persistent daemon
   claude      Launch Claude Code bridged to OpenAI models
   daemon      Manage the persistent per-user Clodex service
-  accounts    Manage up to five OpenAI logins (manual switching only)
+  accounts    Manage OpenAI and SuperGrok logins (manual switching only)
   server      Run a foreground gateway (endpoint or proxy mode)
   patch       Patch the Claude Code binary so clodex models are first-class
   models      Manage favorite models and aliases (max ${MAX_MODEL_CATALOG})
   favorites   Alias for models
-  providers   Add or sign in to your OpenAI providers
+  providers   Add or configure OpenAI and Grok providers
 
 ${pc.bold('Claude transport:')}
   clodex claude always uses the persistent daemon's single local endpoint.
@@ -73,8 +73,8 @@ ${pc.bold('Options:')}
 
 ${pc.bold('Providers:')}
   openai         OpenAI API key (platform.openai.com)
-  openai-oauth   ChatGPT/Codex plan OAuth — sign in with clodex providers auth openai
-  xai-oauth      SuperGrok subscription OAuth — sign in with clodex providers auth xai
+  openai-oauth   ChatGPT/Codex plan OAuth — sign in with clodex accounts add openai
+  xai-oauth      SuperGrok subscription OAuth — sign in with clodex accounts add xai
 
 ${pc.bold('Model switching:')}
   Run clodex models to save favorites (max ${MAX_MODEL_CATALOG}).

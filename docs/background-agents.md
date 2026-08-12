@@ -98,19 +98,21 @@ On non-macOS systems, run `clodex daemon run` under the user's service manager.
 
 ## Accounts
 
-The first existing `openai-oauth` login is migrated into the account list.
-Additional logins use independent OS-credential-store entries:
+The first existing `openai-oauth` and `xai-oauth` logins are migrated into the
+account list. Additional logins use independent OS-credential-store entries:
 
 ```bash
-clodex accounts add
+clodex accounts add openai
+clodex accounts add xai
 clodex accounts list
 clodex accounts select person@example.com
 clodex accounts remove person@example.com
 ```
 
-The dashboard and CLI identify accounts only by their OpenAI sign-in email.
+The dashboard and CLI identify accounts only by their provider and sign-in email.
 Clodex stores only account metadata in `~/.clodex/accounts.json`; OAuth secrets
-remain in the configured credential store. A signed ticket pins each launch.
+remain in the configured credential store. OpenAI and SuperGrok keep independent
+defaults, and a signed ticket pins each provider account for the launch.
 Removing or losing that credential makes the pinned session fail explicitly—it
 does not use a different account.
 

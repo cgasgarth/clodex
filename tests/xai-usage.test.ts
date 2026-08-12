@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from 'bun:test';
-import { fetchXaiUsage, parseXaiUsage } from '../src/daemon/xai-usage.js';
+import {
+  fetchXaiIdentity,
+  fetchXaiUsage,
+  parseXaiUsage,
+} from '../src/daemon/xai-usage.js';
 
 const payload = {
   subscriptionTier: 'SuperGrok',
@@ -22,7 +26,7 @@ describe('xAI subscription usage', () => {
       new Date('2026-08-12T00:00:00Z'),
     )).toEqual({
       fetchedAt: '2026-08-12T00:00:00.000Z',
-      plan: 'SuperGrok',
+      plan: 'SuperGrok Heavy',
       period: 'weekly',
       usedPercent: 37.5,
       resetAt: Date.parse('2026-09-01T00:00:00Z') / 1_000,
@@ -72,8 +76,12 @@ describe('xAI subscription usage', () => {
     });
 
     expect(usage.plan).toBe('SuperGrok');
+    expect(usage).toMatchObject({
+      email: 'person@example.com',
+      accountId: 'user-123',
+    });
     expect(request.mock.calls.map(call => call[0])).toEqual([
-      'https://cli-chat-proxy.grok.com/v1/user',
+      'https://cli-chat-proxy.grok.com/v1/user?include=subscription',
       'https://cli-chat-proxy.grok.com/v1/billing?format=credits',
       'https://cli-chat-proxy.grok.com/v1/settings',
     ]);
@@ -83,6 +91,43 @@ describe('xAI subscription usage', () => {
     expect(identityHeaders.get('x-xai-token-auth')).toBe('xai-grok-cli');
     expect(billingHeaders.get('x-userid')).toBe('user-123');
     expect(billingHeaders.get('x-email')).toBe('person@example.com');
+  });
+
+  it('fetches sign-in identity without depending on billing endpoints', async () => {
+    const request = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      userId: 'user-456',
+      email: 'Person@Example.com',
+      subscriptionTier: 'SuperGrokPro',
+    }), { status: 200 }));
+
+    await expect(fetchXaiIdentity('subscription-token', {
+      fetch: request as typeof fetch,
+    })).resolves.toEqual({
+      accountId: 'user-456',
+      email: 'person@example.com',
+      plan: 'SuperGrokPro',
+    });
+    expect(request).toHaveBeenCalledOnce();
+  });
+
+  it('prefers the live subscription entitlement over stale billing settings', async () => {
+    const request = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        userId: 'user-789',
+        email: 'person@example.com',
+        subscriptionTier: 'SuperGrokPro',
+      }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        subscriptionTier: 'Free',
+        config: { currentPeriod: { type: 'USAGE_PERIOD_TYPE_WEEKLY' } },
+      }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        subscription_tier_display: 'Free',
+      }), { status: 200 }));
+
+    await expect(fetchXaiUsage('subscription-token', {
+      fetch: request as typeof fetch,
+    })).resolves.toMatchObject({ plan: 'SuperGrokPro' });
   });
 
   it('does not request billing when account identity is invalid', async () => {

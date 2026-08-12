@@ -3,6 +3,7 @@ import {
   readFileSync,
   rmSync,
   statSync,
+  writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -71,5 +72,71 @@ describe('DaemonAccountStore', () => {
     }
     expect(() => store.add({ label: 'Overflow', authRef: 'keyring:overflow' }))
       .toThrow(/at most 5/);
+  });
+
+  it('keeps independent selections and account caps for each provider', () => {
+    const openAi = store.add({ label: 'OpenAI one', authRef: 'keyring:openai-one' });
+    const xaiOne = store.add({
+      providerId: 'xai-oauth',
+      label: 'xAI one',
+      authRef: 'keyring:xai-one',
+    });
+    const xaiTwo = store.add({
+      providerId: 'xai-oauth',
+      label: 'xAI two',
+      authRef: 'keyring:xai-two',
+    });
+
+    store.select(xaiTwo.id);
+
+    expect(store.selected('openai-oauth')?.id).toBe(openAi.id);
+    expect(store.selected('xai-oauth')?.id).toBe(xaiTwo.id);
+    for (let index = 3; index <= MAX_DAEMON_ACCOUNTS; index += 1) {
+      store.add({
+        providerId: 'xai-oauth',
+        label: `xAI ${index}`,
+        authRef: `keyring:xai-${index}`,
+      });
+    }
+    expect(() => store.add({
+      providerId: 'xai-oauth',
+      label: 'xAI overflow',
+      authRef: 'keyring:xai-overflow',
+    })).toThrow(/at most 5/);
+    expect(store.list('openai-oauth')).toHaveLength(1);
+    expect(store.list('xai-oauth')).toHaveLength(5);
+    expect(xaiOne.providerId).toBe('xai-oauth');
+  });
+
+  it('migrates the OpenAI-only version 1 store', () => {
+    writeFileSync(store.path, JSON.stringify({
+      version: 1,
+      selectedAccountId: 'two',
+      accounts: [
+        {
+          id: 'one',
+          label: 'One',
+          authRef: 'keyring:one',
+          createdAt: '2026-08-12T00:00:00.000Z',
+          updatedAt: '2026-08-12T00:00:00.000Z',
+        },
+        {
+          id: 'two',
+          label: 'Two',
+          authRef: 'keyring:two',
+          createdAt: '2026-08-12T00:00:00.000Z',
+          updatedAt: '2026-08-12T00:00:00.000Z',
+        },
+      ],
+    }), { mode: 0o600 });
+
+    expect(store.selected('openai-oauth')).toMatchObject({
+      id: 'two',
+      providerId: 'openai-oauth',
+    });
+    expect(JSON.parse(readFileSync(store.path, 'utf8'))).toMatchObject({
+      version: 2,
+      selectedAccountIds: { 'openai-oauth': 'two' },
+    });
   });
 });
