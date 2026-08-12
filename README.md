@@ -205,8 +205,9 @@ full mode records native compaction start, completion, duration, and recovery de
 
 The Usage view toggles between the active account and all managed accounts. It
 shows input, cache reads, cache writes, output, request failures, cache share,
-and what the same traffic would cost at published OpenAI API rates. ChatGPT
-subscription usage is not billed by these figures.
+and what the same traffic would cost at published OpenAI or xAI API rates.
+Subscription usage is not billed by these figures. Grok 4.6 uses the current
+published Grok 4.5 API rates because xAI does not offer a Grok 4.6 API SKU.
 
 ![Clodex usage dashboard with token history, cache share, and API-equivalent cost](./docs/dashboard-usage.png)
 
@@ -222,7 +223,8 @@ Metrics are retained for 400 days in owner-only SQLite. They aggregate in memory
 and flush as one compact batch row each minute or after 1,000 records; dashboard
 reads do not force disk writes, and shutdown flushes immediately. Cost figures
 for Sol, Terra, and Luna include Standard/Fast, cache, and long-context pricing.
-They are API-equivalent estimates, not ChatGPT subscription charges.
+Grok figures include xAI cache and long-context pricing. They are API-equivalent
+estimates, not ChatGPT or SuperGrok subscription charges.
 
 Up to five logins per subscription provider can be stored:
 
