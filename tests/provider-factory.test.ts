@@ -13,6 +13,7 @@ import {
   thinkingProviderOptions,
 } from '../src/provider-factory.js';
 import { VERTEX_ANTHROPIC_NPM } from '../src/constants.js';
+import { createXaiSubscriptionFetch } from '../src/oauth/xai-proxy.js';
 import { restoreTestGlobals, stubTestGlobal } from './test-helpers.js';
 
 async function expectCredentialHeadersStripped(
@@ -333,7 +334,7 @@ describe('effortProviderOptions + deepMergeProviderOptions', () => {
 });
 
 describe('createLanguageModel', () => {
-  it('surfaces Grok Responses reasoning as live SDK stream parts', async () => {
+  it('surfaces only the accepted native Grok recovery through SDK stream parts', async () => {
     const events = [
       {
         type: 'response.created',
@@ -384,10 +385,30 @@ describe('createLanguageModel', () => {
       },
     ];
     const responseBody = events.map(event => `data: ${JSON.stringify(event)}\n\n`).join('');
-    const xaiFetch = vi.fn(async () => new Response(responseBody, {
-      status: 200,
-      headers: { 'content-type': 'text/event-stream' },
-    }));
+    const poisonedBody = [
+      events[0],
+      events[1],
+      { ...events[2], delta: 'poisoned thought' },
+      {
+        type: 'response.doom_loop_check',
+        doom_loop_check: { triggers: ['tail_repetition:8@thinking'] },
+      },
+    ].map(event => `data: ${JSON.stringify(event)}\n\n`).join('');
+    const transport = vi.fn()
+      .mockResolvedValueOnce(new Response(poisonedBody, {
+        status: 200,
+        headers: { 'content-type': 'text/event-stream' },
+      }))
+      .mockResolvedValueOnce(new Response(responseBody, {
+        status: 200,
+        headers: { 'content-type': 'text/event-stream' },
+      }));
+    const xaiFetch = createXaiSubscriptionFetch(
+      'grok-4.6',
+      'session-live-parts',
+      transport as typeof fetch,
+      { random: () => 0, sleep: async () => {} },
+    );
     const model = await createLanguageModel({
       npm: '@ai-sdk/xai',
       modelId: 'grok-4.6',
@@ -412,7 +433,9 @@ describe('createLanguageModel', () => {
     expect(partTypes).toContain('reasoning-start');
     expect(partTypes).toContain('reasoning-delta');
     expect(partTypes).toContain('text-start');
+    expect(transport).toHaveBeenCalledTimes(2);
     expect(reasoning).toBe('working through it');
+    expect(reasoning).not.toContain('poisoned');
     expect(text).toBe('finished answer');
   });
 
