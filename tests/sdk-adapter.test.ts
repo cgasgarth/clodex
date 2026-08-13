@@ -911,7 +911,7 @@ describe('streamAnthropicResponse idle timeout', () => {
 
 describe('streamAnthropicResponse Grok output-loop recovery', () => {
   it('replaces one repetitive generation and keeps one Anthropic turn open', async () => {
-    const repeated = "I'll continue as soon as they finish. ";
+    const repeated = ' extra';
     const signals: AbortSignal[] = [];
     const detected = vi.fn();
     let call = 0;
@@ -922,8 +922,12 @@ describe('streamAnthropicResponse Grok output-loop recovery', () => {
         yield { type: 'start' };
         if (call === 1) {
           yield { type: 'text-start', id: 'first' };
-          yield { type: 'text-delta', id: 'first', text: 'Six agents are still running. ' };
-          yield { type: 'text-delta', id: 'first', text: repeated.repeat(80) };
+          yield {
+            type: 'text-delta',
+            id: 'first',
+            text: "I'll apply the remaining one-line TypeScript change",
+          };
+          yield { type: 'text-delta', id: 'first', text: repeated.repeat(4_100) };
           yield { type: 'finish', finishReason: 'length' };
           return;
         }
@@ -968,8 +972,8 @@ describe('streamAnthropicResponse Grok output-loop recovery', () => {
       content: string;
     }>;
     expect(recoveryMessages.at(-2)?.role).toBe('assistant');
-    expect(recoveryMessages.at(-2)?.content).toContain('Six agents are still running');
-    expect(recoveryMessages.at(-2)?.content).not.toContain(repeated.trim());
+    expect(recoveryMessages.at(-2)?.content)
+      .toBe("I'll apply the remaining one-line TypeScript change");
     expect(recoveryMessages.at(-1)?.content)
       .toContain('123e4567-e89b-12d3-a456-426614174000');
     expect(detected).toHaveBeenCalledOnce();

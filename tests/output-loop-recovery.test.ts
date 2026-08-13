@@ -23,6 +23,26 @@ describe('StreamingOutputLoopDetector', () => {
     expect(match?.safePrefix).toBe(prefix.trimEnd());
   });
 
+  it('detects the short extra-token loop from the same Claude session', () => {
+    const detector = new StreamingOutputLoopDetector();
+    const prefix = "I'll apply the remaining one-line TypeScript change";
+    const repeated = ' extra';
+    const output = prefix + repeated.repeat(4_100);
+    let match;
+
+    // Eleven-character chunks force the six-character period to cross stream
+    // boundaries, as it did in the live provider response.
+    for (let offset = 0; offset < output.length && !match; offset += 11) {
+      match = detector.append(output.slice(offset, offset + 11));
+    }
+
+    expect(match).toBeDefined();
+    expect(match?.periodChars).toBe(repeated.length);
+    expect(match?.repeatedChars).toBeGreaterThanOrEqual(1_024);
+    expect(match?.repeatedChars).toBeLessThan(1_100);
+    expect(match?.safePrefix).toBe(prefix);
+  });
+
   it('does not flag long non-periodic prose', () => {
     const detector = new StreamingOutputLoopDetector();
     let match;
