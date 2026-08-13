@@ -1,5 +1,23 @@
 # Changelog
 
+## [3.1.0](https://github.com/cgasgarth/clodex/compare/v3.0.0...v3.1.0) (2026-08-13)
+
+
+### Features
+
+* add SuperGrok OAuth provider with Grok 4.6 ([d8a5116](https://github.com/cgasgarth/clodex/commit/d8a51161ba5a9aeb1b00468adef8568f1fc1375c))
+* price Grok usage at API-equivalent rates ([40e02d0](https://github.com/cgasgarth/clodex/commit/40e02d0cbdab05517f0185dbb5a3b91666f731db))
+* price Grok usage at API-equivalent rates ([b382167](https://github.com/cgasgarth/clodex/commit/b382167ad84b0825d25744b510be77d94a46568a))
+* stream Grok reasoning and cap trace logs ([7572fe7](https://github.com/cgasgarth/clodex/commit/7572fe79f0afff8107b3781736a3d29290ebb3ac))
+* unify subscription account management ([#76](https://github.com/cgasgarth/clodex/issues/76)) ([542509d](https://github.com/cgasgarth/clodex/commit/542509d4622998e46201a72946f110409d8c87e8))
+
+
+### Bug Fixes
+
+* recover from repetitive Grok output ([8a74b79](https://github.com/cgasgarth/clodex/commit/8a74b7986a2267c0508f2a2a41feda08283aa7e0))
+* refresh managed SuperGrok OAuth tokens ([0d10b71](https://github.com/cgasgarth/clodex/commit/0d10b71ee28c2414d7e7bf815b8598da160b581f))
+* support native web search through Claude ([#73](https://github.com/cgasgarth/clodex/issues/73)) ([446608d](https://github.com/cgasgarth/clodex/commit/446608decada64380fd73eedcc6960dc22c8ef94))
+
 ## [3.0.0](https://github.com/cgasgarth/clodex/compare/v2.1.6...v3.0.0) (2026-08-12)
 
 
