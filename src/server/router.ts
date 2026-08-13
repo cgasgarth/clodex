@@ -524,7 +524,6 @@ async function handleAnthropicMessages(
           plog,
           {
             initialInputTokens: estimatedInputTokens,
-            recoverOutputLoops: model.providerId === 'xai-oauth',
           },
         ),
       );
