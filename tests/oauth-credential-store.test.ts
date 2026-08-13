@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -96,6 +97,18 @@ describe('OAuth credential-store refresh', () => {
     const stored = await readCredentialHelperAccount(account);
     expect(stored).toContain('new-refresh');
     expect(stored).not.toContain('old-refresh');
+  });
+
+  it('refreshes a managed SuperGrok account with the canonical xAI provider id', async () => {
+    const xaiAccount = `oauth:provider:xai-oauth:account:${randomUUID()}`;
+    const xaiAuthRef = credentialAuthRef(xaiAccount);
+    await writeCredentialHelperAccount(xaiAccount, expiredCredential);
+
+    await expect(resolveProviderCredential('xai-oauth', xaiAuthRef)).resolves.toBe('new-access');
+    expect(refreshStoredOAuthCredential).toHaveBeenCalledWith(
+      'xai-oauth',
+      expect.objectContaining({ access: 'old-access' }),
+    );
   });
 
   it('never decodes malformed OAuth JSON as a bearer token', async () => {
