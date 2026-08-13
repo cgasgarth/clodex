@@ -33,7 +33,7 @@ import { isReservedModelAlias } from './model-aliases.js';
  * and never receive the new transforms, silently. `tests/patcher.test.ts` pins a
  * hash of this file to force that decision to be made rather than forgotten.
  */
-export const PATCH_TRANSFORMS_VERSION = 7;
+export const PATCH_TRANSFORMS_VERSION = 8;
 
 export interface PatchScriptModelEntry {
   alias?: string;
@@ -273,7 +273,7 @@ export function applyClodexPatches(source: string, config: PatchScriptModelConfi
   // ---------------------------------------------------------------------------
   // PATCH 1 — Agent/subagent tool 'model' zod enum.
   // Anchor: the enum constructor call followed by
-  // ["sonnet",...,"fable"].optional().describe(. Claude 2.1.227 replaced
+  // ["sonnet",...,"fable"].optional().describe(. Claude 2.1.229 replaced
   // Zod's `.enum(...)` spelling with a minified enum helper, so preserve the
   // constructor token instead of assuming either implementation. We append our
   // identities (alias when defined, else
@@ -573,7 +573,7 @@ export function applyClodexPatches(source: string, config: PatchScriptModelConfi
     const MARKER = '/*clodex:workflow-stall-timeout*/';
     applyOnce(
       'PATCH X7: Workflow agent stall timeout',
-      /(Be concise \\u2014 the script will parse your output\.`(?:,[\w$]+){4},)([\w$]+)=180000(,[\w$]+=5,[\w$]+=5;var)/,
+      /(Be concise \\u2014 the script will parse your output\.`(?:,[\w$]+){4},)([\w$]+)=180000(,[\w$]+=5;var)/,
       (_m, prefix, timeoutName, suffix) =>
         prefix + timeoutName + '=' + MARKER
         + 'Math.min(Math.max(Number(process.env.CLODEX_WORKFLOW_STALL_TIMEOUT_MS)||600000,180000),1800000)'
@@ -600,7 +600,7 @@ export function applyClodexPatches(source: string, config: PatchScriptModelConfi
     if (js.includes(MARKER)) {
       log('SKIP', name, 'already patched');
     } else {
-      const assistantRe = /if\(([\w$]+)=([\w$]+),([\w$]+)\?\.\push\(\2\),!\2\.isApiErrorMessage\)\{([\w$]+)=([\w$]+)\(\2\.message\.usage\);let ([\w$]+)=\2\.message\.model;/g;
+      const assistantRe = /if\(([\w$]+)=([\w$]+),([\w$]+)\?\.\push\(\2\),!\2\.isApiErrorMessage\)\{([\w$]+\?\.[\w$]+\(\)),([\w$]+)=([\w$]+)\(\2\.message\.usage\);let ([\w$]+)=\2\.message\.model;/g;
       const matches = [...js.matchAll(assistantRe)];
       if (matches.length !== 1) {
         log('FAIL', name, matches.length === 0
@@ -609,7 +609,7 @@ export function applyClodexPatches(source: string, config: PatchScriptModelConfi
       } else {
         const match = matches[0]!;
         const index = match.index;
-        const [whole, lastMessage, message, messages, tokens, countUsage, model] = match;
+        const [whole, lastMessage, message, messages, responseProgress, tokens, countUsage, model] = match;
         const progressSlice = js.slice(index, index + 3000);
         const progressRe = new RegExp(
           '([\\w$]+)\\("progress",\\{tokens:([\\w$]+)\\+' + reEsc(tokens!)
@@ -640,7 +640,7 @@ export function applyClodexPatches(source: string, config: PatchScriptModelConfi
           const afterAssistant = js.slice(index + whole.length);
           const retainedAssistant =
             'if(' + lastMessage + '=' + message + ',' + messages + '?.push(' + message + '),!'
-            + message + '.isApiErrorMessage){let __clodexAssistantUsage='
+            + message + '.isApiErrorMessage){' + responseProgress + ';let __clodexAssistantUsage='
             + countUsage + '(' + message + '.message.usage);'
             + 'if(__clodexAssistantUsage>0)' + tokens + '=__clodexAssistantUsage;'
             + 'let ' + model + '=' + message + '.message.model;';

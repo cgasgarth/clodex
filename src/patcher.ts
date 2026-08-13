@@ -78,7 +78,7 @@ import {
   type PatchScriptModelConfig,
 } from './patch-transforms.js';
 
-const SUPPORTED_CLAUDE_CODE_VERSION = '2.1.227';
+const SUPPORTED_CLAUDE_CODE_VERSION = '2.1.229';
 
 // ── Manifest ────────────────────────────────────────────────────────────────
 
@@ -565,10 +565,13 @@ export async function applyPatch(
     // unless the seed itself has to change.
     candidateDir = mkdtempSync(join(dirname(binaryPath), '.clodex-patch-'));
     const candidatePath = join(candidateDir, basename(binaryPath));
-    const seedCandidate = async (from: string): Promise<{ installation: Installation; source: string }> => {
+    const seedCandidate = async (
+      from: string,
+    ): Promise<{ installation: Installation; source: string; clearBytecode: boolean }> => {
       copyFileSync(from, candidatePath);
       const installation = await tryDetectInstallation({ path: candidatePath });
-      return { installation, source: await readContent(installation) };
+      const { content, clearBytecode } = await readContent(installation);
+      return { installation, source: content, clearBytecode };
     };
 
     const facts: PristineFacts = collectPristineFacts({
@@ -578,7 +581,11 @@ export async function applyPatch(
     });
 
     const initial = planPristineSource(facts);
-    let loaded: { installation: Installation; source: string } | null = null;
+    let loaded: {
+      installation: Installation;
+      source: string;
+      clearBytecode: boolean;
+    } | null = null;
     let plan: ResolvedPristinePlan;
     if (initial.action === 'inspect') {
       // Unrecognized bytes. The only reliable "is this already patched?" signal
@@ -672,7 +679,7 @@ export async function applyPatch(
         results,
       );
     }
-    await writeContent(loaded.installation, patched.content);
+    await writeContent(loaded.installation, patched.content, loaded.clearBytecode);
     patchedSize = statSync(candidatePath).size;
     patchedSha256 = sha256File(candidatePath);
     renameSync(candidatePath, binaryPath);

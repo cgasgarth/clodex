@@ -64,7 +64,7 @@
     "picocolors": "1.1.1",
     "react": "19.2.7",
     "secondwind": "0.3.0",
-    "tweakcc": "4.3.0",
+    "tweakcc": "https://github.com/cgasgarth/clodex-tweakcc/releases/download/v2.7.23/tweakcc-fixed-2.7.23.tgz",
     "undici": "7.29.0"
   },
   "devDependencies": {

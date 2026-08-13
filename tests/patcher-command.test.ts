@@ -42,9 +42,16 @@ const tweakcc = {
     const raw = readFileSync(installation.path, 'utf8');
     const index = raw.indexOf(hoisted.sentinel);
     if (index === -1) throw new Error('Failed to extract JavaScript from native installation');
-    return raw.slice(index + hoisted.sentinel.length);
+    return {
+      content: raw.slice(index + hoisted.sentinel.length),
+      clearBytecode: false,
+    };
   },
-  writeContent: async (installation: { path: string }, content: string) => {
+  writeContent: async (
+    installation: { path: string },
+    content: string,
+    _clearBytecode: boolean,
+  ) => {
     const raw = readFileSync(installation.path, 'utf8');
     const head = raw.slice(0, raw.indexOf(hoisted.sentinel));
     writeFileSync(installation.path, head + hoisted.sentinel + content, { mode: 0o755 });
@@ -158,8 +165,8 @@ describe('runPatchCommand version resolution', () => {
     // The reproduced failure: `claude` on PATH is a wrapper shim reporting an
     // older version than the real install, and a pristine backup for the SHIM's
     // version exists from when the user genuinely ran it. Keying the backup on
-    // the shim's version restored 2.1.215's bytes over the 2.1.227 install.
-    const real = installClaude('2.1.227');
+    // the shim's version restored 2.1.215's bytes over the 2.1.229 install.
+    const real = installClaude('2.1.229');
     const pristineBytes = readFileSync(real);
 
     const shim = join(home, 'shim', 'claude');
@@ -173,25 +180,25 @@ describe('runPatchCommand version resolution', () => {
 
     expect(await runPatchCommand({})).toBe(0);
 
-    // The install is still 2.1.227 — not overwritten with 2.1.215's bytes.
-    expect(versionOf(real)).toBe('2.1.227');
+    // The install is still 2.1.229 — not overwritten with 2.1.215's bytes.
+    expect(versionOf(real)).toBe('2.1.229');
     expect(bundleOf(real)).toContain('"sol"');
     expect(readFileSync(olderBackup)).toEqual(olderBackupBytes);
 
     const manifest = readPatchManifest();
-    expect(manifest?.claudeVersion).toBe('2.1.227');
+    expect(manifest?.claudeVersion).toBe('2.1.229');
     expect(manifest?.binaryPath).toBe(real);
 
-    // The pristine snapshot is the 2.1.227 binary, stored under its content address.
+    // The pristine snapshot is the 2.1.229 binary, stored under its content address.
     const backup = manifest!.backupPath;
-    expect(backup).toMatch(/claude-2\.1\.227-[0-9a-f]{16}\.orig$/);
+    expect(backup).toMatch(/claude-2\.1\.229-[0-9a-f]{16}\.orig$/);
     expect(readFileSync(backup)).toEqual(pristineBytes);
     expect(manifest?.pristineSha256).toBe(createHash('sha256').update(pristineBytes).digest('hex'));
   });
 
   it('takes the version from TWEAKCC_CC_INSTALLATION_PATH\'s binary, not from PATH', async () => {
-    const target = join(home, 'opt', 'claude-2.1.227');
-    writeFakeClaude(target, '2.1.227');
+    const target = join(home, 'opt', 'claude-2.1.229');
+    writeFakeClaude(target, '2.1.229');
     process.env.TWEAKCC_CC_INSTALLATION_PATH = target;
 
     const shim = join(home, 'shim', 'claude');
@@ -199,8 +206,8 @@ describe('runPatchCommand version resolution', () => {
     process.env.CLODEX_CLAUDE_PATH = shim;
 
     expect(await runPatchCommand({})).toBe(0);
-    expect(readPatchManifest()?.claudeVersion).toBe('2.1.227');
-    expect(backupFiles()).toContainEqual(expect.stringMatching(/^claude-2\.1\.227-[0-9a-f]{16}\.orig$/));
+    expect(readPatchManifest()?.claudeVersion).toBe('2.1.229');
+    expect(backupFiles()).toContainEqual(expect.stringMatching(/^claude-2\.1\.229-[0-9a-f]{16}\.orig$/));
   });
 
   it('refuses an unsupported Claude Code version before reading or modifying its bundle', async () => {
@@ -209,14 +216,14 @@ describe('runPatchCommand version resolution', () => {
 
     expect(await runPatchCommand({})).toBe(1);
 
-    expect(logs.join('\n')).toContain('Clodex supports patching Claude Code 2.1.227; found 2.1.225');
+    expect(logs.join('\n')).toContain('Clodex supports patching Claude Code 2.1.229; found 2.1.225');
     expect(readFileSync(real)).toEqual(before);
     expect(hoisted.readContentCalls).toEqual([]);
     expect(backupFiles()).toEqual([]);
   });
 
   it('fails with a version-specific message — not "binary not found" — when the version cannot be read', async () => {
-    const real = installClaude('2.1.227');
+    const real = installClaude('2.1.229');
     writeFileSync(real, 'not an executable at all');
     const before = readFileSync(real);
 
@@ -228,7 +235,7 @@ describe('runPatchCommand version resolution', () => {
   });
 
   it('keeps a launch alive when the version cannot be read', async () => {
-    const real = installClaude('2.1.227');
+    const real = installClaude('2.1.229');
     writeFileSync(real, 'not an executable at all');
     const stderr = vi.spyOn(console, 'error').mockImplementation(() => {});
 
@@ -241,7 +248,7 @@ describe('runPatchCommand version resolution', () => {
 
 describe('runPatchCommand pristine backup safety', () => {
   it('re-patches from the pristine backup instead of patching on top of a patch', async () => {
-    const real = installClaude('2.1.227');
+    const real = installClaude('2.1.229');
     const pristineBytes = readFileSync(real);
     expect(await runPatchCommand({})).toBe(0);
     const firstPass = bundleOf(real);
@@ -261,7 +268,7 @@ describe('runPatchCommand pristine backup safety', () => {
   });
 
   it('refuses to restore a corrupted backup and leaves the binary untouched', async () => {
-    const real = installClaude('2.1.227');
+    const real = installClaude('2.1.229');
     expect(await runPatchCommand({})).toBe(0);
     const patchedBytes = readFileSync(real);
     const backup = readPatchManifest()!.backupPath;
@@ -283,7 +290,7 @@ describe('runPatchCommand pristine backup safety', () => {
     const patchedBundle = PRISTINE_BUNDLE
       .replace('.enum(["sonnet","opus","haiku","fable"])', '.enum(["sonnet","opus","haiku","fable","sol"])')
       + '\n/*ccpatch:ctx*/var _ccw=({"sol":272000})[String(e||"").trim().toLowerCase()];if(_ccw!==void 0)return _ccw;';
-    const real = installClaude('2.1.227', patchedBundle);
+    const real = installClaude('2.1.229', patchedBundle);
     const before = readFileSync(real);
 
     expect(await runPatchCommand({})).toBe(1);
@@ -294,10 +301,10 @@ describe('runPatchCommand pristine backup safety', () => {
 
   it('refuses a legacy backup whose bytes belong to another version', async () => {
     // A legacy name carries no hash; this one was mislabeled by the version bug.
-    const real = installClaude('2.1.227', `${PRISTINE_BUNDLE}\n/*ccpatch:ctx*/var _ccw=({})[""];`);
+    const real = installClaude('2.1.229', `${PRISTINE_BUNDLE}\n/*ccpatch:ctx*/var _ccw=({})[""];`);
     const before = readFileSync(real);
     mkdirSync(tweakccDir, { recursive: true });
-    writeFakeClaude(join(tweakccDir, 'claude-2.1.227.orig'), '2.1.215');
+    writeFakeClaude(join(tweakccDir, 'claude-2.1.229.orig'), '2.1.215');
 
     expect(await runPatchCommand({})).toBe(1);
     expect(logs.join('\n')).toMatch(/Refusing to use .*it reports version 2\.1\.215/);
@@ -307,10 +314,10 @@ describe('runPatchCommand pristine backup safety', () => {
 
 describe('runPatchCommand legacy backup compatibility', () => {
   it('adopts an existing claude-<ver>.orig backup instead of orphaning it', async () => {
-    const real = installClaude('2.1.227');
+    const real = installClaude('2.1.229');
     const pristineBytes = readFileSync(real);
     mkdirSync(tweakccDir, { recursive: true });
-    const legacy = join(tweakccDir, 'claude-2.1.227.orig');
+    const legacy = join(tweakccDir, 'claude-2.1.229.orig');
     writeFileSync(legacy, pristineBytes, { mode: 0o755 });
 
     expect(await runPatchCommand({})).toBe(0);
@@ -319,7 +326,7 @@ describe('runPatchCommand legacy backup compatibility', () => {
     // under a self-validating content address that the manifest points at.
     expect(readFileSync(legacy)).toEqual(pristineBytes);
     const manifest = readPatchManifest()!;
-    expect(manifest.backupPath).toMatch(/claude-2\.1\.227-[0-9a-f]{16}\.orig$/);
+    expect(manifest.backupPath).toMatch(/claude-2\.1\.229-[0-9a-f]{16}\.orig$/);
     expect(readFileSync(manifest.backupPath)).toEqual(pristineBytes);
     expect(bundleOf(real)).toContain('"sol"');
   });
@@ -328,7 +335,7 @@ describe('runPatchCommand legacy backup compatibility', () => {
     // The bootstrap path inspects the candidate to answer "already patched?" and
     // then patches that same extraction. Dropping the reuse would be invisible in
     // behaviour but doubles the cost of the most common run, on a ~250 MB binary.
-    const real = installClaude('2.1.227');
+    const real = installClaude('2.1.229');
 
     expect(await runPatchCommand({})).toBe(0);
 
@@ -343,17 +350,17 @@ describe('runPatchCommand legacy backup compatibility', () => {
     // binary; the backup is content-addressed, so it needs no version probe.
     const pristineBytes = (() => {
       const staging = join(home, 'staging-claude');
-      writeFakeClaude(staging, '2.1.227');
+      writeFakeClaude(staging, '2.1.229');
       return readFileSync(staging);
     })();
-    const real = installClaude('2.1.227', `${PRISTINE_BUNDLE}\n/*ccpatch:ctx*/var _ccw=({})[""];`);
+    const real = installClaude('2.1.229', `${PRISTINE_BUNDLE}\n/*ccpatch:ctx*/var _ccw=({})[""];`);
     mkdirSync(tweakccDir, { recursive: true });
-    const backup = join(tweakccDir, `claude-2.1.227-${sha256OfBuffer(pristineBytes).slice(0, 16)}.orig`);
+    const backup = join(tweakccDir, `claude-2.1.229-${sha256OfBuffer(pristineBytes).slice(0, 16)}.orig`);
     writeFileSync(backup, pristineBytes, { mode: 0o755 });
 
     expect(await runPatchCommand({})).toBe(0);
 
-    expect(versionOf(real)).toBe('2.1.227');
+    expect(versionOf(real)).toBe('2.1.229');
     expect(bundleOf(real)).toContain('"sol"');
     // The stale patch is gone: the candidate came from the backup, not the binary.
     expect(bundleOf(real)).not.toContain('/*ccpatch:ctx*/var _ccw=({})[""]');
@@ -365,15 +372,15 @@ describe('runPatchCommand legacy backup compatibility', () => {
   it('restores a patched binary from a legacy backup that proves its version', async () => {
     const legacyBytes = (() => {
       const staging = join(home, 'staging-claude');
-      writeFakeClaude(staging, '2.1.227');
+      writeFakeClaude(staging, '2.1.229');
       return readFileSync(staging);
     })();
-    const real = installClaude('2.1.227', `${PRISTINE_BUNDLE}\n/*ccpatch:ctx*/var _ccw=({})[""];`);
+    const real = installClaude('2.1.229', `${PRISTINE_BUNDLE}\n/*ccpatch:ctx*/var _ccw=({})[""];`);
     mkdirSync(tweakccDir, { recursive: true });
-    writeFileSync(join(tweakccDir, 'claude-2.1.227.orig'), legacyBytes, { mode: 0o755 });
+    writeFileSync(join(tweakccDir, 'claude-2.1.229.orig'), legacyBytes, { mode: 0o755 });
 
     expect(await runPatchCommand({})).toBe(0);
-    expect(versionOf(real)).toBe('2.1.227');
+    expect(versionOf(real)).toBe('2.1.229');
     expect(bundleOf(real)).toContain('"sol"');
     // Restored from the legacy pristine bytes, so the stale patch is gone.
     expect(bundleOf(real)).not.toContain('/*ccpatch:ctx*/var _ccw=({})[""]');
@@ -382,7 +389,7 @@ describe('runPatchCommand legacy backup compatibility', () => {
 
 describe('runPatchCommand --restore', () => {
   it('restores the pristine binary and drops the manifest', async () => {
-    const real = installClaude('2.1.227');
+    const real = installClaude('2.1.229');
     const pristineBytes = readFileSync(real);
     expect(await runPatchCommand({})).toBe(0);
     expect(readFileSync(real)).not.toEqual(pristineBytes);
@@ -393,7 +400,7 @@ describe('runPatchCommand --restore', () => {
   });
 
   it('reports an error instead of restoring when no trustworthy backup exists', async () => {
-    const real = installClaude('2.1.227');
+    const real = installClaude('2.1.229');
     const before = sha256Of(real);
 
     expect(await runPatchCommand({ restore: true })).toBe(1);
@@ -405,7 +412,7 @@ describe('runPatchCommand --restore', () => {
     // The whole point of a pristine backup is recovery from a broken install, so
     // requiring the broken binary to run would defeat the command. The manifest
     // recorded the version when the binary was patched; that is enough.
-    const real = installClaude('2.1.227');
+    const real = installClaude('2.1.229');
     const pristineBytes = readFileSync(real);
     expect(await runPatchCommand({})).toBe(0);
     expect(readFileSync(real)).not.toEqual(pristineBytes);
@@ -414,15 +421,15 @@ describe('runPatchCommand --restore', () => {
 
     expect(await runPatchCommand({ restore: true })).toBe(0);
     expect(readFileSync(real)).toEqual(pristineBytes);
-    expect(versionOf(real)).toBe('2.1.227');
+    expect(versionOf(real)).toBe('2.1.229');
     expect(readPatchManifest()).toBeNull();
-    expect(logs.join('\n')).toMatch(/using claude 2\.1\.227 from the patch manifest/);
+    expect(logs.join('\n')).toMatch(/using claude 2\.1\.229 from the patch manifest/);
   });
 
   it('refuses to guess which backup to restore when nothing identifies the install', async () => {
     // Same unreadable binary, but no manifest — clodex cannot tell which version
     // this install is, so it must not pick a backup by guesswork.
-    const real = installClaude('2.1.227');
+    const real = installClaude('2.1.229');
     writeFileSync(real, '#!/bin/sh\nexit 3\n', { mode: 0o755 });
     const before = sha256Of(real);
 
@@ -432,7 +439,7 @@ describe('runPatchCommand --restore', () => {
   });
 
   it('keeps the patch path failing on an unreadable version, pointing at --restore', async () => {
-    const real = installClaude('2.1.227');
+    const real = installClaude('2.1.229');
     writeFileSync(real, '#!/bin/sh\nexit 3\n', { mode: 0o755 });
     const before = sha256Of(real);
 
@@ -446,7 +453,7 @@ describe('runPatchCommand poisoned backup safety', () => {
   /** Bytes that pass every provenance check but already carry a clodex patch. */
   function poisonedBackupBytes(): Buffer {
     const staging = join(home, 'poisoned-claude');
-    writeFakeClaude(staging, '2.1.227', `${PRISTINE_BUNDLE}\n/*ccpatch:effort*/var _ccc={};`);
+    writeFakeClaude(staging, '2.1.229', `${PRISTINE_BUNDLE}\n/*ccpatch:effort*/var _ccc={};`);
     return readFileSync(staging);
   }
 
@@ -457,10 +464,10 @@ describe('runPatchCommand poisoned backup safety', () => {
     // cannot catch it — a patched claude reports its own version fine.
     const poisoned = poisonedBackupBytes();
     mkdirSync(tweakccDir, { recursive: true });
-    const backup = join(tweakccDir, `claude-2.1.227-${sha256OfBuffer(poisoned).slice(0, 16)}.orig`);
+    const backup = join(tweakccDir, `claude-2.1.229-${sha256OfBuffer(poisoned).slice(0, 16)}.orig`);
     writeFileSync(backup, poisoned, { mode: 0o755 });
     // A live binary that differs from the backup, so the plan is `restore`.
-    const real = installClaude('2.1.227', `${PRISTINE_BUNDLE}\n/*ccpatch:ctx*/var _ccw=({})[""];`);
+    const real = installClaude('2.1.229', `${PRISTINE_BUNDLE}\n/*ccpatch:ctx*/var _ccw=({})[""];`);
     const patchedLive = sha256Of(real);
 
     expect(await runPatchCommand({})).toBe(1);
@@ -474,16 +481,16 @@ describe('runPatchCommand poisoned backup safety', () => {
   it('does not adopt a poisoned legacy backup into a content-addressed name', async () => {
     // Adoption is what converts "delete the bad .orig" into permanent trust,
     // because a content-addressed name is later believed without a version probe.
-    const real = installClaude('2.1.227', `${PRISTINE_BUNDLE}\n/*ccpatch:ctx*/var _ccw=({})[""];`);
+    const real = installClaude('2.1.229', `${PRISTINE_BUNDLE}\n/*ccpatch:ctx*/var _ccw=({})[""];`);
     const before = sha256Of(real);
     const poisoned = poisonedBackupBytes();
     mkdirSync(tweakccDir, { recursive: true });
-    writeFileSync(join(tweakccDir, 'claude-2.1.227.orig'), poisoned, { mode: 0o755 });
+    writeFileSync(join(tweakccDir, 'claude-2.1.229.orig'), poisoned, { mode: 0o755 });
 
     expect(await runPatchCommand({})).toBe(1);
     expect(logs.join('\n')).toMatch(/already carry a clodex patch/);
     expect(sha256Of(real)).toBe(before);
-    expect(backupFiles()).toEqual(['claude-2.1.227.orig']);
+    expect(backupFiles()).toEqual(['claude-2.1.229.orig']);
   });
 });
 
@@ -491,11 +498,11 @@ describe('runPatchCommand backup directory integrity', () => {
   it('replaces a corrupt file squatting the content address instead of adopting it', async () => {
     // The likely cause is an interrupted ~250 MB copy. Trusting the NAME made
     // `clodex patch` fail forever with a misleading extraction error.
-    const real = installClaude('2.1.227');
+    const real = installClaude('2.1.229');
     const pristineBytes = readFileSync(real);
     mkdirSync(tweakccDir, { recursive: true });
-    writeFileSync(join(tweakccDir, 'claude-2.1.227.orig'), pristineBytes, { mode: 0o755 });
-    const canonical = join(tweakccDir, `claude-2.1.227-${sha256OfBuffer(pristineBytes).slice(0, 16)}.orig`);
+    writeFileSync(join(tweakccDir, 'claude-2.1.229.orig'), pristineBytes, { mode: 0o755 });
+    const canonical = join(tweakccDir, `claude-2.1.229-${sha256OfBuffer(pristineBytes).slice(0, 16)}.orig`);
     writeFileSync(canonical, 'truncated garbage', { mode: 0o755 });
 
     expect(await runPatchCommand({})).toBe(0);
@@ -507,7 +514,7 @@ describe('runPatchCommand backup directory integrity', () => {
   });
 
   it('leaves no half-written temp file in the backup directory', async () => {
-    const real = installClaude('2.1.227');
+    const real = installClaude('2.1.229');
     expect(await runPatchCommand({})).toBe(0);
     // Backups are published temp-then-rename, so no `.tmp-*` may survive.
     expect(backupFiles().filter(name => name.includes('.tmp-'))).toEqual([]);

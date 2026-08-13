@@ -30,7 +30,7 @@ that every runtime artifact matches the checkout.
 
 ## Quick start
 
-This release supports Claude Code **2.1.227 only**. Clodex checks the installed
+This release supports Claude Code **2.1.229 only**. Clodex checks the installed
 version before it patches or launches Claude Code.
 
 Install clodex, sign in to a provider, choose the models you want Claude to
@@ -334,7 +334,7 @@ Patch the installed Claude Code binary so clodex favorites and aliases are first
 | `--trace` | Show the underlying tweakcc output |
 | `--help` | Help |
 
-The patch map is built from your favorites and aliases; context windows come from provider metadata. This Clodex release supports Claude Code **2.1.227 only**. `clodex patch` rejects every other version before it reads, backs up, or changes the binary. `clodex patch --restore` remains available for recovery.
+The patch map is built from your favorites and aliases; context windows come from provider metadata. This Clodex release supports Claude Code **2.1.229 only**. `clodex patch` rejects every other version before it reads, backs up, or changes the binary. `clodex patch --restore` remains available for recovery.
 
 A pristine content-addressed backup and `~/.clodex/patch-state.json` make unchanged re-runs no-ops. `clodex claude` checks compatibility and patch freshness at launch. Update Clodex before updating Claude Code when a newer Claude release appears.
 
