@@ -909,6 +909,179 @@ describe('streamAnthropicResponse idle timeout', () => {
   }, 10_000);
 });
 
+describe('streamAnthropicResponse Grok output-loop recovery', () => {
+  it('replaces one repetitive generation and keeps one Anthropic turn open', async () => {
+    const repeated = "I'll continue as soon as they finish. ";
+    const signals: AbortSignal[] = [];
+    const detected = vi.fn();
+    let call = 0;
+    const streamText = vi.fn((options: { abortSignal: AbortSignal; messages: unknown[] }) => {
+      signals.push(options.abortSignal);
+      call += 1;
+      async function* stream() {
+        yield { type: 'start' };
+        if (call === 1) {
+          yield { type: 'text-start', id: 'first' };
+          yield { type: 'text-delta', id: 'first', text: 'Six agents are still running. ' };
+          yield { type: 'text-delta', id: 'first', text: repeated.repeat(80) };
+          yield { type: 'finish', finishReason: 'length' };
+          return;
+        }
+        yield { type: 'reasoning-start', id: 'recovery-reasoning' };
+        yield { type: 'reasoning-delta', id: 'recovery-reasoning', text: 'Choose another path.' };
+        yield {
+          type: 'reasoning-end',
+          id: 'recovery-reasoning',
+          providerMetadata: { openai: { reasoningEncryptedContent: 'sig' } },
+        };
+        yield { type: 'text-start', id: 'recovered' };
+        yield { type: 'text-delta', id: 'recovered', text: 'I will inspect the completed results now.' };
+        yield { type: 'text-end', id: 'recovered' };
+        yield {
+          type: 'finish',
+          finishReason: 'stop',
+          totalUsage: { inputTokens: 11, outputTokens: 9 },
+        };
+      }
+      return { stream: stream() };
+    });
+    let raw = '';
+
+    await streamAnthropicResponse(
+      {} as never,
+      { messages: [{ role: 'user', content: 'Finish the lint task.' }] },
+      'grok',
+      chunk => { raw += chunk; },
+      undefined,
+      {
+        recoverOutputLoops: true,
+        outputLoopRecoveryNonce: () => '123e4567-e89b-12d3-a456-426614174000',
+        onOutputLoopDetected: detected,
+      },
+      { streamText: streamText as never },
+    );
+
+    expect(streamText).toHaveBeenCalledTimes(2);
+    expect(signals[0]?.aborted).toBe(true);
+    const recoveryMessages = streamText.mock.calls[1]?.[0].messages as Array<{
+      role: string;
+      content: string;
+    }>;
+    expect(recoveryMessages.at(-2)?.role).toBe('assistant');
+    expect(recoveryMessages.at(-2)?.content).toContain('Six agents are still running');
+    expect(recoveryMessages.at(-2)?.content).not.toContain(repeated.trim());
+    expect(recoveryMessages.at(-1)?.content)
+      .toContain('123e4567-e89b-12d3-a456-426614174000');
+    expect(detected).toHaveBeenCalledOnce();
+    expect(detected.mock.calls[0]?.[0]).toMatchObject({ recoveryAttempt: 0 });
+    expect(raw.match(/event: message_start/g)).toHaveLength(1);
+    expect(raw.match(/event: message_stop/g)).toHaveLength(1);
+    expect(raw).not.toContain(repeated.repeat(8));
+    expect(raw).not.toContain('thinking_delta');
+    expect(raw).toContain('I will inspect the completed results now.');
+    expect(raw).toContain('"stop_reason":"end_turn"');
+  });
+
+  it('stops cleanly when the one recovery attempt also loops', async () => {
+    const repeated = 'The same response is still repeating verbatim. ';
+    const detected = vi.fn();
+    const streamText = vi.fn(() => {
+      async function* stream() {
+        yield { type: 'start' };
+        yield { type: 'text-start', id: 'text' };
+        yield { type: 'text-delta', id: 'text', text: repeated.repeat(80) };
+      }
+      return { stream: stream() };
+    });
+    let raw = '';
+
+    await streamAnthropicResponse(
+      {} as never,
+      { messages: [{ role: 'user', content: 'Continue.' }] },
+      'grok',
+      chunk => { raw += chunk; },
+      undefined,
+      { recoverOutputLoops: true, onOutputLoopDetected: detected },
+      { streamText: streamText as never },
+    );
+
+    expect(streamText).toHaveBeenCalledTimes(2);
+    expect(detected).toHaveBeenCalledTimes(2);
+    expect(raw).toContain('Clodex stopped repetitive Grok output');
+    expect(raw.match(/event: message_stop/g)).toHaveLength(1);
+  });
+
+  it('can continue the recovered turn with a tool call', async () => {
+    const repeated = 'I will keep waiting for the same unchanged result. ';
+    let call = 0;
+    const streamText = vi.fn(() => {
+      call += 1;
+      async function* stream() {
+        yield { type: 'start' };
+        if (call === 1) {
+          yield { type: 'text-start', id: 'loop' };
+          yield { type: 'text-delta', id: 'loop', text: repeated.repeat(80) };
+          return;
+        }
+        yield {
+          type: 'tool-call',
+          toolCallId: 'call_recovered',
+          toolName: 'ListAgents',
+          input: {},
+        };
+        yield { type: 'finish', finishReason: 'tool-calls' };
+      }
+      return { stream: stream() };
+    });
+    let raw = '';
+
+    await streamAnthropicResponse(
+      {} as never,
+      { messages: [{ role: 'user', content: 'Continue.' }] },
+      'grok',
+      chunk => { raw += chunk; },
+      undefined,
+      { recoverOutputLoops: true },
+      { streamText: streamText as never },
+    );
+
+    expect(streamText).toHaveBeenCalledTimes(2);
+    expect(raw).toContain('"type":"tool_use"');
+    expect(raw).toContain('"name":"ListAgents"');
+    expect(raw).toContain('"stop_reason":"tool_use"');
+    expect(raw.match(/event: message_stop/g)).toHaveLength(1);
+  });
+
+  it('does not replay a response after it has emitted a tool call', async () => {
+    const repeated = 'This post-tool text is repeating without progress. ';
+    const streamText = vi.fn(() => {
+      async function* stream() {
+        yield { type: 'start' };
+        yield { type: 'tool-call', toolCallId: 'call_1', toolName: 'Read', input: { path: 'a' } };
+        yield { type: 'text-start', id: 'text' };
+        yield { type: 'text-delta', id: 'text', text: repeated.repeat(80) };
+      }
+      return { stream: stream() };
+    });
+    let raw = '';
+
+    await streamAnthropicResponse(
+      {} as never,
+      { messages: [{ role: 'user', content: 'Continue.' }] },
+      'grok',
+      chunk => { raw += chunk; },
+      undefined,
+      { recoverOutputLoops: true },
+      { streamText: streamText as never },
+    );
+
+    expect(streamText).toHaveBeenCalledOnce();
+    expect(raw).toContain('Clodex stopped repetitive Grok output');
+    expect(raw).toContain('"type":"tool_use"');
+    expect(raw.match(/event: message_stop/g)).toHaveLength(1);
+  });
+});
+
 // ── streaming translation ────────────────────────────────────────────────────
 async function collect(
   parts: any[],

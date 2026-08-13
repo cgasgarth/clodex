@@ -71,6 +71,7 @@ updates, or restore the pristine Claude binary with `clodex patch --restore`.
 | Stable prompt-cache routing and explicit cache breakpoints | Yes |
 | Native OpenAI/Codex compaction with durable recovery | Optional |
 | In-process Secondwind tool-output optimization | Built in; defaults on |
+| Grok exact output-loop detection and same-turn recovery | Built in |
 | Multiple manually selected ChatGPT/Codex accounts | Up to five |
 
 Clodex can also expose local Anthropic- and OpenAI-compatible endpoints, but

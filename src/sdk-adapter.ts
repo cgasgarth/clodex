@@ -26,6 +26,10 @@ import {
   MODEL_STREAM_IDLE_TIMEOUT_MS,
   MODEL_TOTAL_TIMEOUT_MS,
 } from './timeouts.js';
+import {
+  streamWithOutputLoopRecovery,
+  type OutputLoopDiagnostic,
+} from './output-loop-recovery.js';
 
 export { silenceSdkWarnings };
 
@@ -787,6 +791,11 @@ export interface AnthropicStreamObserver {
   abortSignal?: AbortSignal;
   /** Abort if the provider produces no stream event for this long. */
   idleTimeoutMs?: number;
+  /** Recover one sustained exact plain-text repetition without ending Claude's turn. */
+  recoverOutputLoops?: boolean;
+  /** Test seam; production recovery uses a fresh UUID. */
+  outputLoopRecoveryNonce?: () => string;
+  onOutputLoopDetected?: (event: OutputLoopDiagnostic) => void;
 }
 
 const SDK_STREAM_IDLE_TIMEOUT_MS = MODEL_STREAM_IDLE_TIMEOUT_MS;
@@ -1134,16 +1143,28 @@ export async function streamAnthropicResponse(
   // Do not combine streamText's total/chunk timeout signals here. In AI SDK
   // 7.0.22 that composition retains completed StreamTextResult graphs. Relay
   // owns the timers and explicitly settles its controller after consumption.
-  const result = (dependencies.streamText ?? streamText)({
-    model,
-    ...params,
-    abortSignal,
-    onError: () => {},
-  } as Parameters<typeof streamText>[0]);
+  const providerStream = observer?.recoverOutputLoops
+    ? streamWithOutputLoopRecovery(
+        model,
+        params,
+        abortSignal,
+        dependencies.streamText ?? streamText,
+        {
+          nonce: observer.outputLoopRecoveryNonce,
+          onDetected: observer.onOutputLoopDetected,
+          log,
+        },
+      )
+    : (dependencies.streamText ?? streamText)({
+        model,
+        ...params,
+        abortSignal,
+        onError: () => {},
+      } as Parameters<typeof streamText>[0]).stream as AsyncIterable<FullStreamPart>;
 
   const watchedStream = (async function* () {
     try {
-      for await (const part of result.stream as AsyncIterable<FullStreamPart>) {
+      for await (const part of providerStream) {
         clearTimeout(idleTimer);
         idleTimer = setTimeout(
           () => idleAbort.abort(new Error(`no data received from provider for ${Math.round(idleTimeoutMs / 1000)}s`)),

@@ -924,8 +924,8 @@ export async function startProxyCatalog(
                       commitProviderStreamLive(streamTransaction, route.providerId, partType);
                     },
                     onUsage: usage => { finalUsage = usage; },
-                    initialInputTokens: estimatedInputTokens,
-                    abortSignal: clientAbort.signal,
+                    initialInputTokens: estimatedInputTokens, abortSignal: clientAbort.signal,
+                    recoverOutputLoops: route.providerId === 'xai-oauth',
                   },
                 ),
               );

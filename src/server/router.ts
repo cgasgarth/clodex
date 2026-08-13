@@ -521,8 +521,11 @@ async function handleAnthropicMessages(
           params,
           responseModelId,
           writeStreamChunk,
-          undefined,
-          { initialInputTokens: estimatedInputTokens },
+          plog,
+          {
+            initialInputTokens: estimatedInputTokens,
+            recoverOutputLoops: model.providerId === 'xai-oauth',
+          },
         ),
       );
       if (!res.headersSent) writeStreamChunk('');
