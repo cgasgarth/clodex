@@ -143,6 +143,7 @@ async function runClaudeDaemonEndpointCommand(
     true,
     catalogUsesNativeContextOwner(loaded.routes),
   );
+  if (parsed.fast) childEnv['CLODEX_CLAUDE_FAST_DEFAULT'] = '1';
   if (launchTicket) {
     childEnv['CLODEX_LAUNCH_TICKET'] = launchTicket;
     setAnthropicCustomHeader(childEnv, LAUNCH_TICKET_HEADER, launchTicket);
@@ -378,6 +379,7 @@ export async function runClaudeCommand(
       selectedModel.contextWindow,
       trace,
       claudeArgs,
+      parsed.fast,
     );
   }
 
@@ -517,6 +519,7 @@ export async function runClaudeCommand(
   if (selectedModel.modelFormat === 'anthropic' && !usesAnthropicProxy) {
     childEnv['CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS'] = '1';
   }
+  if (parsed.fast) childEnv['CLODEX_CLAUDE_FAST_DEFAULT'] = '1';
 
   const debugLogPath = prepareClaudeTraceLog();
   const traceArgs = trace ? ['--debug-file', debugLogPath] : [];

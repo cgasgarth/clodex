@@ -48,6 +48,7 @@ export async function launchClaudeViaCatalog(
   contextWindow: number | undefined,
   trace: boolean,
   claudeArgs: string[],
+  fastByDefault = false,
 ): Promise<number> {
   reportInactiveCatalogAliases(modelAliases);
   let proxyHandle: ProxyHandle;
@@ -82,6 +83,7 @@ export async function launchClaudeViaCatalog(
     // by Clodex native compaction; mixed catalogs must keep Claude's lifecycle.
     catalogUsesNativeContextOwner(catalogRoutes),
   );
+  if (fastByDefault) childEnv['CLODEX_CLAUDE_FAST_DEFAULT'] = '1';
 
   const debugLogPath = prepareClaudeTraceLog();
   const traceArgs = trace ? ['--debug-file', debugLogPath] : [];

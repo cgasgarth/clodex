@@ -33,7 +33,7 @@ import { isReservedModelAlias } from './model-aliases.js';
  * and never receive the new transforms, silently. `tests/patcher.test.ts` pins a
  * hash of this file to force that decision to be made rather than forgotten.
  */
-export const PATCH_TRANSFORMS_VERSION = 8;
+export const PATCH_TRANSFORMS_VERSION = 9;
 
 export interface PatchScriptModelEntry {
   alias?: string;
@@ -133,6 +133,8 @@ export function applyClodexPatches(source: string, config: PatchScriptModelConfi
     string,
     PatchScriptModelEntry['effort']
   >;
+  // Only ChatGPT/Codex OAuth routes have the OpenAI priority-tier contract.
+  const FAST_MODE_KEYS = new Set<string>();
 
   const report: PatchSiteResult[] = [];
   const fail = (message: string): never => {
@@ -171,6 +173,14 @@ export function applyClodexPatches(source: string, config: PatchScriptModelConfi
       registerCapabilityKeys(String(spec.alias));
     }
     registerCapabilityKeys(String(id));
+    if (id.startsWith('clodex:openai-oauth:')) {
+      const upstreamId = id.slice('clodex:openai-oauth:'.length);
+      if (spec.alias !== undefined) {
+        for (const key of capabilityKeys(String(spec.alias))) FAST_MODE_KEYS.add(key);
+      }
+      for (const key of capabilityKeys(String(id))) FAST_MODE_KEYS.add(key);
+      for (const key of capabilityKeys(upstreamId)) FAST_MODE_KEYS.add(key);
+    }
 
     if (spec.context !== undefined) {
       const n = Number(spec.context);
@@ -649,6 +659,111 @@ export function applyClodexPatches(source: string, config: PatchScriptModelConfi
         }
       }
     }
+  }
+
+  // ---------------------------------------------------------------------------
+  // PATCH X9 — expose Claude's native /fast control for Clodex OpenAI routes.
+  //
+  // Claude normally limits Fast to first-party Opus models, checks entitlement
+  // directly against api.anthropic.com, persists the preference globally, and
+  // omits the request field when Fast is off. A Clodex child instead:
+  //   - permits the UI under an explicit child-only env flag;
+  //   - treats configured OpenAI OAuth identities as Fast-capable;
+  //   - reads/writes only session flag state;
+  //   - emits explicit fast/standard request intent so /fast off can override a
+  //     launch that started with `clodex claude --fast`;
+  //   - uses provider-neutral copy while leaving ordinary Claude unchanged.
+  // ---------------------------------------------------------------------------
+  {
+    const envGate = 'process.env.CLODEX_CLAUDE_FAST_MODE==="1"';
+
+    applyOnce(
+      'PATCH X9a: Clodex Fast provider gate',
+      /function ([\w$]+)\(\)\{if\(([\w$]+)\(\)!=="firstParty"\)return!1;return!([\w$]+)\.CLAUDE_CODE_DISABLE_FAST_MODE\}/,
+      (_m, predicate, providerKind, config) =>
+        'function ' + predicate + '(){/*ccpatch:fast-provider*/if(' + envGate + ')return!'
+        + config + '.CLAUDE_CODE_DISABLE_FAST_MODE;if(' + providerKind
+        + '()!=="firstParty")return!1;return!' + config + '.CLAUDE_CODE_DISABLE_FAST_MODE}',
+      { marker: '/*ccpatch:fast-provider*/', required: true },
+    );
+
+    const fastVerdicts = Object.fromEntries([...FAST_MODE_KEYS].map(key => [key, true]));
+    applyOnce(
+      'PATCH X9b: Clodex Fast model capability',
+      /(function ([\w$]+)\(e\)\{if\(!([\w$]+)\(\)\)return!1;let ([\w$]+)=e\?\?([\w$]+)\(\),([\w$]+)=([\w$]+)\(\4\);)(if\(([\w$]+)\(([\w$]+)\(\6\),"fast_mode"\)\)return!0;)/,
+      (_m, head, _predicate, _fastEnabled, _model, _defaultModel, normalized, _normalize, body) =>
+        head + '/*ccpatch:fast-model*/var _ccf=Object.assign(Object.create(null),'
+        + JSON.stringify(fastVerdicts) + ')[String(' + normalized
+        + '||"").trim().toLowerCase()];if(_ccf!==void 0&&' + envGate + ')return _ccf;'
+        + body,
+      { marker: '/*ccpatch:fast-model*/', required: true },
+    );
+
+    applyOnce(
+      'PATCH X9c: Clodex Fast initial session state',
+      /function ([\w$]+)\(e\)\{if\(e\.fastMode!==!0\)return!1;if\(!e\.fastModePerSessionOptIn\)return!0;if\(([\w$]+)\("policySettings"\)\?\.fastModePerSessionOptIn===!0\)return!1;return \2\("flagSettings"\)\?\.fastMode===!0\}/,
+      (_m, predicate, readSettings) =>
+        'function ' + predicate + '(e){/*ccpatch:fast-session-init*/if(' + envGate
+        + '){let _ccs=' + readSettings + '("flagSettings")?.fastMode;return _ccs===!0'
+        + '||(_ccs===void 0&&process.env.CLODEX_CLAUDE_FAST_DEFAULT==="1")}if(e.fastMode!==!0)'
+        + 'return!1;if(!e.fastModePerSessionOptIn)return!0;if(' + readSettings
+        + '("policySettings")?.fastModePerSessionOptIn===!0)return!1;return '
+        + readSettings + '("flagSettings")?.fastMode===!0}',
+      { marker: '/*ccpatch:fast-session-init*/', required: true },
+    );
+
+    applyOnce(
+      'PATCH X9d: Clodex Fast session-only writes',
+      /(function ([\w$]+)\(e,t,r=!0,n\)\{)(if\(([\w$]+)\(\),!r\))/,
+      (_m, head, _toggle, body) =>
+        head + '/*ccpatch:fast-session-write*/if(' + envGate + ')r=!1;' + body,
+      { marker: '/*ccpatch:fast-session-write*/', required: true },
+    );
+
+    applyOnce(
+      'PATCH X9e: Clodex Fast session-only status',
+      /(async function ([\w$]+)\(e,t,r,n,o=!0,i\)\{)(let [\w$]+=[\w$]+\(\);if\([\w$]+\)return`Fast mode unavailable: \$\{[\w$]+\}`;)/,
+      (_m, head, _toggle, body) =>
+        head + '/*ccpatch:fast-session-status*/if(' + envGate + ')o=!1;' + body,
+      { marker: '/*ccpatch:fast-session-status*/', required: true },
+    );
+
+    applyOnce(
+      'PATCH X9f: Clodex Fast explicit request intent',
+      /(\.\.\.)([\w$]+)!==void 0&&\{speed:\2\}/,
+      (_m, spread, speed) =>
+        spread + '/*ccpatch:fast-request*/(' + speed + '!==void 0||' + envGate
+        + ')&&{speed:' + speed + '??"standard"}',
+      { marker: '/*ccpatch:fast-request*/', required: true },
+    );
+
+    applyOnce(
+      'PATCH X9g: Clodex Fast model label',
+      /function ([\w$]+)\(\)\{return"Opus 5"\}/,
+      (_m, label) =>
+        'function ' + label + '(){/*ccpatch:fast-label*/return ' + envGate
+        + '?"current session model":"Opus 5"}',
+      { marker: '/*ccpatch:fast-label*/', required: true },
+    );
+
+    applyOnce(
+      'PATCH X9h: Clodex Fast dialog copy',
+      /(subtitle:)(`High-speed mode for \$\{[\w$]+\}\. Draws from usage credits at a higher rate\. Separate rate limits apply\.`)/,
+      (_m, prefix, nativeCopy) =>
+        prefix + '/*ccpatch:fast-copy*/' + envGate
+        + '?"High-speed processing for this session. The upstream provider reports the actual service tier.":'
+        + nativeCopy,
+      { marker: '/*ccpatch:fast-copy*/', required: true },
+    );
+
+    applyOnce(
+      'PATCH X9i: Clodex Fast non-interactive default',
+      /(if\(([\w$]+)\(\)&&([\w$]+)\(\)&&!([\w$]+)\)return"sdk_opt_in_required";)/,
+      (_m, _gate, sdkMode, requiresOptIn, flagFast) =>
+        '/*ccpatch:fast-sdk-default*/if(' + sdkMode + '()&&' + requiresOptIn
+        + '()&&!' + flagFast + '&&!(' + envGate + '))return"sdk_opt_in_required";',
+      { marker: '/*ccpatch:fast-sdk-default*/', required: true },
+    );
   }
 
   // PATCH 8 — per-model effort capability gates.

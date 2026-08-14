@@ -90,6 +90,8 @@ export interface AnthropicRequest {
   output_config?: { effort?: string };
   metadata?: { user_id?: unknown };
   diagnostics?: unknown;
+  /** Claude native /fast state. Clodex consumes this instead of forwarding it. */
+  speed?: 'standard' | 'fast';
 }
 
 export interface TranslateRequestOptions {
@@ -98,7 +100,7 @@ export interface TranslateRequestOptions {
   reasoningMetadata?: ReasoningMetadata;
   /** ChatGPT Codex OAuth requires instructions and manages its own output limit. */
   openAiOAuth?: boolean;
-  /** Per-launch processing mode. Fast is valid only for ChatGPT Codex OAuth. */
+  /** Effective request processing mode. Fast is valid only for ChatGPT Codex OAuth. */
   processingMode?: 'standard' | 'fast';
   /** Fallback session identity from X-Claude-Code-Session-Id. Body metadata wins. */
   claudeSessionId?: string;
