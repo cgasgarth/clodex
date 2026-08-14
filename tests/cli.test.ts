@@ -147,6 +147,11 @@ describe('parseArgs', () => {
       command: 'claude',
       claudeArgs: ['--print', 'hello'],
     });
+    expect(parseArgs(['claude', '--fast', '-c'])).toMatchObject({
+      command: 'claude',
+      fast: true,
+      claudeArgs: ['-c'],
+    });
   });
 
   it('parses claude boot provider/model flags', () => {
@@ -249,6 +254,7 @@ describe('help text', () => {
     expect(serverHelpText()).toContain('--endpoint');
     expect(serverHelpText()).toContain('--proxy');
     expect(claudeHelpText()).toContain('--save-mode');
+    expect(claudeHelpText()).toContain('--fast');
     expect(claudeHelpText()).not.toContain('clodex claude --proxy');
     expect(serverHelpText()).toContain('--save-mode');
     expect(claudeHelpText()).toContain('single endpoint');

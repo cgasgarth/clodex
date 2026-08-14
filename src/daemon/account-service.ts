@@ -24,6 +24,7 @@ import { getTemplateById } from '../provider-templates.js';
 import { loadRegistry, loadRegistryStrict, saveRegistry } from '../registry/io.js';
 import { withRegistryWriteLockSync } from '../registry/lock.js';
 import type { DaemonAccountController, DaemonAccountView } from './control-api.js';
+import type { ApiProcessingMode } from './api-pricing.js';
 import {
   DaemonAccountStore,
   type DaemonAccountRecord,
@@ -71,6 +72,12 @@ export interface LaunchTicket {
   ticket: string;
   accountIds: Partial<Record<ManagedOAuthProviderId, string>>;
   accountLabel: string;
+  processingMode: ApiProcessingMode;
+}
+
+interface LaunchTicketPayload {
+  accountIds: LaunchTicket['accountIds'];
+  processingMode: ApiProcessingMode;
 }
 
 export function providerDisplayName(providerId: ManagedOAuthProviderId): string {
@@ -215,7 +222,10 @@ export class DaemonAccountService implements DaemonAccountController {
     syncManagedProviderCredential(account.providerId, account.authRef);
   }
 
-  createLaunchTicket(accountId?: string): LaunchTicket | null {
+  createLaunchTicket(
+    accountId?: string,
+    processingMode: ApiProcessingMode = 'standard',
+  ): LaunchTicket | null {
     const selected = Object.fromEntries(MANAGED_PROVIDER_IDS.flatMap(providerId => {
       const account = this.store.selected(providerId);
       return account ? [[providerId, account.id]] : [];
@@ -225,12 +235,13 @@ export class DaemonAccountService implements DaemonAccountController {
       if (!account) throw new Error(`Managed account not found: ${accountId}`);
       selected[account.providerId] = account.id;
     }
-    if (Object.keys(selected).length === 0) return null;
+    if (Object.keys(selected).length === 0 && processingMode === 'standard') return null;
     const payload = Buffer.from(JSON.stringify({
       v: 2,
       a: selected,
       i: this.dependencies.now(),
       n: randomBytes(12).toString('base64url'),
+      ...(processingMode === 'fast' ? { p: 'fast' } : {}),
     })).toString('base64url');
     const signature = createHmac('sha256', this.ticketKey).update(payload).digest('base64url');
     const labels = Object.values(selected).flatMap(id => {
@@ -241,13 +252,11 @@ export class DaemonAccountService implements DaemonAccountController {
       ticket: `${payload}.${signature}`,
       accountIds: selected,
       accountLabel: labels.join(', '),
+      processingMode,
     };
   }
 
-  accountForTicket(
-    ticket: string | undefined,
-    providerId: ManagedOAuthProviderId = 'openai-oauth',
-  ): DaemonAccountRecord | null {
+  private launchForTicket(ticket: string | undefined): LaunchTicketPayload | null {
     if (!ticket) return null;
     const [payload, signature, extra] = ticket.split('.');
     if (!payload || !signature || extra !== undefined) return null;
@@ -264,6 +273,7 @@ export class DaemonAccountService implements DaemonAccountController {
         v?: unknown;
         a?: unknown;
         i?: unknown;
+        p?: unknown;
       };
       if (
         parsed.v !== 2
@@ -273,14 +283,27 @@ export class DaemonAccountService implements DaemonAccountController {
         || !Number.isFinite(parsed.i)
         || parsed.i > this.dependencies.now() + 60_000
         || this.dependencies.now() - parsed.i > LAUNCH_TICKET_TTL_MS
+        || (parsed.p !== undefined && parsed.p !== 'fast')
       ) return null;
-      const id = (parsed.a as Record<string, unknown>)[providerId];
-      return typeof id === 'string'
-        ? this.store.list(providerId).find(account => account.id === id) ?? null
-        : null;
+      return {
+        accountIds: parsed.a,
+        processingMode: parsed.p === 'fast' ? 'fast' : 'standard',
+      };
     } catch {
       return null;
     }
+  }
+
+  accountForTicket(
+    ticket: string | undefined,
+    providerId: ManagedOAuthProviderId = 'openai-oauth',
+  ): DaemonAccountRecord | null {
+    const launch = this.launchForTicket(ticket);
+    if (!launch) return null;
+    const id = launch.accountIds[providerId];
+    return typeof id === 'string'
+      ? this.store.list(providerId).find(account => account.id === id) ?? null
+      : null;
   }
 
   async routeForTicket(route: ProxyRoute, ticket: string | undefined): Promise<ProxyRoute> {
@@ -289,14 +312,18 @@ export class DaemonAccountService implements DaemonAccountController {
       || (route.providerId !== 'openai-oauth' && route.providerId !== 'xai-oauth')
     ) return route;
     const providerId = route.providerId;
+    const launch = this.launchForTicket(ticket);
+    const launchRoute = providerId === 'openai-oauth' && launch?.processingMode === 'fast'
+      ? { ...route, processingMode: 'fast' as const }
+      : route;
     const managedAccounts = this.store.list(providerId);
-    if (managedAccounts.length === 0) return route;
+    if (managedAccounts.length === 0) return launchRoute;
     const account = this.accountForTicket(ticket, providerId);
     if (!account) throw new Error(`The ${providerDisplayName(providerId)} launch ticket is missing or expired`);
     const apiKey = await this.dependencies.resolveCredential(providerId, account.authRef);
     if (!apiKey) throw new Error(`OAuth credential is unavailable for ${accountIdentity(account)}`);
     const common = {
-      ...route,
+      ...launchRoute,
       apiKey,
       metricsAccountId: account.id,
       refreshToken: (rejectedAccessToken?: string) => this.dependencies.resolveCredential(

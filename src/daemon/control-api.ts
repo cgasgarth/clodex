@@ -7,6 +7,7 @@ import type { DaemonRuntimeState } from './runtime.js';
 import type { DaemonInferenceCollector } from './collector.js';
 import type { SecondwindSnapshot } from './secondwind.js';
 import type { DiagnosticLogMode, SecondwindMode } from '../types.js';
+import type { ApiProcessingMode } from './api-pricing.js';
 import type {
   DaemonClaudeModelSnapshot,
 } from './model-service.js';
@@ -30,10 +31,11 @@ export interface DaemonAccountController {
   list(): Promise<DaemonAccountView[]> | DaemonAccountView[];
   select(id: string): Promise<void> | void;
   refreshUsage?(): Promise<void>;
-  createLaunchTicket(accountId?: string): {
+  createLaunchTicket(accountId?: string, processingMode?: ApiProcessingMode): {
     ticket: string;
     accountIds: Partial<Record<'openai-oauth' | 'xai-oauth', string>>;
     accountLabel: string;
+    processingMode: ApiProcessingMode;
   } | null;
 }
 
@@ -215,7 +217,16 @@ export async function dispatchDaemonControlRequest(
           && typeof (body as { accountId?: unknown }).accountId === 'string'
           ? (body as { accountId: string }).accountId
           : undefined;
-        return sendJson(201, options.accounts.createLaunchTicket(accountId));
+        const fast = body && typeof body === 'object'
+          ? (body as { fast?: unknown }).fast
+          : undefined;
+        if (fast !== undefined && typeof fast !== 'boolean') {
+          return sendJson(400, { error: 'Launch fast mode must be a boolean' });
+        }
+        return sendJson(201, options.accounts.createLaunchTicket(
+          accountId,
+          fast === true ? 'fast' : 'standard',
+        ));
       }
       const accountSelect = url.pathname.match(/^\/v1\/accounts\/([^/]+)\/select$/);
       if (request.method === 'POST' && accountSelect) {

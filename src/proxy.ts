@@ -77,6 +77,34 @@ import {
 
 type ProxyLog = (message: string | (() => string)) => void;
 
+interface ProcessingUsage {
+  input_tokens?: number;
+  output_tokens?: number;
+  cache_creation_input_tokens?: number;
+  cache_read_input_tokens?: number;
+  service_tier?: string;
+  speed?: string;
+}
+
+function servicedProcessingMode(
+  requested: ApiProcessingMode,
+  usage: ProcessingUsage | undefined,
+): ApiProcessingMode {
+  if (usage?.service_tier === 'priority' || usage?.speed === 'fast') return 'fast';
+  if (usage?.service_tier || usage?.speed) return 'standard';
+  return requested;
+}
+
+function logFastServiceTier(
+  log: ProxyLog,
+  requested: ApiProcessingMode,
+  usage: ProcessingUsage | undefined,
+): void {
+  if (requested !== 'fast' || !usage?.service_tier) return;
+  const actual = servicedProcessingMode(requested, usage);
+  log(() => `sdk: Fast requested; upstream serviced ${actual} (service_tier=${usage.service_tier})`);
+}
+
 // Claude Code aborts after several minutes without an SSE byte. Native
 // compaction and buffered tool arguments can both produce a long pre-output gap.
 const STREAM_KEEPALIVE_INTERVAL_MS = 20_000;
@@ -200,17 +228,13 @@ function createTranslationLifecycle(
         ...snapshot(Date.now()), retryAttempt, retryLimit, discardedBytes, errorCode,
       });
     },
-    complete(usage?: {
-      input_tokens?: number;
-      output_tokens?: number;
-      cache_creation_input_tokens?: number;
-      cache_read_input_tokens?: number;
-    }) {
+    complete(usage?: ProcessingUsage) {
       if (stopped) return;
       stopped = true;
       clearInterval(timer);
       const completed = {
         ...snapshot(Date.now()),
+        processingMode: servicedProcessingMode(processingMode, usage),
         ...(usage
           ? {
               inputTokens: usage.input_tokens,
@@ -338,6 +362,8 @@ export interface ProxyRoute {
   oauthAccountId?: string;
   /** Local managed-account id used only for privacy-minimal daemon metrics. */
   metricsAccountId?: string;
+  /** Per-launch OpenAI processing mode. It must never be stored on the shared catalog route. */
+  processingMode?: ApiProcessingMode;
   providerData?: Record<string, unknown>;
   /** Resolves the current OAuth token before dispatch and once more after an upstream HTTP 401. */
   refreshToken?: (rejectedAccessToken?: string) => Promise<string | null>;
@@ -651,7 +677,7 @@ export async function startProxyCatalog(
       const claudeSessionIdHeader = req.headers.get('x-claude-code-session-id') ?? undefined;
       const claudeAgentIdHeader = req.headers.get('x-claude-code-agent-id') ?? undefined;
       const claudeSessionId = extractClaudeSessionId(anthropicBody, claudeSessionIdHeader);
-      const processingMode: ApiProcessingMode = 'standard';
+      const processingMode = route.processingMode ?? 'standard';
       if (optimizeRequest) {
         const optimizedBody = await optimizeRequest({
           requestId: relayRequestId,
@@ -795,9 +821,6 @@ export async function startProxyCatalog(
       // format, endpoint selection, and provider quirks.
       if (usesSdkAdapter) {
         const openAiOAuth = route.npm === '@ai-sdk/openai' && route.authType === 'oauth';
-        // Current requests use Standard processing. The metrics pipeline also
-        // accepts `fast`; the session-scoped /fast transport work will set this
-        // from the actual outbound service tier when it enables Priority.
         if (inferenceLogPath && !forwardedRequestId) {
           writeInferenceRequestLog(inferenceLogPath, {
             requestId: relayRequestId,
@@ -837,6 +860,7 @@ export async function startProxyCatalog(
             && isClaudeCodeCompactRequest(anthropicBody);
           const params = sdkTranslateRequest(anthropicBody, route.npm!, {
             openAiOAuth,
+            processingMode,
             claudeSessionId,
             maxTools: maxToolsForNpm(route.npm),
             reasoningMetadata: {
@@ -901,6 +925,8 @@ export async function startProxyCatalog(
               output_tokens: number;
               cache_creation_input_tokens: number;
               cache_read_input_tokens: number;
+              service_tier?: string;
+              speed?: string;
             } | undefined;
             try {
               await withResponsesWebSocketDiagnosticContext(
@@ -932,6 +958,7 @@ export async function startProxyCatalog(
             } finally {
               clearInterval(keepAlive);
             }
+            logFastServiceTier(plog, processingMode, finalUsage);
             translationLifecycle?.complete(finalUsage);
             if (!res.headersSent) writeStreamChunk('');
             res.end();
@@ -959,14 +986,9 @@ export async function startProxyCatalog(
               ),
             );
             translationLifecycle?.onOutput(JSON.stringify(anthropicResponse));
-            translationLifecycle?.complete(
-              anthropicResponse['usage'] as {
-                input_tokens?: number;
-                output_tokens?: number;
-                cache_creation_input_tokens?: number;
-                cache_read_input_tokens?: number;
-              } | undefined,
-            );
+            const responseUsage = anthropicResponse['usage'] as ProcessingUsage | undefined;
+            logFastServiceTier(plog, processingMode, responseUsage);
+            translationLifecycle?.complete(responseUsage);
             sendJson(res, 200, anthropicResponse);
           }
         };
@@ -1165,6 +1187,7 @@ export function startProxy(
     interleavedReasoningField?: string;
     useResponsesLite?: boolean;
     preferWebSockets?: boolean;
+    processingMode?: ApiProcessingMode;
     headers?: Record<string, string>;
   },
   apiKey?: string,
@@ -1190,6 +1213,7 @@ export function startProxy(
     interleavedReasoningField: sdk?.interleavedReasoningField,
     useResponsesLite: sdk?.useResponsesLite,
     preferWebSockets: sdk?.preferWebSockets,
+    processingMode: sdk?.processingMode,
     headers: sdk?.headers,
   }], clientModelId, debug);
 }

@@ -5,7 +5,7 @@ import { restartDaemonIfRunning } from '../daemon/index.js';
 import { getConfigPath, getProvidersPath } from '../paths.js';
 import { resolveCliRuntimePaths } from './runtime-paths.js';
 
-const STARTER_CLAUDE_FLAGS = new Set(['--dry-run', '--trace', '--endpoint', '--proxy', '--save-mode', '--help', '-h', '--version', '-v']);
+const STARTER_CLAUDE_FLAGS = new Set(['--dry-run', '--trace', '--fast', '--endpoint', '--proxy', '--save-mode', '--help', '-h', '--version', '-v']);
 const CLODEX_LAUNCH_FLAGS = new Set(['--provider', '--model']);
 
 function daemonCatalogSnapshot(): string {
@@ -317,6 +317,7 @@ export function parseArgs(args: string[]): ParsedArgs {
 
     if (arg === '--dry-run') parsed.dryRun = true;
     if (arg === '--trace') parsed.trace = true;
+    if (arg === '--fast') parsed.fast = true;
     consumeBridgeModeFlag(arg, parsed);
     if (arg === '--save-mode') parsed.saveBridgeMode = true;
     if (arg === '--help' || arg === '-h') parsed.showHelp = true;

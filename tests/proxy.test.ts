@@ -198,6 +198,53 @@ describe('Anthropic endpoint routing', () => {
       restoreTestGlobals();
     }
   });
+
+  it('passes a route-scoped Fast mode into optimization', async () => {
+    const route: ProxyRoute = {
+      aliasId: 'sol',
+      realModelId: 'gpt-5.6-sol',
+      displayName: 'Sol',
+      upstreamUrl: 'https://anthropic.example',
+      apiKey: 'provider-key',
+      modelFormat: 'anthropic',
+      providerId: 'openai-oauth',
+      processingMode: 'fast',
+    };
+    stubTestGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      id: 'msg_fast',
+      type: 'message',
+      role: 'assistant',
+      model: route.realModelId,
+      content: [],
+      usage: { input_tokens: 1, output_tokens: 1 },
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } })));
+    const optimizeRequest = vi.fn(async context => context.body);
+    const handle = await startProxyCatalog(
+      [route],
+      route.aliasId,
+      false,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      0,
+      optimizeRequest,
+    );
+
+    try {
+      const response = await postToProxy(handle.port, handle.token, {
+        model: route.aliasId,
+        max_tokens: 100,
+        messages: [{ role: 'user', content: 'fast' }],
+      });
+      expect(response.status).toBe(200);
+      expect(optimizeRequest.mock.calls[0]?.[0].processingMode).toBe('fast');
+    } finally {
+      handle.close();
+      restoreTestGlobals();
+    }
+  });
 });
 
 describe('aliasModelId', () => {

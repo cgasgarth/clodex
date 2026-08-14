@@ -293,6 +293,7 @@ export interface ResponseUsage {
   cachedTokens: number;
   cacheWriteTokens: number;
   outputTokens: number;
+  serviceTier?: string;
 }
 
 export function responseUsage(event: unknown): ResponseUsage | undefined {
@@ -302,6 +303,9 @@ export function responseUsage(event: unknown): ResponseUsage | undefined {
   const usage = (response as JsonObject).usage;
   if (!usage || typeof usage !== 'object') return undefined;
   const usageRecord = usage as JsonObject;
+  const serviceTier = typeof (response as JsonObject).service_tier === 'string'
+    ? (response as JsonObject).service_tier as string
+    : undefined;
   const details = usageRecord.input_tokens_details && typeof usageRecord.input_tokens_details === 'object'
     ? usageRecord.input_tokens_details as JsonObject
     : {};
@@ -311,6 +315,7 @@ export function responseUsage(event: unknown): ResponseUsage | undefined {
     cachedTokens: number(details.cached_tokens),
     cacheWriteTokens: number(details.cache_write_tokens ?? usageRecord.cache_write_tokens),
     outputTokens: number(usageRecord.output_tokens),
+    ...(serviceTier ? { serviceTier } : {}),
   };
 }
 
@@ -320,6 +325,9 @@ function addResponseUsage(left: ResponseUsage, right: ResponseUsage): ResponseUs
     cachedTokens: left.cachedTokens + right.cachedTokens,
     cacheWriteTokens: left.cacheWriteTokens + right.cacheWriteTokens,
     outputTokens: left.outputTokens + right.outputTokens,
+    ...(right.serviceTier ?? left.serviceTier
+      ? { serviceTier: right.serviceTier ?? left.serviceTier }
+      : {}),
   };
 }
 
@@ -366,7 +374,8 @@ export function responseUsageDebug(usage: ResponseUsage): string {
   return `usage input_tokens=${usage.inputTokens} `
     + `cached_tokens=${usage.cachedTokens} `
     + `cache_write_tokens=${usage.cacheWriteTokens} `
-    + `output_tokens=${usage.outputTokens}`;
+    + `output_tokens=${usage.outputTokens}`
+    + (usage.serviceTier ? ` service_tier=${usage.serviceTier}` : '');
 }
 
 function outputAccumulator(ctx: RequestContext, index: number): OutputAccumulator {

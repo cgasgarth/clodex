@@ -109,6 +109,45 @@ describe('DaemonAccountService launch tickets', () => {
       }));
   });
 
+  it('signs Fast mode into a launch without changing non-OpenAI routes', async () => {
+    const store = new DaemonAccountStore(
+      { CLODEX_HOME: root },
+      join(root, 'accounts.json'),
+    );
+    const openAi = store.add({ label: 'OpenAI', authRef: 'keyring:openai' });
+    store.add({
+      providerId: 'xai-oauth',
+      label: 'xAI',
+      authRef: 'keyring:xai',
+    });
+    const service = new DaemonAccountService(store, {
+      resolveCredential: async (_providerId, authRef) => `${authRef}-token`,
+    });
+    const launch = service.createLaunchTicket(openAi.id, 'fast')!;
+    const openAiRoute = {
+      aliasId: 'claude-sol',
+      realModelId: 'gpt-5.6-sol',
+      displayName: 'Sol',
+      upstreamUrl: 'https://example.test',
+      apiKey: 'boot-token',
+      modelFormat: 'openai' as const,
+      providerId: 'openai-oauth',
+      authType: 'oauth' as const,
+    };
+    const xaiRoute = {
+      ...openAiRoute,
+      aliasId: 'claude-grok',
+      realModelId: 'grok-4.6',
+      providerId: 'xai-oauth',
+    };
+
+    expect(launch.processingMode).toBe('fast');
+    await expect(service.routeForTicket(openAiRoute, launch.ticket))
+      .resolves.toMatchObject({ processingMode: 'fast' });
+    await expect(service.routeForTicket(xaiRoute, launch.ticket))
+      .resolves.not.toHaveProperty('processingMode');
+  });
+
   it('returns no ticket when no managed OAuth account exists', () => {
     const store = new DaemonAccountStore(
       { CLODEX_HOME: root },
@@ -116,6 +155,10 @@ describe('DaemonAccountService launch tickets', () => {
     );
     const service = new DaemonAccountService(store);
     expect(service.createLaunchTicket()).toBeNull();
+    expect(service.createLaunchTicket(undefined, 'fast')).toMatchObject({
+      accountIds: {},
+      processingMode: 'fast',
+    });
   });
 
   it('imports SuperGrok as a managed provider account and shows its usage', async () => {

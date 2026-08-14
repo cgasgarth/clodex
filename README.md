@@ -254,6 +254,7 @@ Launch Claude Code bridged to OpenAI models. Unrecognized flags (and everything 
 | `--save-mode` | Accepted with `--endpoint` for compatibility |
 | `--dry-run` | Run the wizard but print a launch preview instead of launching (never persists anything) |
 | `--trace` | Write debug logs to `~/.clodex/logs/` and show errors on exit |
+| `--fast` | Request OpenAI Fast processing for ChatGPT/Codex OAuth models in this launch |
 | `--provider <id>` | Boot provider id (`openai` or `openai-oauth`); with `--model`, skips the wizard |
 | `--model <id>` | Boot model id; with `--provider`, skips the wizard |
 | `--help`, `--version` | Help / version |
@@ -262,6 +263,10 @@ Notes:
 
 - `--proxy` belongs to standalone `clodex server` and is rejected by
   `clodex claude`.
+- `--fast` is signed into the launch ticket, applies to inherited subagents, and
+  remains inactive after `/model` switches to Grok or an OpenAI API-key route.
+- OpenAI can serve a Fast request on the Standard tier. Clodex reports the
+  actual `service_tier` in Claude usage and trace logs instead of claiming Fast.
 - Claude Code may save the launched model to `~/.claude/settings.json`, so bare
   `claude` later can still show a clodex model name.
 - Non-interactive stdin reuses your last provider/model instead of showing the

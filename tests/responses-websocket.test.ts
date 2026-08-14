@@ -397,6 +397,7 @@ describe('createResponsesWebSocketFetch', () => {
       type: 'response.completed',
       response: {
         id: 'resp_usage',
+        service_tier: 'default',
         usage: {
           input_tokens: 1_200,
           input_tokens_details: { cached_tokens: 900, cache_write_tokens: 200 },
@@ -407,7 +408,7 @@ describe('createResponsesWebSocketFetch', () => {
     await readAll(res);
 
     expect(debug).toContain(
-      'ws: usage input_tokens=1200 cached_tokens=900 cache_write_tokens=200 output_tokens=50',
+      'ws: usage input_tokens=1200 cached_tokens=900 cache_write_tokens=200 output_tokens=50 service_tier=default',
     );
     expect(diagnostics).toContainEqual(expect.objectContaining({
       event: 'ws_response_usage',
