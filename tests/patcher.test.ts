@@ -461,8 +461,8 @@ describe('PATCH_TRANSFORMS_VERSION', () => {
     ).replace(/\r\n/g, '\n');
     const digest = createHash('sha256').update(source).digest('hex');
     expect({ version: PATCH_TRANSFORMS_VERSION, digest }).toEqual({
-      version: 8,
-      digest: '9e3f3707ba9e93d232d140a22d974303d5ffbbe4226a0fa8c90f866599ddbec4',
+      version: 9,
+      digest: '3cadc7c2cc5261fdb79436d1adb32d4472261e08b021781aa573b05e4317790c',
     });
   });
 });
@@ -664,6 +664,15 @@ const CLAUDE_CORE_FIXTURE = [
   'function gMu(e,t,r,n){let o=Uds(t,r,n),i=o.enabled?r:void 0,s=CSe(t,i);if(!JGe(t,r))return e>=Hds(s,o);let{window:a}=aY(t,i);if(a<bRe)return!1;return e>=Hds(s,o)}',
   'const workflowNote=`NOTE: You are running inside a workflow script. Be concise \\u2014 the script will parse your output.`,aa,bb,cc,dd,sj_=180000,attempts=5;var runtime={};',
   'function runWorkflow(events){let last,messages=[],tokens=0,baseTokens=0,baseTools=0,toolCalls=0,progress=[];const responded={responded(){}};const countUsage=(usage)=>usage.total;const emit=(state,data)=>progress.push(data.tokens);for(const msg of events){if(msg.type==="user"){continue}if(msg.type==="assistant"){if(last=msg,messages?.push(msg),!msg.isApiErrorMessage){responded?.responded(),tokens=countUsage(msg.message.usage);let model=msg.message.model;emit("progress",{tokens:baseTokens+tokens,toolCalls:baseTools+toolCalls})}}}return{tokens,progress}}/*workflow-end*/',
+  'function $c(){if(Jn()!=="firstParty")return!1;return!Q.CLAUDE_CODE_DISABLE_FAST_MODE}',
+  'function wEs(e){if(e.fastMode!==!0)return!1;if(!e.fastModePerSessionOptIn)return!0;if(sn("policySettings")?.fastModePerSessionOptIn===!0)return!1;return sn("flagSettings")?.fastMode===!0}',
+  'function T0(e){if(!$c())return!1;let t=e??O3(),r=ls(t);if(y2(Bo(r),"fast_mode"))return!0;let n=r.toLowerCase();return n.includes("opus-4-8")||n.includes("opus-5")}',
+  'function jNr(e,t,r=!0,n){if(USe(),!r)dfr({fastMode:e});else if(r)js("userSettings",{fastMode:e});UNr({fastMode:e},t)}',
+  'async function Tsi(e,t,r,n,o=!0,i){let s=$Se();if(s)return`Fast mode unavailable: ${s}`;jNr(e,r,o,i);return e?`Fast mode ON${o?"":" (this session only)"}`:"Fast mode OFF"}',
+  'function buildFastRequest(fu){return{model:"x",...fu!==void 0&&{speed:fu}}}',
+  'function NV(){return"Opus 5"}',
+  'const fastDialog={subtitle:`High-speed mode for ${fastLabel}. Draws from usage credits at a higher rate. Separate rate limits apply.`};',
+  'function LV(e){let t=sn("flagSettings")?.fastMode===!0;if(Rn()&&pfr()&&!t)return"sdk_opt_in_required";return null}',
 ].join('\n');
 
 const digestOf = (text: string) => createHash('sha256').update(text).digest('hex');
@@ -1354,6 +1363,15 @@ describe('patch script identity naming', () => {
       ['PATCH X6: native Computer Use default enable', 'OK'],
       ['PATCH X7: Workflow agent stall timeout', 'OK'],
       ['PATCH X8: Workflow token progress', 'OK'],
+      ['PATCH X9a: Clodex Fast provider gate', 'OK'],
+      ['PATCH X9b: Clodex Fast model capability', 'OK'],
+      ['PATCH X9c: Clodex Fast initial session state', 'OK'],
+      ['PATCH X9d: Clodex Fast session-only writes', 'OK'],
+      ['PATCH X9e: Clodex Fast session-only status', 'OK'],
+      ['PATCH X9f: Clodex Fast explicit request intent', 'OK'],
+      ['PATCH X9g: Clodex Fast model label', 'OK'],
+      ['PATCH X9h: Clodex Fast dialog copy', 'OK'],
+      ['PATCH X9i: Clodex Fast non-interactive default', 'OK'],
       ['PATCH 8a: effort capability', 'OK'],
       ['PATCH 8b: xhigh effort capability', 'OK'],
       ['PATCH 8c: max effort capability', 'OK'],
@@ -1377,6 +1395,15 @@ describe('patch script identity naming', () => {
       ['PATCH X6: native Computer Use default enable', 'SKIP'],
       ['PATCH X7: Workflow agent stall timeout', 'SKIP'],
       ['PATCH X8: Workflow token progress', 'SKIP'],
+      ['PATCH X9a: Clodex Fast provider gate', 'SKIP'],
+      ['PATCH X9b: Clodex Fast model capability', 'SKIP'],
+      ['PATCH X9c: Clodex Fast initial session state', 'SKIP'],
+      ['PATCH X9d: Clodex Fast session-only writes', 'SKIP'],
+      ['PATCH X9e: Clodex Fast session-only status', 'SKIP'],
+      ['PATCH X9f: Clodex Fast explicit request intent', 'SKIP'],
+      ['PATCH X9g: Clodex Fast model label', 'SKIP'],
+      ['PATCH X9h: Clodex Fast dialog copy', 'SKIP'],
+      ['PATCH X9i: Clodex Fast non-interactive default', 'SKIP'],
       ['PATCH 8a: effort capability (refresh)', 'SKIP'],
       ['PATCH 8b: xhigh effort capability (refresh)', 'SKIP'],
       ['PATCH 8c: max effort capability (refresh)', 'SKIP'],
@@ -1408,6 +1435,121 @@ describe('patch script identity naming', () => {
     expect(out).toContain(
       'sj_=/*clodex:workflow-stall-timeout*/'
       + 'Math.min(Math.max(Number(process.env.CLODEX_WORKFLOW_STALL_TIMEOUT_MS)||600000,180000),1800000)'
+    );
+  });
+
+  it('enables native Fast only for configured OpenAI OAuth identities in a Clodex child', () => {
+    const out = runPatchScript(config);
+    const declaration = out.split('\n').find(line => line.startsWith('function T0('));
+    expect(declaration).toBeDefined();
+    const isFastModel = Function(
+      '$c',
+      'O3',
+      'ls',
+      'y2',
+      'Bo',
+      `${declaration};return T0;`,
+    )(
+      () => true,
+      () => 'opus',
+      (value: string) => value,
+      () => false,
+      (value: string) => value,
+    ) as (model: string) => boolean;
+    const previous = process.env.CLODEX_CLAUDE_FAST_MODE;
+    try {
+      delete process.env.CLODEX_CLAUDE_FAST_MODE;
+      expect(isFastModel('sol')).toBe(false);
+      process.env.CLODEX_CLAUDE_FAST_MODE = '1';
+      expect(isFastModel('sol')).toBe(true);
+      expect(isFastModel('sol[1m]')).toBe(true);
+      expect(isFastModel('gpt-5.6-sol[1m]')).toBe(true);
+      expect(isFastModel('clodex:openai-oauth:gpt-5.6-sol')).toBe(true);
+      expect(isFastModel('clodex:openai:mystery')).toBe(false);
+    } finally {
+      if (previous === undefined) delete process.env.CLODEX_CLAUDE_FAST_MODE;
+      else process.env.CLODEX_CLAUDE_FAST_MODE = previous;
+    }
+  });
+
+  it('uses only session state for Clodex Fast and supports a launch-time default', () => {
+    const out = runPatchScript(config);
+    const initialDeclaration = out.split('\n').find(line => line.startsWith('function wEs('));
+    const writeDeclaration = out.split('\n').find(line => line.startsWith('function jNr('));
+    expect(initialDeclaration).toBeDefined();
+    expect(writeDeclaration).toBeDefined();
+
+    let sessionFlag: boolean | undefined;
+    const initialFast = Function(
+      'sn',
+      `${initialDeclaration};return wEs;`,
+    )((layer: string) => layer === 'flagSettings' ? { fastMode: sessionFlag } : {}) as
+      (settings: { fastMode?: boolean; fastModePerSessionOptIn?: boolean }) => boolean;
+    const sessionWrites: unknown[] = [];
+    const userWrites: unknown[] = [];
+    const setFast = Function(
+      'USe',
+      'dfr',
+      'js',
+      'UNr',
+      `${writeDeclaration};return jNr;`,
+    )(
+      () => {},
+      (value: unknown) => sessionWrites.push(value),
+      (...value: unknown[]) => userWrites.push(value),
+      () => {},
+    ) as (enabled: boolean, update: () => void) => void;
+
+    const previousMode = process.env.CLODEX_CLAUDE_FAST_MODE;
+    const previousDefault = process.env.CLODEX_CLAUDE_FAST_DEFAULT;
+    try {
+      process.env.CLODEX_CLAUDE_FAST_MODE = '1';
+      delete process.env.CLODEX_CLAUDE_FAST_DEFAULT;
+      sessionFlag = undefined;
+      expect(initialFast({ fastMode: true })).toBe(false);
+      process.env.CLODEX_CLAUDE_FAST_DEFAULT = '1';
+      expect(initialFast({})).toBe(true);
+      sessionFlag = false;
+      expect(initialFast({})).toBe(false);
+      sessionFlag = true;
+      expect(initialFast({})).toBe(true);
+
+      setFast(true, () => {});
+      expect(sessionWrites).toEqual([{ fastMode: true }]);
+      expect(userWrites).toEqual([]);
+    } finally {
+      if (previousMode === undefined) delete process.env.CLODEX_CLAUDE_FAST_MODE;
+      else process.env.CLODEX_CLAUDE_FAST_MODE = previousMode;
+      if (previousDefault === undefined) delete process.env.CLODEX_CLAUDE_FAST_DEFAULT;
+      else process.env.CLODEX_CLAUDE_FAST_DEFAULT = previousDefault;
+    }
+  });
+
+  it('emits explicit per-request Fast intent and uses Clodex-specific session copy', () => {
+    const out = runPatchScript(config);
+    const requestDeclaration = out.split('\n').find(line => line.startsWith('function buildFastRequest('));
+    expect(requestDeclaration).toBeDefined();
+    const buildFastRequest = Function(`${requestDeclaration};return buildFastRequest;`)() as
+      (speed?: 'standard' | 'fast') => Record<string, unknown>;
+    const previous = process.env.CLODEX_CLAUDE_FAST_MODE;
+    try {
+      delete process.env.CLODEX_CLAUDE_FAST_MODE;
+      expect(buildFastRequest()).toEqual({ model: 'x' });
+      process.env.CLODEX_CLAUDE_FAST_MODE = '1';
+      expect(buildFastRequest()).toEqual({ model: 'x', speed: 'standard' });
+      expect(buildFastRequest('fast')).toEqual({ model: 'x', speed: 'fast' });
+    } finally {
+      if (previous === undefined) delete process.env.CLODEX_CLAUDE_FAST_MODE;
+      else process.env.CLODEX_CLAUDE_FAST_MODE = previous;
+    }
+
+    expect(out).toContain('/*ccpatch:fast-session-status*/if(process.env.CLODEX_CLAUDE_FAST_MODE==="1")o=!1;');
+    expect(out).toContain('?"current session model":"Opus 5"');
+    expect(out).toContain(
+      '?"High-speed processing for this session. The upstream provider reports the actual service tier.":',
+    );
+    expect(out).toContain(
+      '/*ccpatch:fast-sdk-default*/if(Rn()&&pfr()&&!t&&!(process.env.CLODEX_CLAUDE_FAST_MODE==="1"))',
     );
   });
 

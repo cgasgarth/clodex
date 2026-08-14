@@ -105,6 +105,17 @@ function logFastServiceTier(
   log(() => `sdk: Fast requested; upstream serviced ${actual} (service_tier=${usage.service_tier})`);
 }
 
+function requestedProcessingMode(
+  route: ProxyRoute,
+  request: AnthropicRequest,
+): ApiProcessingMode {
+  if (route.providerId === 'openai-oauth' && route.authType === 'oauth') {
+    if (request.speed === 'fast') return 'fast';
+    if (request.speed === 'standard') return 'standard';
+  }
+  return route.processingMode ?? 'standard';
+}
+
 // Claude Code aborts after several minutes without an SSE byte. Native
 // compaction and buffered tool arguments can both produce a long pre-output gap.
 const STREAM_KEEPALIVE_INTERVAL_MS = 20_000;
@@ -677,7 +688,7 @@ export async function startProxyCatalog(
       const claudeSessionIdHeader = req.headers.get('x-claude-code-session-id') ?? undefined;
       const claudeAgentIdHeader = req.headers.get('x-claude-code-agent-id') ?? undefined;
       const claudeSessionId = extractClaudeSessionId(anthropicBody, claudeSessionIdHeader);
-      const processingMode = route.processingMode ?? 'standard';
+      const processingMode = requestedProcessingMode(route, anthropicBody);
       if (optimizeRequest) {
         const optimizedBody = await optimizeRequest({
           requestId: relayRequestId,

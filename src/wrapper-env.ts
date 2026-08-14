@@ -13,6 +13,14 @@ const LAUNCH_TICKET_ENV = 'CLODEX_LAUNCH_TICKET';
 export const LAUNCH_TICKET_HEADER = 'x-clodex-launch-ticket';
 export const CLAUDE_STREAM_IDLE_TIMEOUT_MS = 15 * 60_000;
 
+/** Enable Claude's native /fast UI for a Clodex child without changing global settings. */
+export function applyClodexClaudeFastModeEnv(env: NodeJS.ProcessEnv): void {
+  env['CLODEX_CLAUDE_FAST_MODE'] = '1';
+  // Claude's gateway check calls api.anthropic.com directly and cannot validate
+  // a Clodex credential. The upstream request still enforces the actual tier.
+  env['CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK'] = '1';
+}
+
 export function applyClaudeProxyReliabilityEnv(env: NodeJS.ProcessEnv): void {
   env['CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK'] = '1';
   applyClaudeStreamIdleTimeout(env);
@@ -112,6 +120,7 @@ export function computeWrapperEnv(
     if (state.caPath) env['NODE_EXTRA_CA_CERTS'] = state.caPath;
     removeAnthropicProxyBypass(env);
     applyClaudeProxyReliabilityEnv(env);
+    applyClodexClaudeFastModeEnv(env);
     return env;
   }
 
@@ -130,5 +139,6 @@ export function computeWrapperEnv(
     setAnthropicCustomHeader(env, LAUNCH_TICKET_HEADER, undefined);
   }
   applyClaudeProxyReliabilityEnv(env);
+  applyClodexClaudeFastModeEnv(env);
   return env;
 }

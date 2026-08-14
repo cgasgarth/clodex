@@ -199,7 +199,7 @@ describe('Anthropic endpoint routing', () => {
     }
   });
 
-  it('passes a route-scoped Fast mode into optimization', async () => {
+  it('uses per-request Claude Fast intent ahead of the launch default', async () => {
     const route: ProxyRoute = {
       aliasId: 'sol',
       realModelId: 'gpt-5.6-sol',
@@ -208,6 +208,7 @@ describe('Anthropic endpoint routing', () => {
       apiKey: 'provider-key',
       modelFormat: 'anthropic',
       providerId: 'openai-oauth',
+      authType: 'oauth',
       processingMode: 'fast',
     };
     stubTestGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
@@ -233,13 +234,28 @@ describe('Anthropic endpoint routing', () => {
     );
 
     try {
-      const response = await postToProxy(handle.port, handle.token, {
+      const inherited = await postToProxy(handle.port, handle.token, {
         model: route.aliasId,
         max_tokens: 100,
-        messages: [{ role: 'user', content: 'fast' }],
+        messages: [{ role: 'user', content: 'launch default' }],
       });
-      expect(response.status).toBe(200);
+      const disabled = await postToProxy(handle.port, handle.token, {
+        model: route.aliasId,
+        max_tokens: 100,
+        messages: [{ role: 'user', content: 'session standard' }],
+        speed: 'standard',
+      });
+      const enabled = await postToProxy(handle.port, handle.token, {
+        model: route.aliasId,
+        max_tokens: 100,
+        messages: [{ role: 'user', content: 'session fast' }],
+        speed: 'fast',
+      });
+      expect([inherited.status, disabled.status, enabled.status]).toEqual([200, 200, 200]);
+      expect(optimizeRequest).toHaveBeenCalledTimes(3);
       expect(optimizeRequest.mock.calls[0]?.[0].processingMode).toBe('fast');
+      expect(optimizeRequest.mock.calls[1]?.[0].processingMode).toBe('standard');
+      expect(optimizeRequest.mock.calls[2]?.[0].processingMode).toBe('fast');
     } finally {
       handle.close();
       restoreTestGlobals();

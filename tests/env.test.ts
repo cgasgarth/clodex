@@ -235,6 +235,8 @@ describe('buildChildEnv', () => {
     expect(env['ENABLE_TOOL_SEARCH']).toBe('true');
     expect(env['CLAUDE_CODE_SIMPLE_SYSTEM_PROMPT']).toBe('0');
     expect(env['CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK']).toBe('1');
+    expect(env['CLODEX_CLAUDE_FAST_MODE']).toBe('1');
+    expect(env['CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK']).toBe('1');
   });
 
   it('uses upstream URL when proxyPort is not provided', () => {
@@ -264,6 +266,8 @@ describe('buildHttpProxyChildEnv', () => {
       expect(env['ANTHROPIC_AUTH_TOKEN']).toBe('normal-auth-token');
       expect(env['ANTHROPIC_MODEL']).toBe('sonnet');
       expect(env['CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK']).toBe('1');
+      expect(env['CLODEX_CLAUDE_FAST_MODE']).toBe('1');
+      expect(env['CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK']).toBe('1');
       expect(env['NO_PROXY']).toBe('localhost,.internal.example');
       expect(env['no_proxy']).toBe('localhost,.internal.example');
     } finally {

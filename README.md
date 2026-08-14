@@ -263,8 +263,12 @@ Notes:
 
 - `--proxy` belongs to standalone `clodex server` and is rejected by
   `clodex claude`.
-- `--fast` is signed into the launch ticket, applies to inherited subagents, and
-  remains inactive after `/model` switches to Grok or an OpenAI API-key route.
+- `--fast` sets the initial Fast state for this Claude session and is signed into
+  the launch ticket for inherited processes. Claude `/fast on` and `/fast off`
+  override it per request for OpenAI OAuth routes.
+- In a Clodex-launched Claude, `/fast` is session-only. It does not write the
+  Fast preference to `~/.claude/settings.json` or change another Claude session.
+  Grok and OpenAI API-key routes remain Standard.
 - OpenAI can serve a Fast request on the Standard tier. Clodex reports the
   actual `service_tier` in Claude usage and trace logs instead of claiming Fast.
 - Claude Code may save the launched model to `~/.claude/settings.json`, so bare
