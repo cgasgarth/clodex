@@ -1,5 +1,19 @@
 # Changelog
 
+## [3.2.0](https://github.com/cgasgarth/clodex/compare/v3.1.0...v3.2.0) (2026-08-14)
+
+
+### Features
+
+* add session-scoped fast mode ([ced687a](https://github.com/cgasgarth/clodex/commit/ced687a78a58cdde76680ee0b3d7b1f957059ac3))
+* support Claude native fast command ([#86](https://github.com/cgasgarth/clodex/issues/86)) ([a29ebfe](https://github.com/cgasgarth/clodex/commit/a29ebfed549c49d6c04fe50bc5979556faae533e))
+* use xAI native doom-loop recovery ([1e96da2](https://github.com/cgasgarth/clodex/commit/1e96da2f60c105c2097a382645912d6f21f4e466))
+
+
+### Bug Fixes
+
+* support Claude Code 2.1.229 ([84653cd](https://github.com/cgasgarth/clodex/commit/84653cdf6a2da3057f7f54787f185c780a7841dc))
+
 ## [3.1.0](https://github.com/cgasgarth/clodex/compare/v3.0.0...v3.1.0) (2026-08-13)
 
 
