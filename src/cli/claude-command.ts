@@ -103,9 +103,12 @@ async function runClaudeDaemonEndpointCommand(
   try {
     const attached = await daemonControlRequest<{ ticket: string } | null>('/v1/launches/attach', {
       method: 'POST',
-      body: process.env['CLODEX_ACCOUNT']
-        ? { accountId: process.env['CLODEX_ACCOUNT'] }
-        : {},
+      body: {
+        ...(process.env['CLODEX_ACCOUNT']
+          ? { accountId: process.env['CLODEX_ACCOUNT'] }
+          : {}),
+        ...(parsed.fast ? { fast: true } : {}),
+      },
       socketPath: runtime.controlSocketPath,
       timeoutMs: 5_000,
     });
@@ -395,6 +398,7 @@ export async function runClaudeCommand(
     console.log(`  ${pc.bold('Format:')}    ${selectedModel.modelFormat} (${formatDesc})`);
     console.log(`  ${pc.bold(selectedModel.modelFormat === 'anthropic' ? 'Endpoint:' : 'SDK npm:')} ${endpoint}`);
     console.log(`  ${pc.bold('Key:')}       ${activeProvider.name} provider key`);
+    if (parsed.fast) console.log(`  ${pc.bold('Processing:')} Fast requested (OpenAI OAuth routes only)`);
     console.log('');
     console.log(pc.dim('  (dry run complete — Claude Code was NOT launched)'));
     console.log('');
@@ -480,6 +484,11 @@ export async function runClaudeCommand(
           interleavedReasoningField: selectedModel.interleavedReasoningField,
           useResponsesLite: selectedModel.useResponsesLite,
           preferWebSockets: selectedModel.preferWebSockets,
+          processingMode: parsed.fast
+            && activeProvider.id === 'openai-oauth'
+            && activeProvider.authType === 'oauth'
+            ? 'fast'
+            : undefined,
           headers: activeProvider.headers,
         },
         launchApiKey ?? '',

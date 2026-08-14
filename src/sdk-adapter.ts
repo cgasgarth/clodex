@@ -98,6 +98,8 @@ export interface TranslateRequestOptions {
   reasoningMetadata?: ReasoningMetadata;
   /** ChatGPT Codex OAuth requires instructions and manages its own output limit. */
   openAiOAuth?: boolean;
+  /** Per-launch processing mode. Fast is valid only for ChatGPT Codex OAuth. */
+  processingMode?: 'standard' | 'fast';
   /** Fallback session identity from X-Claude-Code-Session-Id. Body metadata wins. */
   claudeSessionId?: string;
   /** Hard cap on tools sent to the provider (e.g. Groq: 128). Excess tools are silently dropped. */
@@ -689,7 +691,12 @@ export function translateRequest(
   // rejects the standard `system` field. It also manages its own output limit.
   if (options?.openAiOAuth && systemText) {
     providerOptions = deepMergeProviderOptions(providerOptions, {
-      openai: { instructions: systemText },
+      openai: {
+        instructions: systemText,
+        // The pinned AI SDK serializes the established `priority` value. OpenAI
+        // documents `fast` and `priority` as equivalent for supported models.
+        ...(options.processingMode === 'fast' ? { serviceTier: 'priority' } : {}),
+      },
     });
   }
 
@@ -751,6 +758,31 @@ interface AnthropicUsage {
   output_tokens: number;
   cache_creation_input_tokens: number;
   cache_read_input_tokens: number;
+  service_tier?: 'standard' | 'priority' | 'batch';
+  speed?: 'standard' | 'fast';
+}
+
+function openAiServiceTier(providerMetadata: unknown): string | undefined {
+  if (!providerMetadata || typeof providerMetadata !== 'object') return undefined;
+  const openai = (providerMetadata as Record<string, unknown>)['openai'];
+  if (!openai || typeof openai !== 'object') return undefined;
+  const serviceTier = (openai as Record<string, unknown>)['serviceTier'];
+  return typeof serviceTier === 'string' ? serviceTier : undefined;
+}
+
+function applyOpenAiServiceTier(
+  usage: AnthropicUsage,
+  providerMetadata: unknown,
+): AnthropicUsage {
+  const serviceTier = openAiServiceTier(providerMetadata);
+  if (!serviceTier) return usage;
+  if (serviceTier === 'priority' || serviceTier === 'fast') {
+    return { ...usage, service_tier: 'priority', speed: 'fast' };
+  }
+  if (serviceTier === 'batch') {
+    return { ...usage, service_tier: 'batch', speed: 'standard' };
+  }
+  return { ...usage, service_tier: 'standard', speed: 'standard' };
 }
 
 /**
@@ -1078,6 +1110,7 @@ export async function writeAnthropicStream(
             ? finalUsage
             : { ...usage, output_tokens: finalUsage.output_tokens };
         }
+        usage = applyOpenAiServiceTier(usage, part.providerMetadata);
         if (part.finishReason === 'tool-calls') finishReason = 'tool_use';
         else if (part.finishReason === 'length') finishReason = 'max_tokens';
         else if (part.finishReason === 'stop' && finishReason !== 'tool_use') finishReason = 'end_turn';
@@ -1186,6 +1219,7 @@ export async function generateAnthropicResponse(
   let toolCalls: Array<{ toolCallId: string; toolName: string; input: unknown }>;
   let finishReason: string;
   let usage: SdkUsage | undefined;
+  let providerMetadata: unknown;
 
   if (options?.forceStream) {
     // Some upstreams (e.g. ChatGPT's Codex backend) reject non-streaming requests
@@ -1241,6 +1275,7 @@ export async function generateAnthropicResponse(
         } else if (part.type === 'finish') {
           streamedFinishReason = part.finishReason ?? streamedFinishReason;
           streamedUsage = part.totalUsage;
+          providerMetadata = part.providerMetadata;
         }
       }
       if (abortSignal.aborted) throw streamAbortError(abortSignal);
@@ -1269,7 +1304,7 @@ export async function generateAnthropicResponse(
         ...params,
         abortSignal: generateAbort.signal,
       } as Parameters<typeof generateText>[0]);
-      ({ text, toolCalls, finishReason, usage } = r);
+      ({ text, toolCalls, finishReason, usage, providerMetadata } = r);
     } finally {
       stopForwardingAbort();
       clearTimeout(totalTimer);
@@ -1290,6 +1325,6 @@ export async function generateAnthropicResponse(
       })),
     ],
     stop_reason: finishReason === 'tool-calls' ? 'tool_use' : 'end_turn',
-    usage: toAnthropicUsage(usage),
+    usage: applyOpenAiServiceTier(toAnthropicUsage(usage), providerMetadata),
   };
 }

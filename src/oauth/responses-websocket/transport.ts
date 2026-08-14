@@ -340,8 +340,12 @@ export type WebSocketConstructor = new (
 
 function sendContext(entry: ConnectionEntry, ctx: RequestContext): void {
   const outgoing = outgoingPayload(ctx.sendPayload);
+  const serviceTier = typeof ctx.sendPayload.service_tier === 'string'
+    ? ctx.sendPayload.service_tier
+    : undefined;
   entry.debug(
     `connection=${entry.debugId} key=${debugKey(entry.key)} sending ${outgoing.length}B payload`
+    + (serviceTier ? ` service_tier=${serviceTier}` : '')
     + (ctx.continued ? ' (continuation)' : ''),
   );
   try {

@@ -120,6 +120,8 @@ export interface ParsedArgs {
   launchProvider?: string;
   /** clodex boot model (claude); not passed to child CLI */
   launchModel?: string;
+  /** Request Fast processing for OpenAI OAuth routes in this Claude launch. */
+  fast?: boolean;
   /** Explicit bridge mode from --endpoint / --proxy — applies to this run only. */
   bridgeMode?: BridgeMode;
   /** --save-mode: persist the explicit bridge mode as this command's default. */

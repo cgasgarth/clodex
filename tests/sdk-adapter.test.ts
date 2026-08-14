@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'bun:test';
+import { createOpenAI } from '@ai-sdk/openai';
 import {
   annotateToolNames,
   anthropicEffortFromRequest,
@@ -361,6 +362,68 @@ describe('translateRequest', () => {
       'The user may send a new message while you are still working.',
     );
     expect(params.maxOutputTokens).toBeUndefined();
+  });
+
+  it('applies Fast processing only to OpenAI OAuth requests', () => {
+    const body = {
+      model: 'gpt-5.6-sol',
+      messages: [{ role: 'user' as const, content: 'hello' }],
+    };
+    const fast = translateRequest(body, '@ai-sdk/openai', {
+      openAiOAuth: true,
+      processingMode: 'fast',
+    });
+    const standard = translateRequest(body, '@ai-sdk/openai', {
+      openAiOAuth: true,
+      processingMode: 'standard',
+    });
+    const apiKey = translateRequest(body, '@ai-sdk/openai', {
+      processingMode: 'fast',
+    });
+    const otherProvider = translateRequest(body, '@ai-sdk/openai-compatible', {
+      processingMode: 'fast',
+    });
+
+    expect(fast.providerOptions?.openai?.serviceTier).toBe('priority');
+    expect(standard.providerOptions?.openai?.serviceTier).toBeUndefined();
+    expect(apiKey.providerOptions?.openai?.serviceTier).toBeUndefined();
+    expect(otherProvider.providerOptions?.openai?.serviceTier).toBeUndefined();
+  });
+
+  it('serializes Fast processing on the OpenAI Responses wire request', async () => {
+    let requestBody: Record<string, unknown> | undefined;
+    const provider = createOpenAI({
+      apiKey: 'synthetic-test-key',
+      fetch: async (_input, init) => {
+        requestBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        return new Response(JSON.stringify({
+          id: 'resp_fast_test',
+          model: 'gpt-5.6-sol',
+          output: [],
+          usage: {
+            input_tokens: 1,
+            input_tokens_details: { cached_tokens: 0 },
+            output_tokens: 0,
+            output_tokens_details: { reasoning_tokens: 0 },
+          },
+        }), { status: 200, headers: { 'content-type': 'application/json' } });
+      },
+    });
+    const params = translateRequest({
+      model: 'gpt-5.6-sol',
+      messages: [{ role: 'user', content: 'hello' }],
+    }, '@ai-sdk/openai', {
+      openAiOAuth: true,
+      processingMode: 'fast',
+    });
+
+    await generateAnthropicResponse(
+      provider.responses('gpt-5.6-sol'),
+      params,
+      'gpt-5.6-sol',
+    );
+
+    expect(requestBody?.service_tier).toBe('priority');
   });
 
   it('strips Claude Code Anthropic billing attribution from OpenAI OAuth instructions only', () => {
@@ -1118,6 +1181,44 @@ describe('writeAnthropicStream', () => {
       output_tokens: 3,
       cache_creation_input_tokens: 80,
       cache_read_input_tokens: 20,
+    });
+  });
+
+  it('reports the actual OpenAI Fast tier in Anthropic usage', async () => {
+    const { events } = await collect([
+      { type: 'start' },
+      {
+        type: 'finish',
+        finishReason: 'stop',
+        totalUsage: { inputTokens: 12, outputTokens: 3 },
+        providerMetadata: { openai: { serviceTier: 'priority' } },
+      },
+    ]);
+
+    expect(events.find(e => e.event === 'message_delta')!.data.usage).toEqual({
+      input_tokens: 12,
+      output_tokens: 3,
+      cache_creation_input_tokens: 0,
+      cache_read_input_tokens: 0,
+      service_tier: 'priority',
+      speed: 'fast',
+    });
+  });
+
+  it('reports an upstream Fast downgrade as Standard', async () => {
+    const { events } = await collect([
+      { type: 'start' },
+      {
+        type: 'finish',
+        finishReason: 'stop',
+        totalUsage: { inputTokens: 12, outputTokens: 3 },
+        providerMetadata: { openai: { serviceTier: 'default' } },
+      },
+    ]);
+
+    expect(events.find(e => e.event === 'message_delta')!.data.usage).toMatchObject({
+      service_tier: 'standard',
+      speed: 'standard',
     });
   });
 

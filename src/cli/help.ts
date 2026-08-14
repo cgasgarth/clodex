@@ -66,6 +66,7 @@ ${pc.bold('Options:')}
   --save-mode  Accepted with --endpoint for compatibility
   --dry-run    Run the wizard but show a preview instead of launching Claude Code
   --trace      Write debug logs to ~/.clodex/logs/ and show errors on exit
+  --fast       Request Fast processing for OpenAI OAuth models in this launch
   --provider   Boot provider id (skip wizard when paired with --model or in print mode)
   --model      Boot model id (skip wizard when paired with --provider or in print mode)
   --help       Show this command help

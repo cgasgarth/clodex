@@ -66,6 +66,12 @@ describe('daemon control API', () => {
       models: [{ providerId: 'openai-oauth', modelId, name: modelId, enabled }],
     }));
     const requestStop = vi.fn();
+    const createLaunchTicket = vi.fn((_accountId?: string, processingMode = 'standard') => ({
+      ticket: 'opaque',
+      accountIds: { 'openai-oauth': 'one' },
+      accountLabel: 'One',
+      processingMode: processingMode as 'standard' | 'fast',
+    }));
     let secondwindMode: 'off' | 'shadow' | 'on' = 'off';
     const secondwindSnapshot = () => ({
       mode: secondwindMode,
@@ -120,11 +126,7 @@ describe('daemon control API', () => {
       accounts: {
         list: () => [{ id: 'one', email: 'one@example.com', selected: true }],
         select,
-        createLaunchTicket: () => ({
-          ticket: 'opaque',
-          accountIds: { 'openai-oauth': 'one' },
-          accountLabel: 'One',
-        }),
+        createLaunchTicket,
       },
       secondwind: {
         snapshot: secondwindSnapshot,
@@ -236,6 +238,21 @@ describe('daemon control API', () => {
       });
       expect(launch.ticket).toBe('opaque');
       expect(launch.accountIds).toEqual({ 'openai-oauth': 'one' });
+      expect(createLaunchTicket).toHaveBeenLastCalledWith(undefined, 'standard');
+      const fastLaunch = await daemonControlRequest<{
+        processingMode: string;
+      }>('/v1/launches/attach', {
+        socketPath,
+        method: 'POST',
+        body: { accountId: 'one', fast: true },
+      });
+      expect(fastLaunch.processingMode).toBe('fast');
+      expect(createLaunchTicket).toHaveBeenLastCalledWith('one', 'fast');
+      await expect(daemonControlRequest('/v1/launches/attach', {
+        socketPath,
+        method: 'POST',
+        body: { fast: 'yes' },
+      })).rejects.toThrow('Launch fast mode must be a boolean');
       await daemonControlRequest('/v1/accounts/one/select', {
         socketPath,
         method: 'POST',
