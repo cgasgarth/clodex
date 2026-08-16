@@ -114,7 +114,7 @@ async function runClaudeDaemonEndpointCommand(
     });
     launchTicket = attached?.ticket;
   } catch (error) {
-    p.log.error(`Could not pin the OpenAI account: ${error instanceof Error ? error.message : String(error)}`);
+    p.log.error(`Could not attach the OpenAI account: ${error instanceof Error ? error.message : String(error)}`);
     return 1;
   }
 

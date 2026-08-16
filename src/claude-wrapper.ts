@@ -186,7 +186,7 @@ async function main(): Promise<void> {
       launchTicket = attached?.ticket;
     } catch (error) {
       process.stderr.write(
-        `clodex-claude: could not pin the OpenAI account${
+        `clodex-claude: could not attach the OpenAI account${
           requestedAccount ? ` ${JSON.stringify(requestedAccount)}` : ''
         }: ${error instanceof Error ? error.message : String(error)}\n`,
       );

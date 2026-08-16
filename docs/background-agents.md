@@ -27,10 +27,11 @@ flowchart LR
 - Control operations use `~/.clodex/clodex.sock`, mode `0600`.
 - `clodex-claude` obtains a signed launch ticket and sends it in
   `x-clodex-launch-ticket` beside a stable local API key. Claude-spawned
-  children inherit that ticket, so a workflow stays on the same account as
-  its parent without generating a new custom-key approval prompt.
-- Account selection affects new launches only. There is no quota/auth/capacity
-  failover.
+  children inherit that ticket, so a workflow shares the same account-selection
+  policy as its parent without generating a new custom-key approval prompt.
+- Manual account selection affects the next request from new and existing
+  default-account launches. An explicit `--clodex-account` launch remains
+  pinned. There is no quota/auth/capacity failover.
 
 ## Setup on macOS
 
@@ -112,9 +113,10 @@ clodex accounts remove person@example.com
 The dashboard and CLI identify accounts only by their provider and sign-in email.
 Clodex stores only account metadata in `~/.clodex/accounts.json`; OAuth secrets
 remain in the configured credential store. OpenAI and SuperGrok keep independent
-defaults, and a signed ticket pins each provider account for the launch.
-Removing or losing that credential makes the pinned session fail explicitly—it
-does not use a different account.
+defaults. A normal signed ticket resolves those selections for every request, so
+an existing session switches after a manual selection. An explicit account
+override stays pinned. Removing or losing a pinned credential makes that session
+fail explicitly. Clodex does not select a different account after an error.
 
 ## Metrics and privacy
 

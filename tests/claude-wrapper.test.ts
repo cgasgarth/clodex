@@ -378,7 +378,7 @@ describe('clodex-claude process wrapper', () => {
     }
   });
 
-  it('pins direct and inherited workflow launches to one daemon account ticket', async () => {
+  it('shares one daemon account ticket across direct and inherited workflow launches', async () => {
     const proxy = await openLoopbackServer();
     const controlSocketPath = join(testRoot, 'clodex.sock');
     const requests: Array<{ accountId?: string }> = [];

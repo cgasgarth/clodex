@@ -23,18 +23,49 @@ afterEach(() => {
 });
 
 describe('DaemonAccountService launch tickets', () => {
-  it('pins an existing launch while the default changes', () => {
+  it('routes an existing launch through the newly selected account', async () => {
     const store = new DaemonAccountStore(
       { CLODEX_HOME: root },
       join(root, 'accounts.json'),
     );
     const one = store.add({ label: 'One', authRef: 'keyring:one' });
     const two = store.add({ label: 'Two', authRef: 'keyring:two' });
-    const service = new DaemonAccountService(store);
-    const launch = service.createLaunchTicket();
+    const service = new DaemonAccountService(store, {
+      resolveCredential: async (_providerId, authRef) => `${authRef}-token`,
+    });
+    const launch = service.createLaunchTicket()!;
+    const route = {
+      aliasId: 'claude-sol',
+      realModelId: 'gpt-5.6-sol',
+      displayName: 'Sol',
+      upstreamUrl: 'https://example.test',
+      apiKey: 'boot-token',
+      modelFormat: 'openai' as const,
+      providerId: 'openai-oauth',
+      authType: 'oauth' as const,
+    };
+
+    const payload = JSON.parse(
+      Buffer.from(launch.ticket.split('.')[0]!, 'base64url').toString('utf8'),
+    ) as Record<string, unknown>;
+    expect(payload).toMatchObject({ v: 3, a: {} });
+    expect(launch.accountIds).toEqual({ 'openai-oauth': one.id });
+    expect(service.accountForTicket(launch.ticket)?.id).toBe(one.id);
+    await expect(service.routeForTicket(route, launch.ticket))
+      .resolves.toEqual(expect.objectContaining({
+        apiKey: 'keyring:one-token',
+        metricsAccountId: one.id,
+      }));
+
     store.select(two.id);
 
-    expect(service.accountForTicket(launch!.ticket)?.id).toBe(one.id);
+    expect(one.id).not.toBe(two.id);
+    expect(service.accountForTicket(launch.ticket)?.id).toBe(two.id);
+    await expect(service.routeForTicket(route, launch.ticket))
+      .resolves.toEqual(expect.objectContaining({
+        apiKey: 'keyring:two-token',
+        metricsAccountId: two.id,
+      }));
     expect(service.accountForTicket(undefined)).toBeNull();
   });
 
@@ -77,11 +108,15 @@ describe('DaemonAccountService launch tickets', () => {
       authType: 'oauth' as const,
     };
 
+    const payload = JSON.parse(
+      Buffer.from(launch!.ticket.split('.')[0]!, 'base64url').toString('utf8'),
+    ) as { a?: Record<string, string> };
+    expect(payload.a).toEqual({ 'openai-oauth': one.id });
     await expect(service.routeForTicket(route, launch!.ticket))
       .rejects.toThrow('OAuth credential is unavailable for One');
   });
 
-  it('tags resolved routes with the pinned local account for metrics', async () => {
+  it('tags resolved routes with the local account for metrics', async () => {
     const store = new DaemonAccountStore(
       { CLODEX_HOME: root },
       join(root, 'accounts.json'),
@@ -208,7 +243,7 @@ describe('DaemonAccountService launch tickets', () => {
     })]);
   });
 
-  it('pins OpenAI and SuperGrok accounts independently for one launch', async () => {
+  it('follows independent OpenAI and SuperGrok selections for one launch', async () => {
     const store = new DaemonAccountStore(
       { CLODEX_HOME: root },
       join(root, 'accounts.json'),
@@ -232,7 +267,7 @@ describe('DaemonAccountService launch tickets', () => {
     store.select(xaiTwo.id);
 
     expect(service.accountForTicket(launch!.ticket, 'openai-oauth')?.id).toBe(openAi.id);
-    expect(service.accountForTicket(launch!.ticket, 'xai-oauth')?.id).toBe(xaiOne.id);
+    expect(service.accountForTicket(launch!.ticket, 'xai-oauth')?.id).toBe(xaiTwo.id);
     await expect(service.routeForTicket({
       aliasId: 'claude-grok',
       realModelId: 'grok-4.6',
@@ -243,9 +278,10 @@ describe('DaemonAccountService launch tickets', () => {
       providerId: 'xai-oauth',
       authType: 'oauth' as const,
     }, launch!.ticket)).resolves.toEqual(expect.objectContaining({
-      apiKey: 'keyring:xai-one-token',
-      metricsAccountId: xaiOne.id,
+      apiKey: 'keyring:xai-two-token',
+      metricsAccountId: xaiTwo.id,
     }));
+    expect(xaiOne.id).not.toBe(xaiTwo.id);
   });
 
   it('updates only the selected provider bootstrap credential', () => {
