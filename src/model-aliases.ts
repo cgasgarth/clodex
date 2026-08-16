@@ -2,7 +2,7 @@ import type { ModelAlias } from './types.js';
 import { stripOneMContextSuffix } from './context-model-id.js';
 
 const MODEL_ALIAS_PATTERN = /^[a-z0-9][a-z0-9._-]{0,63}$/;
-// Derived from Claude Code v2.1.229's built-in model resolver and sentinels.
+// Derived from Claude Code v2.1.233's built-in model resolver and sentinels.
 const RESERVED_MODEL_ALIASES = new Set([
   'sonnet',
   'opus',

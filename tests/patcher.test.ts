@@ -461,8 +461,8 @@ describe('PATCH_TRANSFORMS_VERSION', () => {
     ).replace(/\r\n/g, '\n');
     const digest = createHash('sha256').update(source).digest('hex');
     expect({ version: PATCH_TRANSFORMS_VERSION, digest }).toEqual({
-      version: 9,
-      digest: '3cadc7c2cc5261fdb79436d1adb32d4472261e08b021781aa573b05e4317790c',
+      version: 10,
+      digest: 'ed7cca2df89b9d829e89bc92687c40ac27c4bae7816fa58578f79a328ca3a75d',
     });
   });
 });
@@ -659,7 +659,7 @@ const CLAUDE_CORE_FIXTURE = [
   'function Lbo(){if(lK("hipaa"))return!1;return QE_()&&iEs().enabled}',
   'function Fw(e){let t=Rd();if(oSs(e))return!Syo(t.enabledMcpServers).includes(e);return Syo(t.disabledMcpServers).includes(e)}',
   'function aY(e,t,r=Mv()){let n=lo(e),o=JE(e,r);if(process.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW){let l=UNe("CLAUDE_CODE_AUTO_COMPACT_WINDOW",process.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW,Tfo,Nds);if(l.status!=="invalid"){let c=Math.max(Tfo,l.effective);return{window:Math.min(o,c),configured:c,source:"env"}}}return{window:o,configured:o,source:"auto"}}',
-  'function JI(){if(Z.DISABLE_COMPACT)return!1;if(Yt(process.env.DISABLE_AUTO_COMPACT))return!1;return Hc("autoCompactEnabled",!0).value}',
+  'function JI(){if(Z.DISABLE_COMPACT)return!1;if(Z.DISABLE_AUTO_COMPACT)return!1;return Hc("autoCompactEnabled",!0).value}',
   'function uMu(e,t,r,n=t,o){let i=o??Sfo(t,r),s=r.enabled?i:t,a=s-20000,l=r.testBlockingOverride,c=l!==void 0&&!isNaN(l)&&l>0?l:n-3000,u=Math.max(0,Math.round((s-e)/s*100));if(e>=c)return{level:"blocked",pctLeft:u};if(r.enabled&&e>=i)return{level:"compact",pctLeft:u};if(e>=a)return{level:"warn",pctLeft:u};return{level:"ok"}}',
   'function gMu(e,t,r,n){let o=Uds(t,r,n),i=o.enabled?r:void 0,s=CSe(t,i);if(!JGe(t,r))return e>=Hds(s,o);let{window:a}=aY(t,i);if(a<bRe)return!1;return e>=Hds(s,o)}',
   'const workflowNote=`NOTE: You are running inside a workflow script. Be concise \\u2014 the script will parse your output.`,aa,bb,cc,dd,sj_=180000,attempts=5;var runtime={};',
@@ -1121,7 +1121,7 @@ describe('patch script identity naming', () => {
     expect(out).not.toMatch(/KNOWN=\[[^\]]*gpt-5\.6-sol/);
   });
 
-  it('patches Claude 2.1.229 enum helper syntax without rewriting the helper', () => {
+  it('patches Claude 2.1.233 enum helper syntax without rewriting the helper', () => {
     const source = CLAUDE_FIXTURE.replace(
       '.enum(["sonnet","opus","haiku","fable"])',
       'xr(["sonnet","opus","haiku","fable"])',
@@ -1133,7 +1133,7 @@ describe('patch script identity naming', () => {
     expect(out).not.toContain('.enum(["sonnet","opus","haiku","fable","sol","clodex:openai:mystery"])');
   });
 
-  it('keeps native Clodex ownership ahead of Claude 2.1.229 unknown-model enforcement', () => {
+  it('keeps native Clodex ownership ahead of Claude 2.1.233 unknown-model enforcement', () => {
     const source = CLAUDE_FIXTURE.replace(
       'return{window:o,configured:o,source:"auto"}}',
       'if(fx()&&!ee.CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT&&!R8_(e,r)&&!zks(e)&&!Vur(e,n))return{window:o,configured:o,source:"unknown-model"};return{window:o,configured:o,source:"auto"}}',

@@ -94,7 +94,7 @@ describe('isPatchedClaudeSource', () => {
     'function opts(e,t,r){let n=cur(),o=(n==="opus")?[n,r]:[r];for(let i of o)Dlh(e,i,t);return e}',
     'function RS(e,t){let r=FAc();if(r!==void 0)return r;if(EHi(e,t))return Dve;return $Ac(e,t)}',
     'function aY(e,t,r=Mv()){let n=lo(e),o=JE(e,r);if(process.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW){let l=UNe("CLAUDE_CODE_AUTO_COMPACT_WINDOW",process.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW,Tfo,Nds);if(l.status!=="invalid"){let c=Math.max(Tfo,l.effective);return{window:Math.min(o,c),configured:c,source:"env"}}}return{window:o,configured:o,source:"auto"}}',
-    'function JI(){if(Z.DISABLE_COMPACT)return!1;if(Yt(process.env.DISABLE_AUTO_COMPACT))return!1;return Hc("autoCompactEnabled",!0).value}',
+    'function JI(){if(Z.DISABLE_COMPACT)return!1;if(Z.DISABLE_AUTO_COMPACT)return!1;return Hc("autoCompactEnabled",!0).value}',
     'function uMu(e,t,r,n=t,o){let i=o??Sfo(t,r),s=r.enabled?i:t,a=s-20000,l=r.testBlockingOverride,c=l!==void 0&&!isNaN(l)&&l>0?l:n-3000,u=Math.max(0,Math.round((s-e)/s*100));if(e>=c)return{level:"blocked",pctLeft:u};if(r.enabled&&e>=i)return{level:"compact",pctLeft:u};if(e>=a)return{level:"warn",pctLeft:u};return{level:"ok"}}',
     'function gMu(e,t,r,n){let o=Uds(t,r,n),i=o.enabled?r:void 0,s=CSe(t,i);if(!JGe(t,r))return e>=Hds(s,o);let{window:a}=aY(t,i);if(a<bRe)return!1;return e>=Hds(s,o)}',
     'function $c(){if(Jn()!=="firstParty")return!1;return!Q.CLAUDE_CODE_DISABLE_FAST_MODE}',
