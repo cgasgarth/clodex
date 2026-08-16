@@ -88,7 +88,7 @@ credentials unchanged; only configured OpenAI and Grok models are rerouted.
 
 `clodex claude` routes every main session and Claude-spawned child through one
 restart-stable daemon endpoint. Signed launch tickets keep workflows and
-subagents pinned to their parent's account.
+subagents on their parent's account-selection policy.
 
 ```mermaid
 flowchart LR
@@ -238,9 +238,10 @@ clodex accounts usage
 ```
 
 Accounts are identified by sign-in email. OpenAI and SuperGrok keep independent
-defaults. Selection is manual and affects new launches only; existing sessions
-and their children remain pinned. Clodex does not fail over after quota,
-capacity, or authentication errors.
+defaults. Selection is manual and affects the next request from new and existing
+sessions. A launch that uses an explicit account override remains pinned to that
+account. Clodex does not fail over after quota, capacity, or authentication
+errors.
 
 ## CLI reference
 

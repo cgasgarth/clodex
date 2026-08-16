@@ -76,7 +76,7 @@ export interface LaunchTicket {
 }
 
 interface LaunchTicketPayload {
-  accountIds: LaunchTicket['accountIds'];
+  pinnedAccountIds: LaunchTicket['accountIds'];
   processingMode: ApiProcessingMode;
 }
 
@@ -230,15 +230,17 @@ export class DaemonAccountService implements DaemonAccountController {
       const account = this.store.selected(providerId);
       return account ? [[providerId, account.id]] : [];
     })) as LaunchTicket['accountIds'];
+    const pinned: LaunchTicket['accountIds'] = {};
     if (accountId) {
       const account = findAccount(this.store, accountId);
       if (!account) throw new Error(`Managed account not found: ${accountId}`);
       selected[account.providerId] = account.id;
+      pinned[account.providerId] = account.id;
     }
     if (Object.keys(selected).length === 0 && processingMode === 'standard') return null;
     const payload = Buffer.from(JSON.stringify({
-      v: 2,
-      a: selected,
+      v: 3,
+      a: pinned,
       i: this.dependencies.now(),
       n: randomBytes(12).toString('base64url'),
       ...(processingMode === 'fast' ? { p: 'fast' } : {}),
@@ -276,7 +278,7 @@ export class DaemonAccountService implements DaemonAccountController {
         p?: unknown;
       };
       if (
-        parsed.v !== 2
+        parsed.v !== 3
         || !parsed.a
         || typeof parsed.a !== 'object'
         || typeof parsed.i !== 'number'
@@ -286,7 +288,7 @@ export class DaemonAccountService implements DaemonAccountController {
         || (parsed.p !== undefined && parsed.p !== 'fast')
       ) return null;
       return {
-        accountIds: parsed.a,
+        pinnedAccountIds: parsed.a,
         processingMode: parsed.p === 'fast' ? 'fast' : 'standard',
       };
     } catch {
@@ -300,7 +302,8 @@ export class DaemonAccountService implements DaemonAccountController {
   ): DaemonAccountRecord | null {
     const launch = this.launchForTicket(ticket);
     if (!launch) return null;
-    const id = launch.accountIds[providerId];
+    const id = launch.pinnedAccountIds[providerId]
+      ?? this.store.selected(providerId)?.id;
     return typeof id === 'string'
       ? this.store.list(providerId).find(account => account.id === id) ?? null
       : null;
@@ -319,7 +322,11 @@ export class DaemonAccountService implements DaemonAccountController {
     const managedAccounts = this.store.list(providerId);
     if (managedAccounts.length === 0) return launchRoute;
     const account = this.accountForTicket(ticket, providerId);
-    if (!account) throw new Error(`The ${providerDisplayName(providerId)} launch ticket is missing or expired`);
+    if (!account) {
+      throw new Error(
+        `The ${providerDisplayName(providerId)} launch ticket is missing or expired, or no account is selected`,
+      );
+    }
     const apiKey = await this.dependencies.resolveCredential(providerId, account.authRef);
     if (!apiKey) throw new Error(`OAuth credential is unavailable for ${accountIdentity(account)}`);
     const common = {

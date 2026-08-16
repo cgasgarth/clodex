@@ -815,7 +815,7 @@ function Dashboard(): React.ReactNode {
       <>
         <Box borderStyle="round" paddingX={1} flexDirection="column">
           <Text bold>Accounts and subscription limits</Text>
-          <Text dimColor>Each provider has one selected default for new Claude launches; existing sessions stay pinned.</Text>
+          <Text dimColor>Each provider has one selected account; existing default-account sessions switch on their next request.</Text>
           {accounts.length === 0
             ? <Text dimColor>No managed accounts. Press o for OpenAI or g for xAI.</Text>
             : accountGroups.map(group => (

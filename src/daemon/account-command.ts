@@ -46,9 +46,10 @@ ${pc.bold('Usage:')}
   clodex accounts usage [email-or-id]
 
 Up to ${MAX_DAEMON_ACCOUNTS} accounts per provider can be stored. Selection is
-manual and sets that provider's default for new Claude launches. Existing launch
-tickets remain pinned to their original accounts. Clodex never switches accounts
-automatically after quota, capacity, or authentication errors.`;
+manual and sets that provider's account for the next request from new and
+existing default-account launches. Explicit account launches remain pinned.
+Clodex never switches accounts automatically after quota, capacity, or
+authentication errors.`;
 }
 
 function storeWithMigration(): DaemonAccountStore {
@@ -272,7 +273,10 @@ export async function runAccountsCommand(args: string[]): Promise<number> {
       if (!value) throw new Error('Usage: clodex accounts select <email-or-id>');
       const account = store.select(value);
       syncManagedProviderCredential(account.providerId, account.authRef);
-      console.log(`Selected ${accountIdentity(account)} for new ${providerDisplayName(account.providerId)} launches. Existing sessions remain pinned.`);
+      console.log(
+        `Selected ${accountIdentity(account)} for ${providerDisplayName(account.providerId)} requests. `
+        + 'Existing default-account sessions switch on their next request; explicit account launches remain pinned.',
+      );
       return 0;
     }
     if (command === 'remove') {

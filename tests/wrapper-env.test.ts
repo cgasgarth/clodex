@@ -136,7 +136,7 @@ describe('computeWrapperEnv', () => {
     expect(env['CLAUDE_STREAM_IDLE_TIMEOUT_MS']).toBe(String(15 * 60_000));
   });
 
-  it('endpoint-mode daemon preserves its token and carries the pinned account ticket', () => {
+  it('endpoint-mode daemon preserves its token and carries the account ticket', () => {
     const state: ServerRuntimeState = {
       mode: 'endpoint',
       port: 17647,
