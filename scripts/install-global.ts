@@ -18,6 +18,7 @@ const RUNTIME_ARTIFACTS = [
   'worker.js',
   'secondwind-worker.js',
 ];
+const PACKAGE_NAME = '@bman654/clodex';
 
 async function run(command: string[], cwd: string): Promise<void> {
   const child = Bun.spawn({
@@ -72,6 +73,18 @@ export async function installGlobalCheckout(
     const nextArchive = `${installedArchive}.${process.pid}.next`;
     await copyFile(packedArchive, nextArchive);
     await rename(nextArchive, installedArchive);
+    const globalManifest = join(globalRoot, 'package.json');
+    if (await Bun.file(globalManifest).exists()) {
+      await run([
+        process.execPath,
+        'pm',
+        'pkg',
+        'set',
+        `dependencies.${PACKAGE_NAME}=${installedArchive}`,
+        '--cwd',
+        globalRoot,
+      ], repoRoot);
+    }
     await run([
       process.execPath,
       'add',
