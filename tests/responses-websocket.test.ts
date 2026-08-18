@@ -279,6 +279,7 @@ beforeEach(() => {
         model: 'gpt-5.6-luna',
         reasoning: { effort: 'high' },
         parallel_tool_calls: true,
+        service_tier: 'priority',
       }),
     });
 
@@ -292,6 +293,7 @@ beforeEach(() => {
     expect(sent.model).toBe('gpt-5.6-luna');
     expect(sent.parallel_tool_calls).toBe(false);
     expect(sent.store).toBe(false);
+    expect(sent.service_tier).toBe('priority');
     expect(sent.reasoning).toEqual({ effort: 'high', context: 'all_turns' });
   });
 
