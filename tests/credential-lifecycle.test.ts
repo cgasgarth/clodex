@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'bun:test';
 import type { ProviderRegistry } from '../src/registry/types.js';
 
 const registryState = createHoisted(() => ({
+  // SAFETY: The test fixture defines the asserted runtime shape.
   current: { schemaVersion: 1, providers: [] } as ProviderRegistry,
 }));
 const journalState = createHoisted(() => ({
@@ -11,15 +12,18 @@ const journalState = createHoisted(() => ({
 }));
 const lockState = createHoisted(() => ({
   registryActive: false,
+  // SAFETY: The test fixture defines the asserted runtime shape.
   credentialActive: null as string | null,
   credentialFailures: new Set<string>(),
   registryFailures: new Set<string>(),
+  // SAFETY: The test fixture defines the asserted runtime shape.
   events: [] as string[],
+  // SAFETY: The test fixture defines the asserted runtime shape.
   afterRegistryUnlock: null as null | (() => void),
 }));
 
-vi.mock('../src/env.js', () => ({
-  ...importActual<typeof import('../src/env.js')>('../src/env.js', import.meta.url),
+vi.mock('../src/config/environment.js', () => ({
+  ...importActual<typeof import('../src/config/environment.js')>('../src/config/environment.js', import.meta.url),
   deleteProviderCredential: vi.fn(),
 }));
 vi.mock('../src/registry/io.js', () => ({
@@ -75,7 +79,7 @@ vi.mock('../src/registry/lock.js', () => ({
   }),
 }));
 
-import { deleteProviderCredential } from '../src/env.js';
+import { deleteProviderCredential } from '../src/config/environment.js';
 import * as cleanupJournal from '../src/registry/credential-cleanup-journal.js';
 import { reconcilePendingCredentialDeletes } from '../src/registry/credential-lifecycle.js';
 import { loadRegistryStrict } from '../src/registry/io.js';

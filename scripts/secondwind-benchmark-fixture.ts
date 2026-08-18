@@ -1,7 +1,22 @@
 #!/usr/bin/env bun
 
+interface DeploymentFixture {
+  deploymentId: string;
+  rollbackAt?: string | null;
+  warnings: string[] | null;
+  owner: { team: string; email?: string };
+  status: string;
+  region: string | undefined;
+}
+
+function fixtureAt<Value>(records: Value[], index: number): Value {
+  const value = records[index];
+  if (value === undefined) throw new Error(`Missing benchmark fixture at index ${index}`);
+  return value;
+}
+
 function deployments(): void {
-  const records = Array.from({ length: 90 }, (_, index) => ({
+  const records: DeploymentFixture[] = Array.from({ length: 90 }, (_, index) => ({
     deploymentId: `dep-${String(index).padStart(4, '0')}`,
     rollbackAt: index % 5 === 0 ? null : `2026-07-${String((index % 27) + 1).padStart(2, '0')}T12:00:00Z`,
     warnings: index % 7 === 0 ? [] : [`warning-${index % 19}`],
@@ -14,43 +29,43 @@ function deployments(): void {
   }));
 
   records[60] = {
-    ...records[60]!,
+    ...fixtureAt(records, 60),
     rollbackAt: null,
     warnings: [],
     owner: { team: 'team-7' },
     status: 'ready',
   };
   records[61] = {
-    ...records[61]!,
+    ...fixtureAt(records, 61),
     rollbackAt: null,
-    warnings: null as unknown as string[],
+    warnings: null,
     owner: { team: 'team-7' },
     status: 'blocked',
   };
   const absentRollback = {
-    ...records[62]!,
+    ...fixtureAt(records, 62),
     warnings: [],
     owner: { team: 'team-7' },
     status: 'blocked',
   };
-  delete (absentRollback as Partial<typeof absentRollback>).rollbackAt;
+  delete absentRollback.rollbackAt;
   records[62] = absentRollback;
   records[63] = {
-    ...records[63]!,
+    ...fixtureAt(records, 63),
     rollbackAt: '',
     warnings: [],
     owner: { team: 'team-7' },
     status: 'blocked',
   };
   records[64] = {
-    ...records[64]!,
+    ...fixtureAt(records, 64),
     rollbackAt: null,
     warnings: [],
     owner: { team: 'team-7', email: '' },
     status: 'blocked',
   };
   records[67] = {
-    ...records[67]!,
+    ...fixtureAt(records, 67),
     deploymentId: 'dep-rollback-null-417',
     rollbackAt: null,
     warnings: [],
@@ -94,14 +109,14 @@ function packages(): void {
   }));
 
   records[36] = {
-    ...records[36]!,
+    ...fixtureAt(records, 36),
     directDependencies: [
       { name: 'serde', version: '1.0.219', features: ['derive'] },
       { name: 'tokio', version: '1.46.0', features: ['rt'] },
     ],
   };
   records[37] = {
-    ...records[37]!,
+    ...fixtureAt(records, 37),
     directDependencies: [
       { name: 'serde', version: '1.0.219', features: ['derive'] },
       { name: 'tokio', version: '1.46.0', features: ['rt-multi-thread'] },
@@ -109,14 +124,14 @@ function packages(): void {
     ],
   };
   records[38] = {
-    ...records[38]!,
+    ...fixtureAt(records, 38),
     directDependencies: [
       { name: 'serde', version: '1.0.218', features: ['derive'] },
       { name: 'tokio', version: '1.46.0', features: ['rt-multi-thread'] },
     ],
   };
   records[39] = {
-    ...records[39]!,
+    ...fixtureAt(records, 39),
     packageId: 'pkg-isolated-0219',
     directDependencies: [
       { name: 'serde', version: '1.0.219', features: ['std', 'derive'] },
@@ -148,7 +163,7 @@ function files(): void {
     'src/services/accounts-v2/legacy/serializer.ts',
     'src/services/accounts-v2/protocol/protocol-v1.json',
   );
-  console.log(paths.sort().join('\n'));
+  console.log(paths.toSorted().join('\n'));
 }
 
 switch (process.argv[2]) {

@@ -1,6 +1,6 @@
 import * as p from '@clack/prompts';
 import pc from 'picocolors';
-import { printFavoritesOnlyPanel, printNetworkWarningPanel } from '../ui.js';
+import { printFavoritesOnlyPanel, printNetworkWarningPanel } from '../ui/prompts.js';
 
 export type ListenMode = 'local' | 'network';
 export type ServerStartMode = 'configure' | 'quick';
@@ -30,7 +30,7 @@ export async function askMaskGatewayIds(initialValue: boolean): Promise<boolean 
     p.cancel('Cancelled.');
     return null;
   }
-  return Boolean(mask);
+  return mask;
 }
 
 export async function askFavoritesOnly(initialValue: boolean): Promise<boolean | null> {
@@ -43,7 +43,7 @@ export async function askFavoritesOnly(initialValue: boolean): Promise<boolean |
     p.cancel('Cancelled.');
     return null;
   }
-  return Boolean(favoritesOnly);
+  return favoritesOnly;
 }
 
 export async function askListenMode(): Promise<ListenMode | null> {
@@ -67,13 +67,13 @@ export async function askServerPassword(): Promise<string | null> {
 
   const password = await p.text({
     message: 'Choose a server password for this run:',
-    validate: value => value.trim() ? undefined : 'Password cannot be empty',
+    validate: value => value?.trim() ? undefined : 'Password cannot be empty',
   });
   if (p.isCancel(password)) {
     p.cancel('Cancelled.');
     return null;
   }
-  return String(password).trim();
+  return password.trim();
 }
 
 export async function askUseSavedServerPassword(): Promise<'use-saved' | 'new-password' | null> {
@@ -101,5 +101,5 @@ export async function askSaveServerPassword(): Promise<boolean | null> {
     p.cancel('Cancelled.');
     return null;
   }
-  return Boolean(save);
+  return save;
 }

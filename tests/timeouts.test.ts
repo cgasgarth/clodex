@@ -7,7 +7,7 @@ import {
   MODEL_TOTAL_TIMEOUT_MS,
   NATIVE_COMPACTION_TIMEOUT_MS,
   PROVIDER_METADATA_TIMEOUT_MS,
-} from '../src/timeouts.js';
+} from '../src/config/timeouts.js';
 
 describe('long-running operation timeouts', () => {
   it('keeps user work on generous, ordered budgets', () => {

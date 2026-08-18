@@ -1,7 +1,7 @@
 import { tmpdir, userInfo } from 'node:os';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
-import { describe, expect, it, vi } from 'bun:test';
-import { getAppHome, getCredentialCleanupPath } from '../src/paths.js';
+import { describe, expect, it } from 'bun:test';
+import { getAppHome, getCredentialCleanupPath } from '../src/config/paths.js';
 import {
   getCredentialLockRoot,
   getCredentialMutationLockPath,

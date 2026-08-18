@@ -5,7 +5,7 @@ import {
   isResponseStreamRetryEligible,
   responseStreamRetryDelayMs,
   waitForResponseStreamRetry,
-} from '../src/agent-stream-transaction.js';
+} from '../src/agents/stream-transaction.js';
 
 describe('AgentStreamTransaction', () => {
   it('discards a failed attempt and commits only the completed replay', () => {

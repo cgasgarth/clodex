@@ -93,7 +93,7 @@ const outputRoot = resolve(
     ?? join(repositoryRoot, 'benchmarks', 'secondwind', 'results', 'luna-medium-2026-07-30'),
 );
 
-function writeJson(path: string, value: unknown): void {
+function writeJson<Value>(path: string, value: Value): void {
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`);
 }
@@ -246,8 +246,9 @@ const tasks: Task[] = [
 ];
 
 function parseClaudeResult(stdout: string): ClaudeResult | undefined {
-  for (const line of stdout.trim().split('\n').reverse()) {
+  for (const line of stdout.trim().split('\n').toReversed()) {
     try {
+      // SAFETY: Claude's JSON result envelope is checked by its `type` discriminator below.
       const parsed = JSON.parse(line) as ClaudeResult;
       if (parsed.type === 'result') return parsed;
     } catch {
@@ -346,7 +347,7 @@ async function runOne(
 function processEnv(): Record<string, string> {
   return Object.fromEntries(
     Object.entries(process.env).filter((entry): entry is [string, string] =>
-      typeof entry[1] === 'string'),
+      entry[1] !== undefined),
   );
 }
 
@@ -383,14 +384,14 @@ async function runCondition(
 
 function median(values: number[]): number {
   if (values.length === 0) return 0;
-  const sorted = [...values].sort((left, right) => left - right);
+  const sorted = values.toSorted((left, right) => left - right);
   const middle = Math.floor(sorted.length / 2);
   return sorted.length % 2 === 0
     ? ((sorted[middle - 1] ?? 0) + (sorted[middle] ?? 0)) / 2
     : sorted[middle] ?? 0;
 }
 
-function summarize(runs: RunResult[]): Array<Record<string, unknown>> {
+function summarize(runs: RunResult[]) {
   return tasks.map(task => {
     const taskRuns = runs.filter(run => run.taskId === task.id);
     const control = taskRuns.filter(run => run.condition === 'off');

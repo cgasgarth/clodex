@@ -4,7 +4,7 @@ import {
   findBlacklistEntry,
   hideReason,
   shouldHideModel,
-} from '../src/model-compatibility.js';
+} from '../src/models/compatibility.js';
 import {
   findModelsDevModel,
   loadBundledModelsDevCache,

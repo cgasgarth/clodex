@@ -10,17 +10,19 @@ const lockState = createHoisted(() => ({
   registryTail: Promise.resolve(),
   credentialActive: false,
   credentialTails: new Map<string, Promise<void>>(),
+  // SAFETY: The test fixture defines the asserted runtime shape.
   afterRegistryUnlock: null as null | (() => void),
   providerActive: false,
 }));
 const registryState = createHoisted(() => ({
+  // SAFETY: The test fixture defines the asserted runtime shape.
   current: { schemaVersion: 1, providers: [] } as ProviderRegistry,
 }));
 const journalState = createHoisted(() => ({
   pending: new Set<string>(),
 }));
 
-vi.mock('../src/ui.js', () => ({
+vi.mock('../src/ui/prompts.js', () => ({
   printOAuthStepsPanel: vi.fn(),
 }));
 vi.mock('../src/oauth/openai.js', () => ({
@@ -42,9 +44,8 @@ vi.mock('../src/oauth/xai.js', () => ({
     },
   })),
 }));
-vi.mock('../src/env.js', () => {
-  const importOriginal = <T>() => importActual<T>('../src/env.js', import.meta.url);
-  const actual = importOriginal<typeof import('../src/env.js')>();
+vi.mock('../src/config/environment.js', () => {
+  const actual = importActual<typeof import('../src/config/environment.js')>('../src/config/environment.js', import.meta.url);
   return {
     ...actual,
     deleteProviderCredential: vi.fn(),
@@ -115,7 +116,10 @@ vi.mock('../src/registry/lock.js', () => ({
       }
     }
   }),
-  withProviderMutationLock: vi.fn(async (_providerSlot: string, operation: () => unknown) => {
+  withProviderMutationLock: vi.fn(async <T>(
+    _providerSlot: string,
+    operation: () => T | Promise<T>,
+  ): Promise<T> => {
     lockState.providerActive = true;
     try {
       return await operation();
@@ -136,7 +140,7 @@ import {
   probeProviderCredentialStore,
   provisionProviderCredential,
   saveProviderCredential,
-} from '../src/env.js';
+} from '../src/config/environment.js';
 import { runOpenAiDeviceCodeFlow } from '../src/oauth/openai.js';
 import { runXaiDeviceCodeFlow } from '../src/oauth/xai.js';
 import { reconcilePendingCredentialDeletes } from '../src/registry/credential-lifecycle.js';
@@ -144,7 +148,7 @@ import * as cleanupJournal from '../src/registry/credential-cleanup-journal.js';
 import { loadRegistryStrict, saveRegistry } from '../src/registry/io.js';
 import { authenticateProvider } from '../src/registry/provider-auth.js';
 import { refreshProviderModels } from '../src/registry/refresh-models.js';
-import { credentialInstanceAuthRef } from '../src/credential-helper.js';
+import { credentialInstanceAuthRef } from '../src/credentials/helper.js';
 import * as prompts from '@clack/prompts';
 import { asMocked, createHoisted, waitForCondition } from './test-helpers.js';
 
@@ -185,6 +189,7 @@ describe('authenticateProvider', () => {
       .mockImplementation(async (authRef: string) => journalState.pending.delete(authRef));
     asMocked(saveRegistry).mockReset().mockImplementation(registry => {
       if (!lockState.active) throw new Error('registry write escaped its lock');
+      // SAFETY: The test fixture defines the asserted runtime shape.
       registryState.current = structuredClone(registry) as typeof registryState.current;
     });
     asMocked(runOpenAiDeviceCodeFlow).mockReset().mockResolvedValue({

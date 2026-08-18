@@ -4,25 +4,26 @@ import {
   getDaemonControlSocketPath,
   getDaemonLaunchAgentPath,
   getLogsPath,
-} from '../paths.js';
+} from '../config/paths.js';
 import { VERSION } from '../constants.js';
 import {
   liveProxyModelAliases,
   loadHttpProxyRoutes,
 } from '../http-proxy/index.js';
-import { startProxyCatalog, type ProxyHandle } from '../proxy.js';
+import { startProxyCatalog, type ProxyHandle } from '../proxy/index.js';
 import {
   isPidAlive,
   registerServerRuntimeState,
   unregisterServerRuntimeState,
-} from '../server-runtime.js';
+} from '../runtime/server-runtime.js';
 import {
+  diagnosticRecord,
   flushTraceLogs,
   getInferenceRequestLogPath,
   getSessionLogPath,
   subscribeInferenceTrace,
   writeProxyLifecycleLog,
-} from '../trace-log.js';
+} from '../observability/trace-log.js';
 import { DaemonInferenceCollector } from './collector.js';
 import { startIsolatedDaemonControlApi } from './control/isolated.js';
 import { daemonControlRequest } from './control-client.js';
@@ -40,11 +41,19 @@ import {
 import { createDaemonAccountController } from './account-service.js';
 import { createDaemonSecondwindService } from './secondwind.js';
 import { createDaemonClaudeModelController } from './model-service.js';
-import { loadPreferences, savePreferences } from '../config.js';
+import { loadPreferences, savePreferences } from '../config/config.js';
 import {
   diagnosticLogMode,
   shouldWriteDiagnosticEvent,
-} from '../diagnostic-log-mode.js';
+} from '../observability/diagnostic-log-mode.js';
+import type { ResponsesWebSocketDiagnosticEvent } from '../oauth/responses-websocket/types.js';
+
+function shouldWriteWebSocketDiagnostic(
+  mode: ReturnType<typeof diagnosticLogMode>,
+  event: ResponsesWebSocketDiagnosticEvent,
+): boolean {
+  return shouldWriteDiagnosticEvent(mode, event);
+}
 
 interface DaemonStatusResponse {
   running: boolean;
@@ -335,7 +344,7 @@ async function runDaemonProcess(): Promise<number> {
           ? undefined
           : context.requestId,
         body: context.body,
-        request: context.request,
+        request: diagnosticRecord(context.request),
         sessionId: context.claudeSessionId
           ? context.claudeAgentId
             ? `${context.claudeSessionId}:${context.claudeAgentId}`
@@ -346,7 +355,7 @@ async function runDaemonProcess(): Promise<number> {
         processingMode: context.processingMode,
         recordMetrics: context.endpoint === 'messages',
       }),
-      event => shouldWriteDiagnosticEvent(activeDiagnosticLogMode, event),
+      event => shouldWriteWebSocketDiagnostic(activeDiagnosticLogMode, event),
     );
     const models = createDaemonClaudeModelController(endpoint);
     runtime = createDaemonRuntimeState({
@@ -403,7 +412,7 @@ async function runDaemonProcess(): Promise<number> {
     if (runtime) removeDaemonRuntimeState(runtime.instanceId);
     unregisterServerRuntimeState(process.pid);
     await control?.close();
-    endpoint?.close();
+    await endpoint?.close();
     writeProxyLifecycleLog(inferenceLogPath, {
       event: 'proxy_stopped',
       pid: process.pid,

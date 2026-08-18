@@ -1,17 +1,18 @@
 // src/registry/fetch-template-models.ts — test connection and list models for template providers
 
-import { deriveBrand } from '../models.js';
-import { resolveContextWindow } from '../context-window.js';
-import type { ProviderTemplate } from '../provider-templates.js';
+import { isBoolean, isNumber } from '../runtime/type-guards.js';
+import { deriveBrand } from '../models/types.js';
+import { resolveContextWindow } from '../models/context-window.js';
+import type { ProviderTemplate } from '../providers/templates.js';
 import { normalizeGoogleDisplayName, normalizeGoogleModelId } from './google-model-id.js';
 import type { CachedModel } from './types.js';
 import {
   getProviderDebugLogPath,
   makeTraceLogger,
   registerTraceSecret,
-} from '../trace-log.js';
-import { classifyFreeStatus, isFreeStatus } from '../free-models.js';
-import { PROVIDER_METADATA_TIMEOUT_MS } from '../timeouts.js';
+} from '../observability/trace-log.js';
+import { classifyFreeStatus, isFreeStatus } from '../models/free-models.js';
+import { PROVIDER_METADATA_TIMEOUT_MS } from '../config/timeouts.js';
 
 const TEST_TIMEOUT_MS = PROVIDER_METADATA_TIMEOUT_MS;
 
@@ -31,6 +32,11 @@ interface ProviderModelListRow {
   pricing?: Record<string, string | number | undefined>;
   use_responses_lite?: boolean;
   prefer_websockets?: boolean;
+}
+
+interface ProviderRequestHeaders {
+  [name: string]: string;
+  Accept: string;
 }
 
 function modelFormatForNpm(npm: string): 'anthropic' | 'openai' {
@@ -55,7 +61,7 @@ function modelsUrl(baseUrl: string, template: ProviderTemplate): string {
 
 function toNumber(value: string | number | undefined): number | undefined {
   if (value === undefined) return undefined;
-  const num = typeof value === 'number' ? value : Number(value);
+  const num = isNumber(value) ? value : Number(value);
   return Number.isFinite(num) ? num : undefined;
 }
 
@@ -134,8 +140,8 @@ function parseModelList(body: OpenAiModelListResponse, npm: string): CachedModel
       modelFormat: format,
       npm,
       supportedParameters: Array.isArray(row.supported_parameters) ? row.supported_parameters : undefined,
-      useResponsesLite: typeof row.use_responses_lite === 'boolean' ? row.use_responses_lite : undefined,
-      preferWebSockets: typeof row.prefer_websockets === 'boolean' ? row.prefer_websockets : undefined,
+      useResponsesLite: isBoolean(row.use_responses_lite) ? row.use_responses_lite : undefined,
+      preferWebSockets: isBoolean(row.prefer_websockets) ? row.prefer_websockets : undefined,
     });
   }
 
@@ -187,7 +193,7 @@ export async function fetchTemplateModels(
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TEST_TIMEOUT_MS);
 
-  const headers: Record<string, string> = { Accept: 'application/json' };
+  const headers: ProviderRequestHeaders = { Accept: 'application/json' };
   const trimmedApiKey = apiKey.trim();
   if (template.npm === '@ai-sdk/anthropic') {
     if (trimmedApiKey) headers['x-api-key'] = trimmedApiKey;
@@ -255,6 +261,7 @@ export async function fetchTemplateModels(
     let json: OpenAiModelListResponse = {};
     try {
       if (rawBodyText.trim()) {
+        // SAFETY: parseModelList validates each optional model-list field before use.
         json = JSON.parse(rawBodyText) as OpenAiModelListResponse;
       }
     } catch {

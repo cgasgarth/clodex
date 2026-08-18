@@ -74,6 +74,7 @@ describe('OpenAI usage fetcher', () => {
       });
     });
     const usage = await fetchOpenAiUsage('secret-token', 'acct-1', {
+      // SAFETY: The test fixture defines the asserted runtime shape.
       fetch: request as typeof fetch,
     });
     expect(usage.plan).toBe('pro');

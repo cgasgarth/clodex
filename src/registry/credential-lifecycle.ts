@@ -1,4 +1,4 @@
-import { deleteProviderCredential } from '../env.js';
+import { deleteProviderCredential } from '../config/environment.js';
 import {
   cancelCredentialDelete,
   isStoredCredentialRef,
@@ -23,12 +23,12 @@ export interface CredentialCleanupResult {
   persistenceError?: string;
 }
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+function errorMessage(cause: unknown): string {
+  return cause instanceof Error ? cause.message : String(cause);
 }
 
-function appendError(errors: string[], context: string, error: unknown): void {
-  errors.push(`${context}: ${errorMessage(error)}`);
+function appendError(errors: string[], context: string, cause: unknown): void {
+  errors.push(`${context}: ${errorMessage(cause)}`);
 }
 
 function credentialIsReferenced(
@@ -161,9 +161,10 @@ export async function reconcilePendingCredentialDeletes(): Promise<CredentialCle
     appendError(errors, 'Could not confirm pending credential cleanup', error);
   }
 
-  return {
+  const result: CredentialCleanupResult = {
     deleted,
     pending,
-    ...(errors.length > 0 ? { persistenceError: errors.join('; ') } : {}),
   };
+  if (errors.length > 0) result.persistenceError = errors.join('; ');
+  return result;
 }

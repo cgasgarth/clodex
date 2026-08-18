@@ -3,7 +3,7 @@
 import { refreshOpenAiAccessToken } from './openai.js';
 import { refreshXaiAccessToken } from './xai.js';
 import type { StoredOAuthCredential } from './types.js';
-import { accessTokenIsExpiring, NATIVE_OAUTH_PROVIDER_IDS, oauthCredentialNeedsRefresh, tokensToStoredCredential } from './types.js';
+import { accessTokenIsExpiring, oauthCredentialNeedsRefresh, supportsNativeOAuth, tokensToStoredCredential } from './types.js';
 
 export function oauthCredentialShouldRefresh(
   cred: Pick<StoredOAuthCredential, 'access' | 'expires'>,
@@ -11,7 +11,7 @@ export function oauthCredentialShouldRefresh(
 ): boolean {
   if (oauthCredentialNeedsRefresh(cred)) return true;
   // All native OAuth providers use short-lived access tokens — check expiry proactively
-  if ((NATIVE_OAUTH_PROVIDER_IDS as readonly string[]).includes(providerId) && accessTokenIsExpiring(cred.access)) return true;
+  if (supportsNativeOAuth(providerId) && accessTokenIsExpiring(cred.access)) return true;
   return false;
 }
 

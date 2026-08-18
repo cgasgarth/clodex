@@ -4,6 +4,7 @@
 import type { LanguageModel, ProviderMetadata } from 'ai';
 import { wrapLanguageModel, extractReasoningMiddleware } from 'ai';
 import type { FetchFunction } from '@ai-sdk/provider-utils';
+import type { ProviderDataValue } from './types.js';
 import { VERTEX_ANTHROPIC_NPM, CODEX_RESPONSES_LITE_VERSION, CODEX_RESPONSES_LITE_WS_URL } from './constants.js';
 import { extractOpenAiAccountId } from './oauth/openai.js';
 import {
@@ -14,8 +15,8 @@ import {
   CLAUDE_CODE_USER_AGENT,
   injectClaudeIdentity,
 } from './oauth/claude-identity.js';
-import { isCredentialBearingHeader } from './credential-headers.js';
-import { getResponsesCheckpointsPath } from './paths.js';
+import { isCredentialBearingHeader } from './credentials/headers.js';
+import { getResponsesCheckpointsPath } from './config/paths.js';
 import {
   createXaiSubscriptionFetch,
   XAI_SUBSCRIPTION_BASE_URL,
@@ -50,12 +51,13 @@ const fetchWithoutCredentialHeaders: FetchFunction = Object.assign(
     const headers = new Headers(
       init?.headers ?? (input instanceof Request ? input.headers : undefined),
     );
-    for (const name of [...headers.keys()]) {
+    // Snapshot the live Headers iterator so deletions cannot skip adjacent names.
+    for (const name of Array.from(headers.keys())) {
       if (isCredentialBearingHeader(name)) headers.delete(name);
     }
     return fetch(input, { ...init, headers });
   },
-  { preconnect: Reflect.get(fetch, 'preconnect') },
+  { preconnect: fetch.preconnect },
 );
 
 /**
@@ -82,14 +84,14 @@ export function modelPrefersResponsesApi(modelId: string): boolean {
  * default, except pre-chat legacy completion models that predate both APIs
  * and are not agentic chat models at all.
  */
-const OPENAI_CHAT_COMPLETIONS_ONLY = [
+const OPENAI_CHAT_COMPLETIONS_ONLY = new Set([
   'davinci-002',
   'babbage-002',
   'gpt-3.5-turbo-instruct',
-];
+]);
 
 export function shouldUseOpenAiResponsesEndpoint(modelId: string): boolean {
-  return !OPENAI_CHAT_COMPLETIONS_ONLY.includes(modelId.toLowerCase());
+  return !OPENAI_CHAT_COMPLETIONS_ONLY.has(modelId.toLowerCase());
 }
 
 interface VertexProviderConfig {
@@ -109,7 +111,7 @@ export interface ProviderModelSpec {
   /** Registry authentication mode. OpenAI OAuth uses the ChatGPT Codex backend. */
   authType?: 'api' | 'oauth' | 'none';
   oauthAccountId?: string;
-  providerData?: Record<string, unknown>;
+  providerData?: Record<string, ProviderDataValue>;
   /** Google Vertex AI — uses Application Default Credentials, not apiKey. */
   vertex?: VertexProviderConfig;
   /** Static headers sent on every upstream request (e.g. a plan/auth-tracking header a custom endpoint requires). */
@@ -149,10 +151,14 @@ export function maxToolsForNpm(npm: string | undefined): number | undefined {
   return npm === '@ai-sdk/groq' ? 128 : undefined;
 }
 
-function findCreateFactory(mod: Record<string, unknown>): SdkProviderFactory {
+function isSdkProviderFactory(value: SdkProviderFactory): value is SdkProviderFactory {
+  return typeof value === 'function';
+}
+
+function findCreateFactory(mod: Record<string, SdkProviderFactory>): SdkProviderFactory {
   for (const value of Object.values(mod)) {
-    if (typeof value === 'function' && value.name.startsWith('create')) {
-      return value as SdkProviderFactory;
+    if (isSdkProviderFactory(value) && value.name.startsWith('create')) {
+      return value;
     }
   }
   throw new Error('No create* factory export found in provider package');
@@ -164,11 +170,13 @@ async function loadSdkProviderFactory(npm: string): Promise<SdkProviderFactory> 
     cached = (async () => {
       try {
         const mod = await import(npm);
-        return findCreateFactory(mod as Record<string, unknown>);
+        // SAFETY: ESM namespace values are limited to the runtime export union above.
+        return findCreateFactory(mod as Record<string, SdkProviderFactory>);
       } catch (err) {
-        const code = err && typeof err === 'object' && 'code' in err ? err.code : undefined;
+        // SAFETY: Node module-loading errors use the documented ErrnoException code field.
+        const code = err instanceof Error ? (err as NodeJS.ErrnoException).code : undefined;
         if (code === 'ERR_MODULE_NOT_FOUND') {
-          throw new Error(`SDK provider package not installed: ${npm}. Run: bun add ${npm}`);
+          throw new Error(`SDK provider package not installed: ${npm}. Run: bun add ${npm}`, { cause: err });
         }
         throw err;
       }
@@ -201,20 +209,20 @@ export async function createLanguageModel(
           baseURL: 'https://chatgpt.com/backend-api/codex',
           headers: {
             ...spec.headers,
-            ...(accountId ? { 'ChatGPT-Account-Id': accountId } : {}),
+            ...(accountId && { 'ChatGPT-Account-Id': accountId }),
             originator: 'clodex',
             // Responses-Lite models (backend prefer_websockets/use_responses_lite,
             // e.g. gpt-5.6-luna) require these on the request.
-            ...(spec.useResponsesLite
-              ? { version: CODEX_RESPONSES_LITE_VERSION, 'x-openai-internal-codex-responses-lite': 'true' }
-              : {}),
+            ...(spec.useResponsesLite && {
+              version: CODEX_RESPONSES_LITE_VERSION,
+              'x-openai-internal-codex-responses-lite': 'true',
+            }),
           },
           // Keep every ChatGPT/Codex OAuth Responses conversation on the
           // persistent WebSocket transport. Models flagged prefer_websockets
           // require it; the remaining OAuth Responses models benefit from the
           // same connection-local previous_response_id continuation cache.
-          ...(useResponsesEndpoint
-            ? {
+          ...(useResponsesEndpoint && {
                 fetch: (dependencies.createResponsesWebSocketFetch ?? createResponsesWebSocketFetch)(
                   CODEX_RESPONSES_LITE_WS_URL,
                   spec.onDebug,
@@ -229,16 +237,15 @@ export async function createLanguageModel(
                   onDiagnostic: spec.onWebSocketDiagnostic,
                   },
                 ),
-              }
-            : {}),
+              }),
         }
       : spec.authType === 'none'
         ? {
             apiKey: '',
-            ...(spec.headers ? { headers: spec.headers } : {}),
+            ...(spec.headers && { headers: spec.headers }),
             fetch: fetchWithoutCredentialHeaders,
           }
-        : { apiKey, ...(spec.headers ? { headers: spec.headers } : {}) };
+        : { apiKey, ...(spec.headers && { headers: spec.headers }) };
     const openai = createOpenAI(oauthOptions);
     return useResponsesEndpoint ? openai.responses(modelId) : openai.chat(modelId);
   }
@@ -253,7 +260,7 @@ export async function createLanguageModel(
     const xai = createXai({
       apiKey,
       baseURL: XAI_SUBSCRIPTION_BASE_URL,
-      ...(spec.headers ? { headers: spec.headers } : {}),
+      ...(spec.headers && { headers: spec.headers }),
       fetch: (dependencies.createXaiSubscriptionFetch ?? createXaiSubscriptionFetch)(
         modelId,
         spec.claudeSessionId,
@@ -270,8 +277,7 @@ export async function createLanguageModel(
     const anthropicOptions: Parameters<typeof createAnthropic>[0] = spec.authType === 'oauth'
       ? {
           authToken: apiKey,
-          ...(spec.providerId === 'claude-code'
-            ? {
+          ...(spec.providerId === 'claude-code' && {
                 headers: {
                   'User-Agent': CLAUDE_CODE_USER_AGENT,
                   'x-app': 'cli',
@@ -281,8 +287,7 @@ export async function createLanguageModel(
                     spec.oauthAccountId ?? apiKey,
                   ).sessionId,
                 },
-              }
-            : {}),
+              }),
         }
       : spec.authType === 'none'
         ? { apiKey: '', fetch: fetchWithoutCredentialHeaders }
@@ -304,9 +309,9 @@ export async function createLanguageModel(
     const options = {
       name: spec.providerId ?? 'openai-compatible',
       baseURL: baseURL ?? '',
-      ...(spec.authType !== 'none' && apiKey.trim() ? { apiKey } : {}),
-      ...(spec.authType === 'none' ? { fetch: fetchWithoutCredentialHeaders } : {}),
-      ...(spec.headers ? { headers: spec.headers } : {}),
+      ...(spec.authType !== 'none' && apiKey.trim() && { apiKey }),
+      ...(spec.authType === 'none' && { fetch: fetchWithoutCredentialHeaders }),
+      ...(spec.headers && { headers: spec.headers }),
     };
     model = createOpenAICompatible({
       ...options,
@@ -315,15 +320,16 @@ export async function createLanguageModel(
     const create = await (dependencies.loadSdkProviderFactory ?? loadSdkProviderFactory)(npm);
     const provider = create({
       apiKey: spec.authType === 'none' ? '' : apiKey,
-      ...(spec.authType === 'none' ? { fetch: fetchWithoutCredentialHeaders } : {}),
-      ...(baseURL ? { baseURL } : {}),
-      ...(spec.headers ? { headers: spec.headers } : {}),
+      ...(spec.authType === 'none' && { fetch: fetchWithoutCredentialHeaders }),
+      ...(baseURL && { baseURL }),
+      ...(spec.headers && { headers: spec.headers }),
     });
     model = provider(modelId);
   }
 
   const isReasoning = modelId.toLowerCase().match(/deepseek-r1|think|reasoning|qwq/);
   if (isReasoning) {
+    // SAFETY: The AI SDK model union is the exact input contract of wrapLanguageModel.
     return wrapLanguageModel({
       model: model as Parameters<typeof wrapLanguageModel>[0]['model'],
       middleware: [extractReasoningMiddleware({ tagName: 'think' })],
@@ -389,7 +395,7 @@ const EMPTY_REASONING: ReasoningCapabilities = {
   confidence: 'inferred',
 };
 
-const GEMINI_25_BUDGETS: Record<string, number> = {
+const GEMINI_25_BUDGETS = new Map<string, number>(Object.entries({
   low: 1024,
   medium: 4096,
   high: 8192,
@@ -397,7 +403,14 @@ const GEMINI_25_BUDGETS: Record<string, number> = {
   max: 16384,
   minimal: 512,
   none: 0,
-};
+}));
+
+function includesString<const Values extends readonly string[]>(
+  values: Values,
+  value: string,
+): value is Values[number] {
+  return values.some(candidate => candidate === value);
+}
 
 /** Claude adaptive-thinking models (opus/sonnet/haiku 4.6+, fable, mythos). */
 function isClaudeReasoningModel(modelId: string): boolean {
@@ -562,7 +575,7 @@ function mapCodexEffortToAnthropic(effort: string): string | undefined {
     case 'max':
       return effort === 'xhigh' ? 'high' : effort === 'max' ? 'max' : 'high';
     default:
-      if (ANTHROPIC_EFFORT_LEVELS.includes(effort as typeof ANTHROPIC_EFFORT_LEVELS[number])) {
+      if (includesString(ANTHROPIC_EFFORT_LEVELS, effort)) {
         return effort;
       }
       return undefined;
@@ -577,7 +590,7 @@ function mapCodexEffortToOpenAI(effort: string, modelId?: string): string | unde
   if (
     modelId
     && isGpt56Model(modelId)
-    && GPT_56_EFFORT_LEVELS.includes(effort as typeof GPT_56_EFFORT_LEVELS[number])
+    && includesString(GPT_56_EFFORT_LEVELS, effort)
   ) {
     return effort;
   }
@@ -628,18 +641,18 @@ function mapCodexEffortToGeminiLevel(effort: string): 'low' | 'medium' | 'high' 
     case 'max':
       return 'high';
     default:
-      return GEMINI_EFFORT_LEVELS.includes(effort as typeof GEMINI_EFFORT_LEVELS[number])
-        ? effort as 'low' | 'medium' | 'high'
+      return includesString(GEMINI_EFFORT_LEVELS, effort)
+        ? effort
         : undefined;
   }
 }
 
 function mapCodexEffortToGeminiBudget(effort: string): number | undefined {
-  const direct = GEMINI_25_BUDGETS[effort];
+  const direct = GEMINI_25_BUDGETS.get(effort);
   if (direct !== undefined) return direct > 0 ? direct : undefined;
   const level = mapCodexEffortToGeminiLevel(effort);
   if (!level) return undefined;
-  return GEMINI_25_BUDGETS[level];
+  return GEMINI_25_BUDGETS.get(level);
 }
 
 /** Per-model reasoning UI + wire metadata for Codex catalog and adapters. */
@@ -855,8 +868,7 @@ export function effortProviderOptions(
   if (isOpenRouterRoute(npm, metadata)) {
     const caps = openRouterReasoningCapabilities(metadata);
     if (caps.mode !== 'controllable') return undefined;
-    const allowed = new Set(OPENROUTER_EFFORT_LEVELS);
-    const mapped = allowed.has(effort as typeof OPENROUTER_EFFORT_LEVELS[number])
+    const mapped = includesString(OPENROUTER_EFFORT_LEVELS, effort)
       ? effort
       : effort === 'max'
         ? 'xhigh'
@@ -935,8 +947,7 @@ export function effortProviderOptions(
         : undefined;
     }
     if (hasSupportedParameter(metadata, 'reasoning')) {
-      const allowed = new Set(OPENROUTER_EFFORT_LEVELS);
-      const mapped = allowed.has(effort as typeof OPENROUTER_EFFORT_LEVELS[number])
+      const mapped = includesString(OPENROUTER_EFFORT_LEVELS, effort)
         ? effort
         : effort === 'max' ? 'xhigh' : undefined;
       return mapped
@@ -959,7 +970,7 @@ export function deepMergeProviderOptions(
   const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
   const out: ProviderMetadata = {};
   for (const key of keys) {
-    out[key] = { ...(a[key] ?? {}), ...(b[key] ?? {}) };
+    out[key] = { ...a[key], ...b[key] };
   }
   return out;
 }

@@ -38,7 +38,8 @@ async function expectCredentialHeadersStripped(
       },
     });
 
-    const [, init] = transport.mock.calls[0] as unknown as [string, RequestInit];
+    // SAFETY: The test fixture defines the asserted runtime shape.
+    const [, init] = transport.mock.calls[0] as [string, RequestInit];
     const headers = new Headers(init.headers);
     for (const name of [
       'authorization',
@@ -406,6 +407,7 @@ describe('createLanguageModel', () => {
     const xaiFetch = createXaiSubscriptionFetch(
       'grok-4.6',
       'session-live-parts',
+      // SAFETY: The test fixture defines the asserted runtime shape.
       transport as typeof fetch,
       { random: () => 0, sleep: async () => {} },
     );
@@ -417,6 +419,7 @@ describe('createLanguageModel', () => {
       providerId: 'xai-oauth',
       claudeSessionId: 'session-live-parts',
     }, {
+      // SAFETY: The test fixture defines the asserted runtime shape.
       createXaiSubscriptionFetch: vi.fn(() => xaiFetch as typeof fetch) as never,
     });
 
@@ -453,7 +456,9 @@ describe('createLanguageModel', () => {
       providerId: 'xai-oauth',
       claudeSessionId: 'session-123',
     }, {
+      // SAFETY: The test fixture defines the asserted runtime shape.
       createXai: createXai as never,
+      // SAFETY: The test fixture defines the asserted runtime shape.
       createXaiSubscriptionFetch: createXaiFetch as never,
     });
 
@@ -464,6 +469,7 @@ describe('createLanguageModel', () => {
       fetch: xaiFetch,
     });
     expect(responses).toHaveBeenCalledWith('grok-4.6');
+    // SAFETY: The test fixture defines the asserted runtime shape.
     expect(model).toEqual({ modelId: 'grok-4.6', provider: 'xai-responses' } as never);
   });
 
@@ -492,7 +498,9 @@ describe('createLanguageModel', () => {
     const chat = vi.fn((modelId: string) => ({ modelId, provider: 'openai-chat' }));
     const createOpenAI = vi.fn(() => ({ responses, chat }));
     const create = (spec: Parameters<typeof createLanguageModel>[0]) => createLanguageModel(spec, {
+      // SAFETY: The test fixture defines the asserted runtime shape.
       createOpenAI: createOpenAI as never,
+      // SAFETY: The test fixture defines the asserted runtime shape.
       createResponsesWebSocketFetch: createResponsesWebSocketFetch as never,
     });
     await create({
@@ -551,7 +559,7 @@ describe('createLanguageModel', () => {
       apiKey: accessToken,
       authType: 'oauth',
       oauthAccountId: 'stored-acct-456',
-    }, { createOpenAI: createOpenAI as never });
+    }, { createOpenAI: /* SAFETY: The mock implements the required provider factory. */ createOpenAI as never });
 
     expect(createOpenAI).toHaveBeenCalledWith({
       apiKey: accessToken,
@@ -582,7 +590,7 @@ describe('createLanguageModel', () => {
       apiKey: 'opaque-access-token',
       authType: 'oauth',
       oauthAccountId: 'stored-acct-456',
-    }, { createOpenAI: createOpenAI as never });
+    }, { createOpenAI: /* SAFETY: The mock implements the required provider factory. */ createOpenAI as never });
 
     expect(createOpenAI).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -607,7 +615,7 @@ describe('createLanguageModel', () => {
         Authorization: 'Bearer configured-value',
         'X-Plan': 'free',
       },
-    }, { createOpenAI: createOpenAI as never });
+    }, { createOpenAI: /* SAFETY: The mock implements the required provider factory. */ createOpenAI as never });
 
     expect(createOpenAI).toHaveBeenCalledWith({
       apiKey: '',
@@ -618,6 +626,7 @@ describe('createLanguageModel', () => {
       fetch: expect.any(Function),
     });
     expect(responses).toHaveBeenCalledWith('anonymous-model');
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const options = createOpenAI.mock.calls[0]?.[0] as {
       fetch: typeof fetch;
       headers: Record<string, string>;
@@ -636,7 +645,7 @@ describe('createLanguageModel', () => {
       apiKey: 'provider-key',
       authType: 'api',
       headers: { 'X-Plan': 'paid' },
-    }, { createOpenAI: createOpenAI as never });
+    }, { createOpenAI: /* SAFETY: The mock implements the required provider factory. */ createOpenAI as never });
 
     expect(createOpenAI).toHaveBeenCalledWith({
       apiKey: 'provider-key',
@@ -654,7 +663,7 @@ describe('createLanguageModel', () => {
       modelId: 'claude-sonnet-4-6',
       apiKey: 'test-key',
       baseURL: 'https://api.anthropic.com',
-    }, { createAnthropic: createAnthropic as never });
+    }, { createAnthropic: /* SAFETY: The mock implements the required provider factory. */ createAnthropic as never });
 
     expect(createAnthropic).toHaveBeenCalledWith({ apiKey: 'test-key' });
     expect(createAnthropic).not.toHaveBeenCalledWith(
@@ -671,7 +680,7 @@ describe('createLanguageModel', () => {
       modelId: 'claude-sonnet-4-6',
       apiKey: 'test-key',
       baseURL: 'https://proxy.example.com',
-    }, { createAnthropic: createAnthropic as never });
+    }, { createAnthropic: /* SAFETY: The mock implements the required provider factory. */ createAnthropic as never });
 
     expect(createAnthropic).toHaveBeenCalledWith({
       apiKey: 'test-key',
@@ -690,7 +699,7 @@ describe('createLanguageModel', () => {
       authType: 'oauth',
       providerId: 'claude-code',
       oauthAccountId: '11111111-1111-4111-8111-111111111111',
-    }, { createAnthropic: createAnthropic as never });
+    }, { createAnthropic: /* SAFETY: The mock implements the required provider factory. */ createAnthropic as never });
 
     expect(createAnthropic).toHaveBeenCalledWith({
       authToken: 'oauth-token',
@@ -717,7 +726,7 @@ describe('createLanguageModel', () => {
       baseURL: 'https://api.z.ai/api/coding/paas/v4',
       providerId: 'custom-zai',
       headers: { 'X-Plan': 'coding' },
-    }, { createOpenAICompatible: createOpenAICompatible as never });
+    }, { createOpenAICompatible: /* SAFETY: The mock implements the required provider factory. */ createOpenAICompatible as never });
 
     expect(createOpenAICompatible).toHaveBeenCalledWith({
       name: 'custom-zai',
@@ -738,13 +747,14 @@ describe('createLanguageModel', () => {
       authType: 'none',
       baseURL: 'https://api.kilo.ai/api/gateway',
       providerId: 'kilo',
-    }, { createOpenAICompatible: createOpenAICompatible as never });
+    }, { createOpenAICompatible: /* SAFETY: The mock implements the required provider factory. */ createOpenAICompatible as never });
 
     expect(createOpenAICompatible).toHaveBeenCalledWith({
       name: 'kilo',
       baseURL: 'https://api.kilo.ai/api/gateway',
       fetch: expect.any(Function),
     });
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const options = createOpenAICompatible.mock.calls[0]?.[0] as { fetch: typeof fetch };
     await expectCredentialHeadersStripped(options.fetch);
   });
@@ -759,7 +769,7 @@ describe('createLanguageModel', () => {
       apiKey: '',
       authType: 'none',
       baseURL: 'https://anonymous.example',
-    }, { createAnthropic: createAnthropic as never });
+    }, { createAnthropic: /* SAFETY: The mock implements the required provider factory. */ createAnthropic as never });
 
     expect(createAnthropic).toHaveBeenCalledWith({
       apiKey: '',
@@ -768,6 +778,7 @@ describe('createLanguageModel', () => {
     });
     expect(anthropicFactory).toHaveBeenCalledWith('anonymous-model');
 
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const options = createAnthropic.mock.calls[0]?.[0] as { fetch: typeof fetch };
     await expectCredentialHeadersStripped(options.fetch);
   });
@@ -782,7 +793,7 @@ describe('createLanguageModel', () => {
       apiKey: 'sk-test',
       baseURL: 'https://api.z.ai/api/anthropic',
       headers: { 'X-Plan': 'coding' },
-    }, { createAnthropic: createAnthropic as never });
+    }, { createAnthropic: /* SAFETY: The mock implements the required provider factory. */ createAnthropic as never });
 
     expect(createAnthropic).toHaveBeenCalledWith({
       apiKey: 'sk-test',

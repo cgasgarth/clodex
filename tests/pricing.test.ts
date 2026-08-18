@@ -5,7 +5,6 @@ import {
   loadBundledPricingCache,
   lookupModelCost,
   normalizeModelIdCandidates,
-  pickPricingRow,
 } from '../src/registry/pricing.js';
 import type { CachedModel } from '../src/registry/types.js';
 

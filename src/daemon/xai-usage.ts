@@ -1,5 +1,7 @@
+import { isNumber, isObject, isString } from '../runtime/type-guards.js';
 import { VERSION } from '../constants.js';
-import { PROVIDER_METADATA_TIMEOUT_MS } from '../timeouts.js';
+import { PROVIDER_METADATA_TIMEOUT_MS } from '../config/timeouts.js';
+import type { JsonObject, JsonValue } from '../oauth/responses-websocket/types.js';
 
 const XAI_USER_URL = 'https://cli-chat-proxy.grok.com/v1/user?include=subscription';
 const XAI_BILLING_URL = 'https://cli-chat-proxy.grok.com/v1/billing?format=credits';
@@ -27,45 +29,50 @@ export interface XaiIdentity {
   plan?: string;
 }
 
-function record(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === 'object' && !Array.isArray(value)
-    ? value as Record<string, unknown>
+interface XaiRequestIdentity {
+  userId: string;
+  email?: string;
+}
+
+function record(value: JsonValue): JsonObject | undefined {
+  return value && isObject(value) && !Array.isArray(value)
+    ? value
     : undefined;
 }
 
-function boundedCents(value: unknown): number | undefined {
+function boundedCents(value: JsonValue): number | undefined {
   const cents = record(value);
   if (!cents) return undefined;
   const amount = cents.val ?? 0;
-  return typeof amount === 'number'
+  return isNumber(amount)
     && Number.isSafeInteger(amount)
     && Math.abs(amount) <= 1_000_000_000_000
     ? Math.abs(amount)
     : undefined;
 }
 
-function boundedPercent(value: unknown): number | undefined {
-  return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 100
+function boundedPercent(value: JsonValue): number | undefined {
+  return isNumber(value) && Number.isFinite(value) && value >= 0 && value <= 100
     ? value
     : undefined;
 }
 
-function resetAt(value: unknown): number | undefined {
-  if (typeof value !== 'string' || value.length > 64) return undefined;
+function resetAt(value: JsonValue): number | undefined {
+  if (!isString(value) || value.length > 64) return undefined;
   const millis = Date.parse(value);
   return Number.isFinite(millis) ? Math.round(millis / 1000) : undefined;
 }
 
-function usagePeriod(value: unknown): 'weekly' | 'monthly' | 'usage' | undefined {
-  if (typeof value !== 'string') return undefined;
+function usagePeriod(value: JsonValue): 'weekly' | 'monthly' | 'usage' | undefined {
+  if (!isString(value)) return undefined;
   if (value.includes('WEEKLY')) return 'weekly';
   if (value.includes('MONTHLY')) return 'monthly';
   return 'usage';
 }
 
 export function parseXaiUsage(
-  value: unknown,
-  settingsValue: unknown,
+  value: JsonValue,
+  settingsValue: JsonValue,
   now = new Date(),
 ): XaiUsageSnapshot {
   const root = record(value);
@@ -90,28 +97,29 @@ export function parseXaiUsage(
   const settingsPlan = settings?.subscription_tier_display ?? settings?.subscription_tier;
   // Settings reflects subscription upgrades sooner than the billing response.
   const planValue = settingsPlan ?? root.subscriptionTier;
-  const plan = typeof planValue === 'string' && planValue.trim()
+  const plan = isString(planValue) && planValue.trim()
     ? planValue.trim().slice(0, 80)
     : undefined;
-  return {
+  const snapshot: XaiUsageSnapshot = {
     fetchedAt: now.toISOString(),
-    ...(plan ? { plan } : {}),
-    ...(period ? { period } : {}),
-    ...(usedPercent !== undefined ? { usedPercent } : {}),
-    ...(periodResetAt !== undefined ? { resetAt: periodResetAt } : {}),
-    ...(usedCents !== undefined ? { usedCents } : {}),
-    ...(limitCents !== undefined ? { limitCents } : {}),
-    ...(onDemandUsedCents !== undefined ? { onDemandUsedCents } : {}),
-    ...(onDemandLimitCents !== undefined ? { onDemandLimitCents } : {}),
-    ...(prepaidBalanceCents !== undefined ? { prepaidBalanceCents } : {}),
   };
+  if (plan) snapshot.plan = plan;
+  if (period) snapshot.period = period;
+  if (usedPercent !== undefined) snapshot.usedPercent = usedPercent;
+  if (periodResetAt !== undefined) snapshot.resetAt = periodResetAt;
+  if (usedCents !== undefined) snapshot.usedCents = usedCents;
+  if (limitCents !== undefined) snapshot.limitCents = limitCents;
+  if (onDemandUsedCents !== undefined) snapshot.onDemandUsedCents = onDemandUsedCents;
+  if (onDemandLimitCents !== undefined) snapshot.onDemandLimitCents = onDemandLimitCents;
+  if (prepaidBalanceCents !== undefined) snapshot.prepaidBalanceCents = prepaidBalanceCents;
+  return snapshot;
 }
 
 function usageHeaders(
   accessToken: string,
   identity?: { userId: string; email?: string },
-): Record<string, string> {
-  return {
+): Headers {
+  const headers = new Headers({
     Accept: 'application/json',
     Authorization: `Bearer ${accessToken}`,
     'User-Agent': `clodex/${VERSION}`,
@@ -119,9 +127,10 @@ function usageHeaders(
     'x-grok-client-identifier': 'clodex',
     'x-grok-client-version': VERSION,
     'x-grok-client-mode': process.stdin.isTTY && process.stdout.isTTY ? 'interactive' : 'headless',
-    ...(identity ? { 'x-userid': identity.userId } : {}),
-    ...(identity?.email ? { 'x-email': identity.email } : {}),
-  };
+  });
+  if (identity) headers.set('x-userid', identity.userId);
+  if (identity?.email) headers.set('x-email', identity.email);
+  return headers;
 }
 
 async function getJson(
@@ -130,7 +139,7 @@ async function getJson(
   signal: AbortSignal,
   fetchImpl: typeof fetch,
   identity?: { userId: string; email?: string },
-): Promise<unknown> {
+): Promise<JsonValue> {
   const response = await fetchImpl(url, {
     headers: usageHeaders(accessToken, identity),
     redirect: 'error',
@@ -150,17 +159,18 @@ async function getJson(
     throw new Error('xAI usage response is too large');
   }
   try {
-    return JSON.parse(body) as unknown;
+    const parsed: JsonValue = JSON.parse(body);
+    return parsed;
   } catch {
     throw new Error('xAI usage response is invalid JSON');
   }
 }
 
-function parseXaiIdentity(value: unknown): XaiIdentity {
+function parseXaiIdentity(value: JsonValue): XaiIdentity {
   const identity = record(value);
   const userId = identity?.userId;
   if (
-    typeof userId !== 'string'
+    !isString(userId)
     || !userId
     || userId.length > 256
     || !/^[\x21-\x7e]+$/.test(userId)
@@ -168,20 +178,21 @@ function parseXaiIdentity(value: unknown): XaiIdentity {
     throw new Error('xAI account identity response is invalid');
   }
   const emailValue = identity.email;
-  const email = typeof emailValue === 'string'
+  const email = isString(emailValue)
     && emailValue.length <= 320
     && /^[\x20-\x7e]+$/.test(emailValue)
     ? emailValue.toLowerCase()
     : undefined;
   const planValue = identity.subscriptionTier;
-  const plan = typeof planValue === 'string' && planValue.trim()
+  const plan = isString(planValue) && planValue.trim()
     ? planValue.trim().slice(0, 80)
     : undefined;
-  return {
+  const parsed: XaiIdentity = {
     accountId: userId,
-    ...(email ? { email } : {}),
-    ...(plan ? { plan } : {}),
   };
+  if (email) parsed.email = email;
+  if (plan) parsed.plan = plan;
+  return parsed;
 }
 
 export async function fetchXaiIdentity(
@@ -224,10 +235,10 @@ export async function fetchXaiUsage(
       controller.signal,
       fetchImpl,
     ));
-    const requestIdentity = {
+    const requestIdentity: XaiRequestIdentity = {
       userId: identity.accountId,
-      ...(identity.email ? { email: identity.email } : {}),
     };
+    if (identity.email) requestIdentity.email = identity.email;
     const [billing, settings] = await Promise.all([
       getJson(XAI_BILLING_URL, accessToken, controller.signal, fetchImpl, requestIdentity),
       getJson(XAI_SETTINGS_URL, accessToken, controller.signal, fetchImpl, requestIdentity),

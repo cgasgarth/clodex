@@ -3,7 +3,7 @@ import {
   diagnosticLogMode,
   isErrorDiagnosticEvent,
   shouldWriteDiagnosticEvent,
-} from '../src/diagnostic-log-mode.js';
+} from '../src/observability/diagnostic-log-mode.js';
 
 describe('diagnostic log modes', () => {
   it('defaults malformed or missing configuration to error mode', () => {

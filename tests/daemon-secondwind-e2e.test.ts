@@ -9,7 +9,8 @@ import { startDaemonControlApi } from '../src/daemon/control-api.js';
 import { DaemonMetricsStore } from '../src/daemon/metrics.js';
 import { createDaemonRuntimeState } from '../src/daemon/runtime.js';
 import { SecondwindService } from '../src/daemon/secondwind.js';
-import { startProxyCatalog, type ProxyRoute } from '../src/proxy.js';
+import { startProxyCatalog, type ProxyRoute } from '../src/proxy/index.js';
+import type { JsonObject } from './test-helpers.js';
 
 const roots: string[] = [];
 
@@ -17,7 +18,7 @@ afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
-function toolRequest(content: string): Record<string, unknown> {
+function toolRequest(content: string): JsonObject {
   return {
     model: 'sol',
     max_tokens: 100,
@@ -36,7 +37,7 @@ function toolRequest(content: string): Record<string, unknown> {
 function postMessage(
   port: number,
   token: string,
-  body: Record<string, unknown>,
+  body: JsonObject,
 ): Promise<{ status: number; body: string }> {
   return new Promise((resolve, reject) => {
     const payload = JSON.stringify(body);
@@ -73,12 +74,13 @@ describe('single-endpoint daemon Secondwind integration', () => {
     const root = mkdtempSync(join(tmpdir(), 'clodex-secondwind-e2e-'));
     roots.push(root);
     const socketPath = join(root, 'control.sock');
-    const upstreamBodies: Array<Record<string, unknown>> = [];
+    const upstreamBodies: JsonObject[] = [];
     const upstream = Bun.serve({
       hostname: '127.0.0.1',
       port: 0,
       async fetch(request) {
-        upstreamBodies.push(await request.json() as Record<string, unknown>);
+        // SAFETY: The test fixture defines the asserted runtime shape.
+        upstreamBodies.push(await request.json() as JsonObject);
         return Response.json({
           id: 'msg_test',
           type: 'message',
@@ -263,7 +265,7 @@ describe('single-endpoint daemon Secondwind integration', () => {
         .toMatchObject({ running: true, port: endpoint.port });
     } finally {
       await control.close();
-      endpoint.close();
+      await endpoint.close();
       secondwind.close();
       metrics.close();
       await upstream.stop(true);

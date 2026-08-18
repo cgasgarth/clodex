@@ -1,8 +1,9 @@
+import { isBoolean, isObject, isString } from '../runtime/type-guards.js';
 import { chmodSync, mkdirSync, rmSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { VERSION } from '../constants.js';
 import { responsesWebSocketPoolSnapshot } from '../oauth/responses-websocket.js';
-import { DAEMON_CONTROL_IDLE_TIMEOUT_SECONDS } from '../timeouts.js';
+import { DAEMON_CONTROL_IDLE_TIMEOUT_SECONDS } from '../config/timeouts.js';
 import type { DaemonRuntimeState } from './runtime.js';
 import type { DaemonInferenceCollector } from './collector.js';
 import type { SecondwindSnapshot } from './secondwind.js';
@@ -12,10 +13,16 @@ import type {
   DaemonClaudeModelSnapshot,
 } from './model-service.js';
 import { ControlRequestDiagnostics } from './control-diagnostics.js';
+import { diagnosticRecord } from '../observability/trace-log.js';
+import type { DiagnosticValue } from '../observability/trace-log.js';
 
 const MAX_CONTROL_BODY_BYTES = 64 * 1024;
 const MAX_METRICS_RANGE_MS = 32 * 24 * 60 * 60_000;
 const MAX_METRICS_BUCKETS = 1_000;
+
+interface JsonResponsePayload {
+  value: unknown;
+}
 
 export interface DaemonAccountView {
   id: string;
@@ -24,7 +31,7 @@ export interface DaemonAccountView {
   email?: string;
   selected: boolean;
   plan?: string;
-  usage?: Record<string, unknown>;
+  usage?: object;
 }
 
 export interface DaemonAccountController {
@@ -70,7 +77,7 @@ export interface DaemonControlApiHandle {
   close: () => Promise<void>;
 }
 
-async function readJsonBody(request: Request): Promise<unknown> {
+async function readJsonBody(request: Request): Promise<DiagnosticValue> {
   const contentLength = Number(request.headers.get('content-length') ?? 0);
   if (contentLength > MAX_CONTROL_BODY_BYTES) {
     throw new Error('Control request body is too large');
@@ -82,7 +89,7 @@ async function readJsonBody(request: Request): Promise<unknown> {
   return raw ? JSON.parse(raw) : undefined;
 }
 
-function sendJson(status: number, value: unknown): Response {
+function sendJson(status: number, value: JsonResponsePayload['value']): Response {
   return new Response(JSON.stringify(value), {
     status,
     headers: {
@@ -165,8 +172,8 @@ export async function dispatchDaemonControlRequest(
       }
       if (request.method === 'POST' && url.pathname === '/v1/diagnostics/mode') {
         const body = await readJsonBody(request);
-        const mode = body && typeof body === 'object'
-          ? (body as { mode?: unknown }).mode
+        const mode = body && isObject(body)
+          ? diagnosticRecord(body).mode
           : undefined;
         if (mode !== 'all' && mode !== 'error') {
           return sendJson(400, { error: 'Diagnostic log mode must be all or error' });
@@ -179,8 +186,8 @@ export async function dispatchDaemonControlRequest(
       }
       if (request.method === 'POST' && url.pathname === '/v1/secondwind/mode') {
         const body = await readJsonBody(request);
-        const mode = body && typeof body === 'object'
-          ? (body as { mode?: unknown }).mode
+        const mode = body && isObject(body)
+          ? diagnosticRecord(body).mode
           : undefined;
         if (mode !== 'off' && mode !== 'shadow' && mode !== 'on') {
           return sendJson(400, { error: 'Secondwind mode must be off, shadow, or on' });
@@ -193,16 +200,16 @@ export async function dispatchDaemonControlRequest(
       }
       if (request.method === 'POST' && url.pathname === '/v1/claude/models') {
         const body = await readJsonBody(request);
-        const modelId = body && typeof body === 'object'
-          ? (body as { modelId?: unknown }).modelId
+        const modelId = body && isObject(body)
+          ? diagnosticRecord(body).modelId
           : undefined;
-        const enabled = body && typeof body === 'object'
-          ? (body as { enabled?: unknown }).enabled
+        const enabled = body && isObject(body)
+          ? diagnosticRecord(body).enabled
           : undefined;
-        if (typeof modelId !== 'string' || !modelId.trim()) {
+        if (!isString(modelId) || !modelId.trim()) {
           return sendJson(400, { error: 'Claude modelId must be a non-empty string' });
         }
-        if (typeof enabled !== 'boolean') {
+        if (!isBoolean(enabled)) {
           return sendJson(400, { error: 'Claude model enabled must be a boolean' });
         }
         return sendJson(200, await options.models.setEnabled(modelId, enabled));
@@ -213,14 +220,12 @@ export async function dispatchDaemonControlRequest(
       }
       if (request.method === 'POST' && url.pathname === '/v1/launches/attach') {
         const body = await readJsonBody(request);
-        const accountId = body && typeof body === 'object'
-          && typeof (body as { accountId?: unknown }).accountId === 'string'
-          ? (body as { accountId: string }).accountId
+        const bodyRecord = body && isObject(body) ? diagnosticRecord(body) : undefined;
+        const accountId = bodyRecord && isString(bodyRecord.accountId)
+          ? bodyRecord.accountId
           : undefined;
-        const fast = body && typeof body === 'object'
-          ? (body as { fast?: unknown }).fast
-          : undefined;
-        if (fast !== undefined && typeof fast !== 'boolean') {
+        const fast = bodyRecord?.fast;
+        if (fast !== undefined && !isBoolean(fast)) {
           return sendJson(400, { error: 'Launch fast mode must be a boolean' });
         }
         return sendJson(201, options.accounts.createLaunchTicket(
@@ -231,7 +236,11 @@ export async function dispatchDaemonControlRequest(
       const accountSelect = url.pathname.match(/^\/v1\/accounts\/([^/]+)\/select$/);
       if (request.method === 'POST' && accountSelect) {
         await readJsonBody(request);
-        await options.accounts.select(decodeURIComponent(accountSelect[1]!));
+        const selectedAccountId = accountSelect[1];
+        if (selectedAccountId === undefined) {
+          return sendJson(400, { error: 'Managed account id is missing' });
+        }
+        await options.accounts.select(decodeURIComponent(selectedAccountId));
         return sendJson(200, { ok: true });
       }
       if (request.method === 'POST' && url.pathname === '/v1/service/restart') {
@@ -240,8 +249,8 @@ export async function dispatchDaemonControlRequest(
       }
       if (request.method === 'POST' && url.pathname === '/v1/service/stop') {
         const body = await readJsonBody(request);
-        const instanceId = body && typeof body === 'object'
-          ? (body as { instanceId?: unknown }).instanceId
+        const instanceId = body && isObject(body)
+          ? diagnosticRecord(body).instanceId
           : undefined;
         if (instanceId !== options.runtime.instanceId) {
           return sendJson(409, { error: 'Daemon instance changed; refusing stale stop request' });

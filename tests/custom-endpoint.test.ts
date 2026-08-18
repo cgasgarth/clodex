@@ -1,10 +1,12 @@
 import { importActual } from './bun-import-actual.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'bun:test';
 import type { ProviderRegistry } from '../src/registry/types.js';
-import { credentialInstanceAuthRef } from '../src/credential-helper.js';
+import { credentialInstanceAuthRef } from '../src/credentials/helper.js';
 
 const registryState = createHoisted(() => ({
+  // SAFETY: The test fixture defines the asserted runtime shape.
   current: { schemaVersion: 1, providers: [] } as ProviderRegistry,
+  // SAFETY: The test fixture defines the asserted runtime shape.
   persisted: [] as ProviderRegistry[],
 }));
 const lockState = createHoisted(() => ({
@@ -13,14 +15,15 @@ const lockState = createHoisted(() => ({
   providerActive: false,
   providerTails: new Map<string, Promise<void>>(),
   entries: 0,
+  // SAFETY: The test fixture defines the asserted runtime shape.
   afterRegistryUnlock: null as null | (() => void),
 }));
 const journalState = createHoisted(() => ({
   pending: new Set<string>(),
 }));
 
-vi.mock('../src/env.js', () => ({
-  ...(importActual<typeof import('../src/env.js')>('../src/env.js', import.meta.url)),
+vi.mock('../src/config/environment.js', () => ({
+  ...(importActual<typeof import('../src/config/environment.js')>('../src/config/environment.js', import.meta.url)),
   deleteProviderCredential: vi.fn(),
   provisionProviderCredential: vi.fn(),
   saveProviderCredential: vi.fn(),
@@ -109,7 +112,7 @@ import {
   provisionProviderCredential,
   resolveProviderCredential,
   saveProviderCredential,
-} from '../src/env.js';
+} from '../src/config/environment.js';
 import {
   addCustomEndpointProvider,
   fetchAnthropicModels,
@@ -251,6 +254,7 @@ describe('custom endpoint credential lifecycle', () => {
     const result = await fetchAnthropicModels('https://local.example/v1', '');
 
     expect(result.models).toHaveLength(1);
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const requestInit = fetchMock.mock.calls[0]?.[1] as RequestInit;
     expect(new Headers(requestInit.headers).has('x-api-key')).toBe(false);
   });

@@ -3,15 +3,14 @@ import { afterEach, describe, expect, it, vi } from 'bun:test';
 import http from 'node:http';
 import { createLanguageModel } from '../src/provider-factory.js';
 import { generateAnthropicResponse } from '../src/sdk-adapter.js';
-import { startProxyCatalog, type ProxyRoute } from '../src/proxy.js';
-import { asMocked } from './test-helpers.js';
+import { startProxyCatalog, type ProxyRoute } from '../src/proxy/index.js';
+import { asMocked, type JsonValue } from './test-helpers.js';
 
 const ORIGINAL_COMPACTION_FLAG = process.env.CLODEX_OPENAI_COMPACTION;
 const ORIGINAL_COMPACTION_THRESHOLD = process.env.CLODEX_OPENAI_COMPACT_THRESHOLD;
 
 vi.mock('../src/provider-factory.js', () => {
-  const importOriginal = <T>() => importActual<T>('../src/provider-factory.js', import.meta.url);
-  const actual = importOriginal<typeof import('../src/provider-factory.js')>();
+  const actual = importActual<typeof import('../src/provider-factory.js')>('../src/provider-factory.js', import.meta.url);
   return {
     ...actual,
     createLanguageModel: vi.fn().mockResolvedValue({}),
@@ -19,8 +18,7 @@ vi.mock('../src/provider-factory.js', () => {
 });
 
 vi.mock('../src/sdk-adapter.js', () => {
-  const importOriginal = <T>() => importActual<T>('../src/sdk-adapter.js', import.meta.url);
-  const actual = importOriginal<typeof import('../src/sdk-adapter.js')>();
+  const actual = importActual<typeof import('../src/sdk-adapter.js')>('../src/sdk-adapter.js', import.meta.url);
   return {
     ...actual,
     generateAnthropicResponse: vi.fn().mockResolvedValue({
@@ -35,7 +33,7 @@ vi.mock('../src/sdk-adapter.js', () => {
   };
 });
 
-function postToProxy(port: number, token: string, body: unknown): Promise<{ status: number; body: string }> {
+function postToProxy(port: number, token: string, body: JsonValue): Promise<{ status: number; body: string }> {
   return new Promise((resolve, reject) => {
     const payload = JSON.stringify(body);
     const req = http.request(
@@ -94,7 +92,7 @@ describe('SDK proxy provider identity', () => {
       messages: [{ role: 'user', content: 'hi' }],
       stream: false,
     });
-    handle.close();
+    await handle.close();
 
     expect(res.status, res.body).toBe(200);
     expect(createLanguageModel).toHaveBeenCalledWith(expect.objectContaining({
@@ -126,7 +124,7 @@ describe('SDK proxy provider identity', () => {
       messages: [{ role: 'user', content: 'hi' }],
       stream: false,
     });
-    handle.close();
+    await handle.close();
 
     expect(res.status, res.body).toBe(200);
     expect(createLanguageModel).toHaveBeenCalledWith(expect.objectContaining({

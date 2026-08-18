@@ -1,7 +1,11 @@
 import { createHash } from 'node:crypto';
-import { NATIVE_COMPACTION_TIMEOUT_MS } from '../timeouts.js';
+import { NATIVE_COMPACTION_TIMEOUT_MS } from '../config/timeouts.js';
+import { isNumber, isObject, isString } from '../runtime/type-guards.js';
+import type { JsonObject, JsonValue } from './responses-websocket/types.js';
 
-type JsonObject = Record<string, unknown>;
+function isJsonObject(value: JsonValue): value is JsonObject {
+  return isObject(value) && !Array.isArray(value);
+}
 
 const ENABLED_VALUES = new Set(['1', 'true', 'on', 'enabled']);
 const COMPACT_BODY_FIELDS = [
@@ -32,7 +36,7 @@ export interface ResponsesCompactionUsage {
 }
 
 export interface ResponsesCompactionResult {
-  output: unknown[];
+  output: JsonValue[];
   usage?: ResponsesCompactionUsage;
 }
 
@@ -104,9 +108,14 @@ export function resolveOpenAiCompactionThreshold(
   const configured = env.CLODEX_OPENAI_COMPACTION?.trim().toLowerCase();
   if (!configured || !ENABLED_VALUES.has(configured)) return undefined;
 
-  const modelSafeThreshold = Number.isFinite(contextWindow) && (contextWindow ?? 0) > 0
-    ? Math.floor(contextWindow! * OPENAI_COMPACTION_MAX_CONTEXT_RATIO)
+  const usableContextWindow = isNumber(contextWindow)
+    && Number.isFinite(contextWindow)
+    && contextWindow > 0
+    ? contextWindow
     : undefined;
+  const modelSafeThreshold = usableContextWindow === undefined
+    ? undefined
+    : Math.floor(usableContextWindow * OPENAI_COMPACTION_MAX_CONTEXT_RATIO);
   const explicit = env.CLODEX_OPENAI_COMPACT_THRESHOLD?.trim();
   if (explicit) {
     const parsed = Number(explicit);
@@ -132,23 +141,28 @@ export function resolveOpenAiCompactionRearmThreshold(
   postCompactionInputTokens: number,
   contextWindow: number | undefined,
 ): number {
-  const growth = Number.isFinite(contextWindow) && (contextWindow ?? 0) > 0
+  const usableContextWindow = isNumber(contextWindow)
+    && Number.isFinite(contextWindow)
+    && contextWindow > 0
+    ? contextWindow
+    : undefined;
+  const growth = usableContextWindow !== undefined
     ? Math.max(
         OPENAI_COMPACTION_REARM_MIN_TOKENS,
-        Math.floor(contextWindow! * OPENAI_COMPACTION_REARM_CONTEXT_RATIO),
+        Math.floor(usableContextWindow * OPENAI_COMPACTION_REARM_CONTEXT_RATIO),
       )
     : OPENAI_COMPACTION_REARM_MIN_TOKENS;
   const candidate = Math.max(
     configuredThreshold,
     postCompactionInputTokens + growth,
   );
-  return Number.isFinite(contextWindow) && (contextWindow ?? 0) > 0
-    ? Math.min(candidate, Math.max(configuredThreshold, Math.floor(contextWindow!) - 1))
+  return usableContextWindow !== undefined
+    ? Math.min(candidate, Math.max(configuredThreshold, Math.floor(usableContextWindow) - 1))
     : candidate;
 }
 
 export function responsesCompactUrl(input: string | URL | Request): string {
-  const raw = typeof input === 'string'
+  const raw = isString(input)
     ? input
     : input instanceof URL ? input.toString() : input.url;
   const url = new URL(raw);
@@ -191,57 +205,54 @@ function compactHeaders(input: HeadersInit | undefined): Headers {
   return headers;
 }
 
-function usageFromResponse(value: unknown): ResponsesCompactionUsage | undefined {
-  if (!value || typeof value !== 'object') return undefined;
-  const usage = value as JsonObject;
-  const details = usage.input_tokens_details && typeof usage.input_tokens_details === 'object'
-    ? usage.input_tokens_details as JsonObject
+function usageFromResponse(value: JsonValue): ResponsesCompactionUsage | undefined {
+  if (!isJsonObject(value)) return undefined;
+  const usage = value;
+  const details = isJsonObject(usage.input_tokens_details)
+    ? usage.input_tokens_details
     : {};
-  const inputTokens = typeof usage.input_tokens === 'number' ? usage.input_tokens : undefined;
-  const outputTokens = typeof usage.output_tokens === 'number' ? usage.output_tokens : undefined;
+  const inputTokens = isNumber(usage.input_tokens) ? usage.input_tokens : undefined;
+  const outputTokens = isNumber(usage.output_tokens) ? usage.output_tokens : undefined;
   if (inputTokens === undefined && outputTokens === undefined) return undefined;
   return {
     inputTokens: inputTokens ?? 0,
-    cachedTokens: typeof details.cached_tokens === 'number' ? details.cached_tokens : 0,
-    cacheWriteTokens: typeof details.cache_write_tokens === 'number' ? details.cache_write_tokens : 0,
+    cachedTokens: isNumber(details.cached_tokens) ? details.cached_tokens : 0,
+    cacheWriteTokens: isNumber(details.cache_write_tokens) ? details.cache_write_tokens : 0,
     outputTokens: outputTokens ?? 0,
   };
 }
 
-function responseErrorFingerprint(value: unknown): string | undefined {
-  if (!value || typeof value !== 'object') return undefined;
-  const record = value as JsonObject;
-  const error = record.error && typeof record.error === 'object'
-    ? record.error as JsonObject
-    : record;
-  const message = typeof error.message === 'string' ? error.message : undefined;
+function responseErrorFingerprint(value: JsonValue): string | undefined {
+  if (!isJsonObject(value)) return undefined;
+  const error = isJsonObject(value.error) ? value.error : value;
+  const message = isString(error.message) ? error.message : undefined;
   return message
     ? createHash('sha256').update(message).digest('hex').slice(0, 16)
     : undefined;
 }
 
-function boundedIdentifier(value: unknown): string | undefined {
-  return typeof value === 'string' && /^[a-zA-Z0-9_.:-]{1,80}$/.test(value)
+function boundedIdentifier(value: JsonValue): string | undefined {
+  return isString(value) && /^[a-zA-Z0-9_.:-]{1,80}$/.test(value)
     ? value
     : undefined;
 }
 
-function compactFailureDetails(
-  value: unknown,
-  statusCode: number,
-): {
+interface CompactFailureDetails {
   failureClass: ResponsesCompactionFailureClass;
   errorCode?: string;
   errorType?: string;
   errorFingerprint?: string;
-} {
-  const root = value && typeof value === 'object' ? value as JsonObject : {};
-  const error = root.error && typeof root.error === 'object'
-    ? root.error as JsonObject
-    : root;
+}
+
+function compactFailureDetails(
+  value: JsonValue,
+  statusCode: number,
+): CompactFailureDetails {
+  const root = isJsonObject(value) ? value : {};
+  const error = isJsonObject(root.error) ? root.error : root;
   const errorCode = boundedIdentifier(error.code);
   const errorType = boundedIdentifier(error.type);
-  const message = typeof error.message === 'string' ? error.message : '';
+  const message = isString(error.message) ? error.message : '';
   const discriminator = `${errorCode ?? ''} ${errorType ?? ''}`.toLowerCase();
   const failureClass: ResponsesCompactionFailureClass =
     /context_length|context_window/.test(discriminator)
@@ -290,7 +301,7 @@ export async function compactResponsesWindow(
       body: JSON.stringify(compactRequestPayload(options.payload)),
       signal: controller.signal,
     });
-    let body: unknown;
+    let body: JsonValue;
     try {
       body = await response.json();
     } catch {
@@ -307,16 +318,16 @@ export async function compactResponsesWindow(
         `OpenAI compact endpoint failed (HTTP ${response.status}`
           + `${details.errorFingerprint ? `, error ${details.errorFingerprint}` : ''})`,
         response.status,
-        usageFromResponse((body as JsonObject).usage),
+        usageFromResponse(isJsonObject(body) ? body.usage : undefined),
         details,
       );
     }
-    if (!body || typeof body !== 'object' || !Array.isArray((body as JsonObject).output)) {
+    if (!isJsonObject(body) || !Array.isArray(body.output)) {
       throw new ResponsesCompactionError('OpenAI compact endpoint omitted its canonical output');
     }
     return {
-      output: (body as JsonObject).output as unknown[],
-      usage: usageFromResponse((body as JsonObject).usage),
+      output: body.output,
+      usage: usageFromResponse(body.usage),
     };
   } catch (error) {
     if (error instanceof ResponsesCompactionError) throw error;

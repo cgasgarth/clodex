@@ -7,7 +7,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { dirname, isAbsolute } from 'node:path';
-import { getAppHome, getDaemonLaunchAgentPath } from '../paths.js';
+import { getAppHome, getDaemonLaunchAgentPath } from '../config/paths.js';
 
 const DAEMON_LAUNCH_AGENT_LABEL = 'com.clodex.daemon';
 const DAEMON_ENV_PASSTHROUGH = [

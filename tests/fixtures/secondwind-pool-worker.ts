@@ -16,6 +16,7 @@ process.on('message', (message: WorkerMessage) => {
     process.disconnect?.();
     process.exit(0);
   }
+  // SAFETY: The test fixture defines the asserted runtime shape.
   const request = JSON.parse(new TextDecoder().decode(message.body)) as {
     delayMs?: number;
     exitCode?: number;

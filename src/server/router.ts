@@ -1,4 +1,4 @@
-import type { ServerResponse } from 'node:http';
+import { isFunction, isObject, isString } from '../runtime/type-guards.js';
 import { randomUUID } from 'node:crypto';
 import { isAuthorized } from './auth.js';
 import {
@@ -16,14 +16,14 @@ import {
   generateOpenAiResponse,
   streamOpenAiResponse,
   type OpenAiRequest,
-} from '../openai-adapter.js';
-import { decodeRequestBody, sendJson } from '../http-utils.js';
-import { relayAnthropicMessages, resolveOAuthRetryReplacement } from '../upstream-forward.js';
+} from '../providers/openai-adapter.js';
+import { decodeRequestBody, sendJson, type HttpResponseWriter } from '../transport/http-utils.js';
+import { relayAnthropicMessages, resolveOAuthRetryReplacement } from '../transport/upstream-forward.js';
 import {
   anthropicPromptTooLongMessage,
   estimateAnthropicInputTokens,
-} from '../anthropic-endpoints.js';
-import { resolveProviderCredential } from '../env.js';
+} from '../providers/anthropic-endpoints.js';
+import { resolveProviderCredential } from '../config/environment.js';
 import {
   injectClaudeCodeBillingSystemLine,
   injectClaudeIdentity,
@@ -31,6 +31,7 @@ import {
 } from '../oauth/claude-identity.js';
 import {
   getLatestMessagePreview,
+  diagnosticRecord,
   writeInferenceRequestLog,
   writeInferenceResponseErrorLog,
   writeSecureLogLine,
@@ -38,7 +39,8 @@ import {
   writeWebSocketDiagnosticLog,
   writeWebSocketDiagnosticRequestLog,
   type InferenceRequestLogEntry,
-} from '../trace-log.js';
+} from '../observability/trace-log.js';
+import type { JsonObject, JsonValue } from '../oauth/responses-websocket/types.js';
 import type { LanguageModel } from 'ai';
 import { createLanguageModel, isSdkMigratedNpm, maxToolsForNpm } from '../provider-factory.js';
 import {
@@ -47,8 +49,8 @@ import {
   isContextLengthExceededError,
   sdkUpstreamErrorDetails,
   upstreamHttpStatus,
-} from '../upstream-error.js';
-import { resolveContextWindow } from '../context-window.js';
+} from '../transport/upstream-error.js';
+import { resolveContextWindow } from '../models/context-window.js';
 import {
   translateRequest as sdkTranslateRequest,
   streamAnthropicResponse,
@@ -61,8 +63,8 @@ import {
 } from '../sdk-adapter.js';
 import { withResponsesWebSocketDiagnosticContext } from '../oauth/responses-websocket.js';
 import { resolveOpenAiCompactionThreshold } from '../oauth/responses-compaction.js';
-import { tcpListenerUrlHost } from '../listener-ready.js';
-import { BunHttpResponse } from '../bun-http-response.js';
+import { tcpListenerUrlHost } from '../transport/listener-ready.js';
+import { BunHttpResponse } from '../transport/bun-http-response.js';
 
 export interface ServerOptions {
   host: string;
@@ -95,14 +97,14 @@ export interface ServerHandle {
   close: () => Promise<void>;
 }
 
-type JsonBody = Record<string, unknown>;
+type JsonBody = JsonObject;
 
 function isAnthropicBody(body: JsonBody): body is JsonBody & AnthropicRequest {
-  return typeof body.model === 'string' && Array.isArray(body.messages);
+  return isString(body.model) && Array.isArray(body.messages);
 }
 
 function isOpenAiBody(body: JsonBody): body is JsonBody & OpenAiRequest {
-  return typeof body.model === 'string' && Array.isArray(body.messages);
+  return isString(body.model) && Array.isArray(body.messages);
 }
 
 type PLog = (msg: string | (() => string)) => void;
@@ -111,7 +113,7 @@ type LanguageModelCache = Map<string, { apiKey: string; languageModel: LanguageM
 function makeServerLog(debugLogPath: string | undefined): PLog {
   if (!debugLogPath) return () => {};
   resetTraceLog(debugLogPath);
-  return (msg) => writeSecureLogLine(debugLogPath, typeof msg === 'function' ? msg() : msg);
+  return (msg) => writeSecureLogLine(debugLogPath, isFunction(msg) ? msg() : msg);
 }
 
 function auditInference(options: ServerOptions, entry: InferenceRequestLogEntry): void {
@@ -119,7 +121,7 @@ function auditInference(options: ServerOptions, entry: InferenceRequestLogEntry)
 }
 
 function inferenceProvider(model: ServerModelInfo): string {
-  return model.providerId ?? String(model.sourceBackend);
+  return model.providerId ?? model.sourceBackend;
 }
 
 async function resolveModelApiKey(
@@ -153,15 +155,20 @@ async function resolveModelApiKey(
   return model.apiKey ?? fallback;
 }
 
+interface AuditedSdkError {
+  statusCode: number;
+  retryAfterSeconds?: number;
+}
+
 function auditSdkError(
   options: ServerOptions,
   requestedModelId: string,
   model: ServerModelInfo,
-  err: unknown,
+  cause: unknown,
   message: string,
-): { statusCode: number; retryAfterSeconds?: number } {
-  const details = sdkUpstreamErrorDetails(err);
-  const statusCode = details?.statusCode ?? upstreamHttpStatus(err, message);
+): AuditedSdkError {
+  const details = sdkUpstreamErrorDetails(cause);
+  const statusCode = details?.statusCode ?? upstreamHttpStatus(cause, message);
   if (options.inferenceLogPath && statusCode >= 400) {
     writeInferenceResponseErrorLog(options.inferenceLogPath, {
       modelId: requestedModelId,
@@ -173,17 +180,21 @@ function auditSdkError(
       attemptCount: details?.attemptCount,
     });
   }
-  return { statusCode, retryAfterSeconds: details?.retryAfterSeconds };
+  const result: AuditedSdkError = { statusCode };
+  if (details?.retryAfterSeconds !== undefined) {
+    result.retryAfterSeconds = details.retryAfterSeconds;
+  }
+  return result;
 }
 
 function openAiEffort(body: JsonBody): string | undefined {
-  if (typeof body.reasoning_effort === 'string' && body.reasoning_effort.trim()) {
+  if (isString(body.reasoning_effort) && body.reasoning_effort.trim()) {
     return body.reasoning_effort.trim();
   }
   const reasoning = body.reasoning;
-  if (reasoning && typeof reasoning === 'object') {
-    const effort = (reasoning as Record<string, unknown>).effort;
-    if (typeof effort === 'string' && effort.trim()) return effort.trim();
+  if (reasoning && isObject(reasoning) && !Array.isArray(reasoning)) {
+    const effort = reasoning.effort;
+    if (isString(effort) && effort.trim()) return effort.trim();
   }
   return undefined;
 }
@@ -202,7 +213,7 @@ export async function startServer(options: ServerOptions): Promise<ServerHandle>
       if (req.method === 'POST') bunServer.timeout(req, 0);
       void routeRequest(
         req,
-        response as unknown as ServerResponse,
+        response,
         options,
         languageModelCache,
         plog,
@@ -228,7 +239,7 @@ export async function startServer(options: ServerOptions): Promise<ServerHandle>
   };
 }
 
-async function routeRequest(req: Request, res: ServerResponse, options: ServerOptions, modelCache: LanguageModelCache, plog: PLog): Promise<void> {
+async function routeRequest(req: Request, res: HttpResponseWriter, options: ServerOptions, modelCache: LanguageModelCache, plog: PLog): Promise<void> {
   try {
     const pathname = new URL(req.url).pathname;
     plog(`${req.method} ${pathname}`);
@@ -285,7 +296,7 @@ async function routeRequest(req: Request, res: ServerResponse, options: ServerOp
 
 async function handleAnthropicMessages(
   req: Request,
-  res: ServerResponse,
+  res: HttpResponseWriter,
   options: ServerOptions,
   modelCache: LanguageModelCache,
   plog: PLog,
@@ -306,13 +317,14 @@ async function handleAnthropicMessages(
   const claudeAgentIdHeader = req.headers.get('x-claude-code-agent-id') ?? undefined;
   const claudeSessionId = extractClaudeSessionId(body, claudeSessionIdHeader);
   if (options.webSocketDiagnosticsLogPath) {
+    const diagnosticBody = diagnosticRecord(body);
     writeWebSocketDiagnosticRequestLog(options.webSocketDiagnosticsLogPath, {
       requestId,
       claudeSessionId,
       provider: inferenceProvider(model),
       route: model.modelFormat === 'anthropic' ? 'passthrough' : 'translated',
       headers: Object.fromEntries(req.headers),
-      body,
+      body: diagnosticBody,
     });
   }
 
@@ -339,7 +351,7 @@ async function handleAnthropicMessages(
     }
     const inboundBeta = req.headers.get('anthropic-beta') ?? undefined;
     const clientWantsStream = Boolean(body.stream);
-    const forwardBody: Record<string, unknown> = { ...body, model: upstreamModelId(model) };
+    const forwardBody = diagnosticRecord({ ...body, model: upstreamModelId(model) });
     const authType = model.authType ?? 'api';
     const isOAuth = authType === 'oauth';
 
@@ -418,7 +430,7 @@ async function handleAnthropicMessages(
       requestPreview: getLatestMessagePreview(body.messages, body.system),
     });
     const npmMaxTools = maxToolsForNpm(model.npm);
-    const toolCount = Array.isArray((body as Record<string, unknown>).tools) ? ((body as Record<string, unknown>).tools as unknown[]).length : 0;
+    const toolCount = Array.isArray(body.tools) ? body.tools.length : 0;
     if (npmMaxTools !== undefined && toolCount > npmMaxTools) {
       plog(`tools truncated: ${toolCount} → ${npmMaxTools} (provider limit)`);
     }
@@ -468,11 +480,12 @@ async function handleAnthropicMessages(
         return;
       }
       const errorType = anthropicErrorType(status);
-      res.write(`event: error\ndata: ${JSON.stringify({
+      const errorEvent: JsonObject = {
         type: 'error',
         error: { type: errorType, message: clientMessage },
-        ...(contextLengthExceeded ? { request_id: requestId } : {}),
-      })}\n\n`);
+      };
+      if (contextLengthExceeded) errorEvent.request_id = requestId;
+      res.write(`event: error\ndata: ${JSON.stringify(errorEvent)}\n\n`);
       res.end();
     };
 
@@ -586,7 +599,7 @@ async function handleAnthropicMessages(
 
 async function handleOpenAIChatCompletions(
   req: Request,
-  res: ServerResponse,
+  res: HttpResponseWriter,
   options: ServerOptions,
   modelCache: LanguageModelCache,
   plog: PLog,
@@ -750,8 +763,8 @@ async function handleOpenAIChatCompletions(
   }
 }
 
-function lookupModel(res: ServerResponse, catalog: ModelCatalog, modelId: unknown): ServerModelInfo | null {
-  if (typeof modelId !== 'string') {
+function lookupModel(res: HttpResponseWriter, catalog: ModelCatalog, modelId: JsonValue): ServerModelInfo | null {
+  if (!isString(modelId)) {
     sendJson(res, 400, { error: { message: 'Request body must include a model string' } });
     return null;
   }
@@ -800,7 +813,9 @@ async function getOrInitLanguageModel(
         ? resolveContextWindow(upstreamModelId(model), model.contextWindow)
         : undefined,
       onWebSocketDiagnostic: webSocketDiagnosticsLogPath
-        ? event => writeWebSocketDiagnosticLog(webSocketDiagnosticsLogPath, event)
+        ? event => {
+          writeWebSocketDiagnosticLog(webSocketDiagnosticsLogPath, event);
+        }
         : undefined,
     });
     cached = { apiKey, languageModel };
@@ -809,15 +824,15 @@ async function getOrInitLanguageModel(
   return cached.languageModel;
 }
 
-function getResponseModelId(bodyModel: unknown, model: ServerModelInfo, options: ServerOptions): string {
+function getResponseModelId(bodyModel: JsonValue, model: ServerModelInfo, options: ServerOptions): string {
   // Echo invariant: a saved short alias is echoed back verbatim even when
   // masking is on — Claude Code resolves context windows from the response
   // `model` field but preflights with the request alias, so rewriting it here
   // would break auto-compaction.
-  if (typeof bodyModel === 'string' && options.aliasNames?.has(bodyModel)) return bodyModel;
+  if (isString(bodyModel) && options.aliasNames?.has(bodyModel)) return bodyModel;
   return options.gateway?.maskGatewayIds
     ? gatewayDisplayName(model, options.gateway)
-    : (typeof bodyModel === 'string' ? bodyModel : model.id);
+    : (isString(bodyModel) ? bodyModel : model.id);
 }
 
 async function readJson(req: Request): Promise<JsonBody | null> {

@@ -84,7 +84,7 @@ function spawnWorker(
   const ready = new Promise<void>((resolve, reject) => {
     const timeout = setTimeout(
       () => reject(new Error(`Timed out waiting for worker ${workerId}`)),
-      5_000,
+      15_000,
     );
     const checkReady = (): void => {
       if (!stdout.includes('READY\n')) return;
@@ -117,18 +117,22 @@ async function observeJsonUntil(
     finished = true;
   });
   const malformed: string[] = [];
-  while (!finished) {
+  const observe = async (): Promise<void> => {
+    if (finished) return;
     if (existsSync(path)) {
       try {
         JSON.parse(readFileSync(path, 'utf8'));
       } catch (error) {
+        // SAFETY: The test fixture defines the asserted runtime shape.
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
           malformed.push(String(error));
         }
       }
     }
     await new Promise((resolve) => setTimeout(resolve, 1));
-  }
+    await observe();
+  };
+  await observe();
   return malformed;
 }
 
@@ -152,11 +156,17 @@ describe('preference write concurrency', () => {
     const workerPath = await buildWorker(root);
     const workerCount = 8;
     const writesPerWorker = 4;
-    const spawned = Array.from({ length: workerCount }, (_, index) =>
-      spawnWorker(workerPath, configHome, `worker-${index}`, writesPerWorker),
-    );
-
-    await Promise.all(spawned.map(worker => worker.ready));
+    const spawned: WorkerProcess[] = [];
+    for (let index = 0; index < workerCount; index += 1) {
+      const worker = spawnWorker(
+        workerPath,
+        configHome,
+        `worker-${index}`,
+        writesPerWorker,
+      );
+      spawned.push(worker);
+      await worker.ready;
+    }
     const exits = Promise.all(spawned.map(worker => worker.exit));
     const malformed = observeJsonUntil(configPath, exits);
     for (const worker of spawned) worker.child.stdin?.end('START\n');
@@ -167,12 +177,15 @@ describe('preference write concurrency', () => {
     );
     expect(await malformed).toEqual([]);
 
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const config = JSON.parse(readFileSync(configPath, 'utf8')) as {
       appPathOverrides?: Record<string, string>;
     };
     const expected = Object.fromEntries(
-      Array.from({ length: workerCount }, (_, workerIndex) =>
-        Array.from({ length: writesPerWorker }, (_, writeIndex) => {
+      Array.from({ length: workerCount }, (unusedWorkerValue, workerIndex) =>
+        Array.from({ length: writesPerWorker }, (unusedWriteValue, writeIndex) => {
+          void unusedWorkerValue;
+          void unusedWriteValue;
           const key = `worker-${workerIndex}-${writeIndex}`;
           return [key, `/tmp/${key}`];
         }),

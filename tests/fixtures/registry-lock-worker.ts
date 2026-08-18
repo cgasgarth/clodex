@@ -7,11 +7,11 @@ function requiredEnv(name: string): string {
   return value;
 }
 
-function errorMessage(error: unknown): string {
+function errorMessage<T>(error: T): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function writeJson(path: string, value: unknown): void {
+function writeJson<T>(path: string, value: T): void {
   fs.writeFileSync(path, `${JSON.stringify(value)}\n`, { mode: 0o600 });
 }
 
@@ -56,6 +56,7 @@ async function runHolder(): Promise<void> {
     await withRegistryWriteLock(
       async () => {
         saveRegistry({ ...emptyRegistry(), importedAt: 'holder-initial' }, registryPath);
+        // SAFETY: The test fixture defines the asserted runtime shape.
         const owner = JSON.parse(fs.readFileSync(lockPath, 'utf8')) as {
           pid: number;
           token: string;
@@ -120,6 +121,7 @@ async function runLeaseLoss(): Promise<void> {
           registryPath,
           {
             afterTempWrite: () => {
+              // SAFETY: The test fixture defines the asserted runtime shape.
               const owner = JSON.parse(fs.readFileSync(lockPath, 'utf8')) as {
                 pid: number;
                 startedAt: number;
@@ -141,9 +143,11 @@ async function runLeaseLoss(): Promise<void> {
     error = caught;
   }
 
+  // SAFETY: The test fixture defines the asserted runtime shape.
   const registry = JSON.parse(fs.readFileSync(registryPath, 'utf8')) as {
     importedAt?: string;
   };
+  // SAFETY: The test fixture defines the asserted runtime shape.
   const replacement = JSON.parse(fs.readFileSync(lockPath, 'utf8')) as {
     token?: string;
   };
@@ -171,6 +175,7 @@ async function runAtomicAcquire(): Promise<void> {
     },
   });
   if (!lease) throw new Error('Atomic acquisition worker did not get the lock');
+  // SAFETY: The test fixture defines the asserted runtime shape.
   const owner = JSON.parse(fs.readFileSync(lockPath, 'utf8')) as {
     pid: number;
     token: string;

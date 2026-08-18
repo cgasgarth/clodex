@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'bun:test';
 import type { ProviderRegistry } from '../src/registry/types.js';
 
 const registryState = createHoisted(() => ({
+  // SAFETY: The test fixture defines the asserted runtime shape.
   current: { schemaVersion: 1, providers: [] } as ProviderRegistry,
 }));
 const lockState = createHoisted(() => ({
@@ -17,8 +18,8 @@ const journalState = createHoisted(() => ({
   pending: new Set<string>(),
 }));
 
-vi.mock('../src/env.js', () => ({
-  ...importActual<typeof import('../src/env.js')>('../src/env.js', import.meta.url),
+vi.mock('../src/config/environment.js', () => ({
+  ...importActual<typeof import('../src/config/environment.js')>('../src/config/environment.js', import.meta.url),
   deleteProviderCredential: vi.fn(),
 }));
 vi.mock('../src/registry/io.js', () => ({
@@ -107,7 +108,7 @@ vi.mock('../src/registry/lock.js', () => ({
   withRegistryWriteLockSync: vi.fn(),
 }));
 
-import { deleteProviderCredential } from '../src/env.js';
+import { deleteProviderCredential } from '../src/config/environment.js';
 import { removeProviderFromRegistry } from '../src/registry/crud.js';
 import {
   withCredentialMutationLock,

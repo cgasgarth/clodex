@@ -13,8 +13,11 @@ vi.mock('../src/registry/io.js', () => ({
   saveRegistry: vi.fn(),
 }));
 vi.mock('../src/registry/lock.js', () => ({
-  withCredentialMutationLock: vi.fn(async (_authRef: string, operation: () => unknown) => operation()),
-  withRegistryWriteLock: vi.fn(async (operation: () => unknown) => operation()),
+  withCredentialMutationLock: vi.fn(async <T>(
+    _authRef: string,
+    operation: () => T | Promise<T>,
+  ): Promise<T> => operation()),
+  withRegistryWriteLock: vi.fn(async <T>(operation: () => T | Promise<T>): Promise<T> => operation()),
 }));
 
 import { fetchTemplateModels } from '../src/registry/fetch-template-models.js';

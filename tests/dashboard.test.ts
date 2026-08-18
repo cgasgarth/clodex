@@ -16,8 +16,23 @@ import {
   usagePeriodLabel,
   VIEW_SWITCH_HINT,
   type DashboardRequest,
-} from '../src/dashboard-data.js';
-import { DASHBOARD_CONTROL_REQUEST_TIMEOUT_MS } from '../src/timeouts.js';
+} from '../src/ui/dashboard-data.js';
+import { DASHBOARD_CONTROL_REQUEST_TIMEOUT_MS } from '../src/config/timeouts.js';
+import type { JsonValue } from './test-helpers.js';
+
+function dashboardRequestFrom(
+  responses: Record<string, Error | JsonValue>,
+  calls: Array<{ path: string; timeoutMs?: number }> = [],
+): DashboardRequest {
+  return async <T>(path: string, options = {}): Promise<T> => {
+    calls.push({ path, timeoutMs: options.timeoutMs });
+    const response = responses[path];
+    if (response instanceof Error) throw response;
+    if (response === undefined) throw new Error(`Unexpected request: ${path}`);
+    // SAFETY: The test fixture defines the asserted runtime shape.
+    return response as T;
+  };
+}
 
 describe('dashboard usage chart', () => {
   it('renders visible x and y axes with activity points', () => {
@@ -76,6 +91,7 @@ describe('dashboard usage chart', () => {
     const calls: string[] = [];
     const request: DashboardRequest = async <T>(path: string): Promise<T> => {
       calls.push(path);
+      // SAFETY: The test fixture defines the asserted runtime shape.
       return {
         start: range.start.toISOString(),
         end: range.end.toISOString(),
@@ -214,21 +230,8 @@ describe('dashboard refresh resilience', () => {
     sessions: [],
   };
 
-  function requestFrom(
-    responses: Record<string, unknown | Error>,
-    calls: Array<{ path: string; timeoutMs?: number }> = [],
-  ): DashboardRequest {
-    return async <T>(path: string, options = {}): Promise<T> => {
-      calls.push({ path, timeoutMs: options.timeoutMs });
-      const response = responses[path];
-      if (response instanceof Error) throw response;
-      if (response === undefined) throw new Error(`Unexpected request: ${path}`);
-      return response as T;
-    };
-  }
-
   it('keeps a healthy daemon available when an optional panel fails', async () => {
-    const snapshot = await loadDashboardPanels(requestFrom({
+    const snapshot = await loadDashboardPanels(dashboardRequestFrom({
       '/v1/status': status,
       '/v1/accounts': new Error('accounts timed out'),
       '/v1/diagnostics?limit=20': { diagnostics: [] },
@@ -243,7 +246,7 @@ describe('dashboard refresh resilience', () => {
   });
 
   it('uses health as the availability fallback when status is delayed', async () => {
-    const snapshot = await loadDashboardPanels(requestFrom({
+    const snapshot = await loadDashboardPanels(dashboardRequestFrom({
       '/v1/status': new Error('status timed out'),
       '/v1/health': { ok: true },
       '/v1/accounts': new Error('accounts timed out'),
@@ -259,7 +262,7 @@ describe('dashboard refresh resilience', () => {
 
   it('treats any successful control panel as proof the daemon is reachable', async () => {
     const calls: Array<{ path: string; timeoutMs?: number }> = [];
-    const snapshot = await loadDashboardPanels(requestFrom({
+    const snapshot = await loadDashboardPanels(dashboardRequestFrom({
       '/v1/status': new Error('status timed out'),
       '/v1/accounts': { accounts: [] },
       '/v1/diagnostics?limit=20': new Error('diagnostics timed out'),
@@ -272,7 +275,7 @@ describe('dashboard refresh resilience', () => {
   });
 
   it('reports unavailable only when both status and health fail', async () => {
-    const snapshot = await loadDashboardPanels(requestFrom({
+    const snapshot = await loadDashboardPanels(dashboardRequestFrom({
       '/v1/status': new Error('status timed out'),
       '/v1/health': new Error('health timed out'),
       '/v1/accounts': new Error('accounts timed out'),
@@ -287,7 +290,7 @@ describe('dashboard refresh resilience', () => {
 
   it('gives every routine panel the dashboard control timeout budget', async () => {
     const calls: Array<{ path: string; timeoutMs?: number }> = [];
-    await loadDashboardPanels(requestFrom({
+    await loadDashboardPanels(dashboardRequestFrom({
       '/v1/status': status,
       '/v1/accounts': { accounts: [] },
       '/v1/diagnostics?limit=20': { diagnostics: [] },

@@ -1,3 +1,4 @@
+import { isFunction, isObject, isString } from '../runtime/type-guards.js';
 import { randomUUID } from 'node:crypto';
 import {
   closeSync,
@@ -13,14 +14,19 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { dirname } from 'node:path';
-import { parseAuthRef } from '../env.js';
-import { getCredentialCleanupPath } from '../paths.js';
+import { parseAuthRef } from '../config/environment.js';
+import { getCredentialCleanupPath } from '../config/paths.js';
 import { ensureSecureAppHome } from './io.js';
 import {
   assertRegistryWriteOwnership,
   withRegistryWriteLock,
 } from './lock.js';
 import { isValidProviderId } from './validate.js';
+import { diagnosticRecord } from '../observability/trace-log.js';
+
+interface CredentialCleanupPayload {
+  value: unknown;
+}
 
 const JOURNAL_SCHEMA_VERSION = 1;
 const DIR_MODE = 0o700;
@@ -90,7 +96,7 @@ function normalizePendingCredentialDeletes(raw: unknown[]): string[] {
   const pending: string[] = [];
   for (const [index, value] of raw.entries()) {
     if (
-      typeof value !== 'string'
+      !isString(value)
       || Buffer.byteLength(value) > MAX_CREDENTIAL_REF_BYTES
       || !isStoredCredentialRef(value)
     ) {
@@ -101,11 +107,11 @@ function normalizePendingCredentialDeletes(raw: unknown[]): string[] {
   return pending;
 }
 
-function parseJournal(raw: unknown): CredentialCleanupJournal {
-  if (!raw || typeof raw !== 'object') {
+function parseJournal(raw: CredentialCleanupPayload['value']): CredentialCleanupJournal {
+  if (!raw || !isObject(raw)) {
     throw new Error('Credential cleanup journal must be a JSON object.');
   }
-  const data = raw as Record<string, unknown>;
+  const data = diagnosticRecord(raw);
   if (data.schemaVersion !== JOURNAL_SCHEMA_VERSION) {
     throw new Error('Unsupported credential cleanup journal schema.');
   }
@@ -133,7 +139,7 @@ function readJournalUnlocked(path: string): CredentialCleanupJournal {
     if (before.dev !== opened.dev || before.ino !== opened.ino) {
       throw new Error('Credential cleanup journal changed while opening.');
     }
-    if (typeof process.getuid === 'function') {
+    if (isFunction(process.getuid)) {
       if (opened.uid !== process.getuid()) {
         throw new Error('Credential cleanup journal is owned by another user.');
       }
@@ -144,10 +150,11 @@ function readJournalUnlocked(path: string): CredentialCleanupJournal {
     if (opened.size > MAX_JOURNAL_BYTES) {
       throw new Error('Credential cleanup journal is too large.');
     }
-    return parseJournal(JSON.parse(readFileSync(fd, 'utf8')));
+    const raw: CredentialCleanupPayload['value'] = JSON.parse(readFileSync(fd, 'utf8'));
+    return parseJournal(raw);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`Could not read credential cleanup journal: ${message}`);
+    throw new Error(`Could not read credential cleanup journal: ${message}`, { cause: error });
   } finally {
     if (fd !== undefined) closeSync(fd);
   }
@@ -159,7 +166,9 @@ function syncParentDirectory(path: string): void {
     fd = openSync(dirname(path), 'r');
     fsyncSync(fd);
   } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
+    const code = isObject(error) && 'code' in error && isString(error.code)
+      ? error.code
+      : undefined;
     if (code !== 'EINVAL' && code !== 'ENOTSUP' && code !== 'EPERM') throw error;
   } finally {
     if (fd !== undefined) closeSync(fd);
@@ -186,11 +195,15 @@ function writeJournalUnlocked(
     syncParentDirectory(path);
   } finally {
     if (fd !== undefined) closeSync(fd);
-    try {
-      unlinkSync(tmp);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-    }
+    removeJournalTemporaryFile(tmp);
+  }
+}
+
+function removeJournalTemporaryFile(path: string): void {
+  try {
+    unlinkSync(path);
+  } catch (error) {
+    if (!isObject(error) || !('code' in error) || error.code !== 'ENOENT') throw error;
   }
 }
 

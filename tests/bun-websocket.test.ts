@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'bun:test';
-import { loadBunNativeWebSocket } from '../src/bun-websocket.js';
+import { loadBunNativeWebSocket } from '../src/transport/bun-websocket.js';
 
 const servers: Bun.Server<any>[] = [];
 

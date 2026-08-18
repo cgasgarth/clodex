@@ -10,7 +10,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import {
   CREDENTIAL_HELPER_ENV,
   CREDENTIAL_HELPER_TIMEOUT_ENV,
@@ -23,14 +23,14 @@ import {
   isCredentialAccountInstance,
   readCredentialHelperAccount,
   writeCredentialHelperAccount,
-} from '../src/credential-helper.js';
+} from '../src/credentials/helper.js';
 import {
   deleteProviderCredential,
   probeProviderCredentialStore,
   provisionProviderCredential,
   resolveProviderCredential,
   saveProviderCredential,
-} from '../src/env.js';
+} from '../src/config/environment.js';
 import { removeProviderFromRegistry } from '../src/registry/crud.js';
 import { emptyRegistry, loadRegistry, saveRegistry } from '../src/registry/io.js';
 import { withRegistryWriteLockSync } from '../src/registry/lock.js';

@@ -1,6 +1,6 @@
 // src/registry/model-source.ts — resolve how a registry provider refreshes its model list
 
-import { getTemplateById, type ProviderModelSource } from '../provider-templates.js';
+import { getTemplateById, type ProviderModelSource } from '../providers/templates.js';
 import { resolveProviderTemplate } from './resolve-template.js';
 import type { RegistryProvider } from './types.js';
 

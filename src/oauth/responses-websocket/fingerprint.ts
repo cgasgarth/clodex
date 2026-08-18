@@ -1,27 +1,40 @@
 import { createHash } from 'node:crypto';
+import { isObject, isString } from '../../runtime/type-guards.js';
 import { RESPONSES_LITE_HEADER } from './types.js';
-import type { ResponsesWebSocketFetchOptions, JsonObject } from './types.js';
+import type { ResponsesWebSocketFetchOptions, JsonObject, JsonValue } from './types.js';
 
-export function toHeaderRecord(headers: HeadersInit | undefined): Record<string, string> {
-  const out: Record<string, string> = {};
+export interface HeaderRecord {
+  [key: string]: string;
+}
+
+export interface PromptFieldHashes {
+  [key: string]: string;
+}
+
+function isJsonObject(value: JsonValue): value is JsonObject {
+  return isObject(value) && !Array.isArray(value);
+}
+
+export function toHeaderRecord(headers: HeadersInit | undefined): HeaderRecord {
+  const out: HeaderRecord = {};
   if (!headers) return out;
   if (headers instanceof Headers) {
     headers.forEach((value, key) => { out[key] = value; });
   } else if (Array.isArray(headers)) {
     for (const [key, value] of headers) out[key] = value;
   } else {
-    for (const [key, value] of Object.entries(headers)) out[key] = String(value);
+    for (const [key, value] of Object.entries(headers)) out[key] = value;
   }
   return out;
 }
 
-export function hasResponsesLiteHeader(headers: Record<string, string>): boolean {
+export function hasResponsesLiteHeader(headers: HeaderRecord): boolean {
   return Object.entries(headers).some(
     ([key, value]) => key.toLowerCase() === RESPONSES_LITE_HEADER && value.toLowerCase() === 'true',
   );
 }
 
-export function authorizationHeaderFingerprint(headers: Record<string, string>): string {
+export function authorizationHeaderFingerprint(headers: HeaderRecord): string {
   const authorization = Object.entries(headers)
     .find(([key]) => key.toLowerCase() === 'authorization')?.[1];
   return authorization ? createHash('sha256').update(authorization).digest('hex') : '';
@@ -29,32 +42,32 @@ export function authorizationHeaderFingerprint(headers: Record<string, string>):
 
 export function bodyToString(body: BodyInit | null | undefined): string {
   if (body == null) return '';
-  if (typeof body === 'string') return body;
+  if (isString(body)) return body;
   if (body instanceof Uint8Array) return Buffer.from(body).toString('utf8');
   if (body instanceof ArrayBuffer) return Buffer.from(new Uint8Array(body)).toString('utf8');
-  return String(body);
+  return Object.prototype.toString.call(body);
 }
 
-export function applyResponsesLiteShape(payload: JsonObject): JsonObject {
-  const reasoning = payload.reasoning && typeof payload.reasoning === 'object'
-    ? { ...(payload.reasoning as JsonObject) }
+export function applyResponsesLiteContract(payload: JsonObject): JsonObject {
+  const reasoning = isJsonObject(payload.reasoning)
+    ? { ...payload.reasoning }
     : {};
   reasoning.context = 'all_turns';
   return { ...payload, reasoning, store: false };
 }
 
-function canonicalize(value: unknown): unknown {
+function canonicalize(value: JsonValue): JsonValue {
   if (Array.isArray(value)) return value.map(canonicalize);
-  if (!value || typeof value !== 'object') return value;
+  if (!isJsonObject(value)) return value;
   const out: JsonObject = {};
-  for (const key of Object.keys(value).sort()) {
-    const child = (value as JsonObject)[key];
+  for (const key of Object.keys(value).toSorted()) {
+    const child = value[key];
     if (child !== undefined) out[key] = canonicalize(child);
   }
   return out;
 }
 
-export function canonicalJson(value: unknown): string {
+export function canonicalJson(value: JsonValue): string {
   return JSON.stringify(canonicalize(value));
 }
 
@@ -68,9 +81,9 @@ export function responsesWebSocketPromptFingerprint(payload: JsonObject): string
   return createHash('sha256').update(canonicalJson(stable)).digest('hex');
 }
 
-export function responsesWebSocketPromptFieldHashes(payload: JsonObject): Record<string, string> {
-  const hashes: Record<string, string> = {};
-  for (const key of Object.keys(payload).sort()) {
+export function responsesWebSocketPromptFieldHashes(payload: JsonObject): PromptFieldHashes {
+  const hashes: PromptFieldHashes = {};
+  for (const key of Object.keys(payload).toSorted()) {
     if (key === 'input' || key === 'previous_response_id' || key === 'stream' || key === 'background') continue;
     hashes[key] = createHash('sha256').update(canonicalJson(payload[key])).digest('hex').slice(0, 12);
   }
@@ -78,17 +91,17 @@ export function responsesWebSocketPromptFieldHashes(payload: JsonObject): Record
 }
 
 export function changedPromptFields(
-  previous: Record<string, string> | undefined,
-  current: Record<string, string>,
+  previous: PromptFieldHashes | undefined,
+  current: PromptFieldHashes,
 ): string[] {
   if (!previous) return [];
   return [...new Set([...Object.keys(previous), ...Object.keys(current)])]
     .filter(key => previous[key] !== current[key])
-    .sort();
+    .toSorted();
 }
 
 export function instructionsFromPayload(payload: JsonObject): string | undefined {
-  return typeof payload.instructions === 'string' ? payload.instructions : undefined;
+  return isString(payload.instructions) ? payload.instructions : undefined;
 }
 
 export function instructionChangeSummary(previous: string | undefined, current: string | undefined): string | undefined {
@@ -121,11 +134,11 @@ export function responsesWebSocketPartitionKey(
 ): string | undefined {
   const promptCacheKey = payload.prompt_cache_key;
   const model = payload.model;
-  if (typeof promptCacheKey !== 'string' || !promptCacheKey || typeof model !== 'string' || !model) return undefined;
-  const reasoning = payload.reasoning && typeof payload.reasoning === 'object'
-    ? payload.reasoning as JsonObject
+  if (!isString(promptCacheKey) || !promptCacheKey || !isString(model) || !model) return undefined;
+  const reasoning = isJsonObject(payload.reasoning)
+    ? payload.reasoning
     : undefined;
-  const effort = typeof reasoning?.effort === 'string' ? reasoning.effort.trim().toLowerCase() : '';
+  const effort = isString(reasoning?.effort) ? reasoning.effort.trim().toLowerCase() : '';
   const material = [
     wsUrl,
     options.providerId ?? 'openai',
@@ -155,6 +168,6 @@ export function responsesCheckpointPartitionKey(
   );
 }
 
-export function inputArray(payload: JsonObject): unknown[] {
+export function inputArray(payload: JsonObject): JsonValue[] {
   return Array.isArray(payload.input) ? payload.input : [];
 }

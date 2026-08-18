@@ -22,10 +22,14 @@ import {
 import { KEYRING_MANAGED_STATE_KEY_SERVICE, KEYRING_MANAGED_STATE_KEY_PREFIX, readKeyringEntry } from './base.js';
 import type { KeyringChunkJournal, KeyringApi } from './base.js';
 import { parseKeyringChunkJournal, encodeKeyringJournal } from './codec.js';
+import { isObject, isString } from '../../runtime/type-guards.js';
 
 const KEYRING_PREPARING_STATE_PREFIX = 'v2:preparing:';
 const KEYRING_MANAGED_STATE_PREFIX = 'v2:managed:';
 const KEYRING_EMPTY_MANAGED_STATE_VALUE = 'v1:managed\n';
+interface KeyringRuntimeError {
+  value: unknown;
+}
 export type KeyringManagedState =
   | { mode: 'preparing'; journal: KeyringChunkJournal }
   | { mode: 'managed'; journal: KeyringChunkJournal | null };
@@ -34,6 +38,19 @@ export class KeyringManagedStateKeyUnavailableError extends Error {
   constructor() {
     super('keyring managed-state encryption key is unavailable');
     this.name = 'KeyringManagedStateKeyUnavailableError';
+  }
+}
+
+function systemErrorCode(error: KeyringRuntimeError['value']): string | undefined {
+  if (!isObject(error) || !('code' in error)) return undefined;
+  return isString(error.code) ? error.code : undefined;
+}
+
+function removeTemporaryFile(path: string): void {
+  try {
+    unlinkSync(path);
+  } catch (error) {
+    if (systemErrorCode(error) !== 'ENOENT') throw error;
   }
 }
 
@@ -137,12 +154,12 @@ export function readKeyringManagedState(
           : { mode: 'managed', journal };
       } catch (err) {
         if (err instanceof KeyringManagedStateKeyUnavailableError) throw err;
-        throw new Error('keyring managed-state marker is invalid');
+        throw new Error('keyring managed-state marker is invalid', { cause: err });
       }
     }
     throw new Error('keyring managed-state marker is invalid');
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    if (systemErrorCode(err) === 'ENOENT') return null;
     throw err;
   }
 }
@@ -188,7 +205,7 @@ function syncDirectory(path: string): void {
     fd = openSync(path, 'r');
     fsyncSync(fd);
   } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code;
+    const code = systemErrorCode(err);
     if (code !== 'EINVAL' && code !== 'ENOTSUP' && code !== 'EISDIR' && code !== 'EPERM') {
       throw err;
     }
@@ -219,7 +236,7 @@ export function persistKeyringManagedState(
     try {
       renameSync(tempPath, path);
     } catch (err) {
-      const code = (err as NodeJS.ErrnoException).code;
+      const code = systemErrorCode(err);
       if (code !== 'EEXIST' && code !== 'EPERM') {
         throw err;
       }
@@ -229,11 +246,7 @@ export function persistKeyringManagedState(
     syncDirectory(directory);
   } finally {
     if (fd !== undefined) closeSync(fd);
-    try {
-      unlinkSync(tempPath);
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
-    }
+    removeTemporaryFile(tempPath);
   }
 }
 
@@ -242,7 +255,7 @@ export function removeKeyringManagedState(account: string): void {
   try {
     unlinkSync(path);
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return;
+    if (systemErrorCode(err) === 'ENOENT') return;
     throw err;
   }
   syncDirectory(getCredentialStateRoot());

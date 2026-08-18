@@ -1,14 +1,14 @@
 import pc from 'picocolors';
 import * as p from '@clack/prompts';
-import { launchClaude } from '../launch.js';
-import { buildChildEnv } from '../env.js';
-import { claudeCodeClientModelId } from '../context-model-id.js';
-import { startProxyCatalog } from '../proxy.js';
-import type { ProxyHandle, ProxyModelAlias, ProxyRoute } from '../proxy.js';
+import { launchClaude } from '../runtime/launch.js';
+import { buildChildEnv } from '../config/environment.js';
+import { claudeCodeClientModelId } from '../models/context-model-id.js';
+import { startProxyCatalog } from '../proxy/index.js';
+import type { ProxyHandle, ProxyModelAlias, ProxyRoute } from '../proxy/index.js';
 import {
   prepareClaudeTraceLog,
   printTraceLog,
-} from '../trace-log.js';
+} from '../observability/trace-log.js';
 import { resolveOpenAiCompactionThreshold } from '../oauth/responses-compaction.js';
 
 export function reportInactiveCatalogAliases(modelAliases: ProxyModelAlias[]): void {
@@ -94,7 +94,7 @@ export async function launchClaudeViaCatalog(
     claudeCodeClientModelId(startingRoute.aliasId, contextWindow),
     [...traceArgs, ...claudeArgs],
   );
-  proxyHandle.close();
+  await proxyHandle.close();
   if (trace) printTraceLog(debugLogPath);
   return exitCode;
 }

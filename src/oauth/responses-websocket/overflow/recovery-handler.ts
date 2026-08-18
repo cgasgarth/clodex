@@ -1,5 +1,5 @@
 import { ResponsesCompactionError } from '../../responses-compaction.js';
-import type { ConnectionEntry, JsonObject, RequestContext } from '../types.js';
+import type { ConnectionEntry, JsonObject, JsonValue, RequestContext } from '../types.js';
 import {
   boundedDiagnosticIdentifier,
   emitContextDiagnostic,
@@ -13,7 +13,7 @@ import {
 
 interface OverflowRetryState {
   retryPayload?: JsonObject;
-  compactedInputBase?: unknown[];
+  compactedInputBase?: JsonValue[];
   attemptCount: number;
 }
 
@@ -43,7 +43,7 @@ export function createOverflowRecoveryHandler(
         event: 'ws_overflow_recovery',
         outcome: 'internal_failure',
         reason: 'response_context_rejection',
-        errorType: boundedDiagnosticIdentifier(error instanceof Error ? error.name : typeof error),
+        errorType: boundedDiagnosticIdentifier(error instanceof Error ? error.name : 'UnknownError'),
       });
     }
     if (contextIsClosed() || entry.current !== ctx) return;

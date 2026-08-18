@@ -3,8 +3,8 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fetchTemplateModels } from '../src/registry/fetch-template-models.js';
-import type { ProviderTemplate } from '../src/provider-templates.js';
-import { clearTraceSecrets, flushTraceLogs, getProviderDebugLogPath } from '../src/trace-log.js';
+import type { ProviderTemplate } from '../src/providers/templates.js';
+import { clearTraceSecrets, flushTraceLogs, getProviderDebugLogPath } from '../src/observability/trace-log.js';
 import { asMocked, restoreTestGlobals, stubTestGlobal } from './test-helpers.js';
 
 function template(partial: Partial<ProviderTemplate> & Pick<ProviderTemplate, 'id' | 'name' | 'npm'>): ProviderTemplate {
@@ -46,6 +46,7 @@ describe('fetchTemplateModels', () => {
   });
 
   it('uses x-api-key for Anthropic, not Bearer auth', async () => {
+    // SAFETY: The test fixture defines the asserted runtime shape.
     asMocked(fetch).mockResolvedValue({
       ok: true,
       status: 200,
@@ -67,11 +68,14 @@ describe('fetchTemplateModels', () => {
         }),
       }),
     );
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const call = asMocked(fetch).mock.calls[0]![1] as RequestInit;
+    // SAFETY: The test fixture defines the asserted runtime shape.
     expect((call.headers as Record<string, string>)['Authorization']).toBeUndefined();
   });
 
   it('uses Bearer auth for OpenAI-compatible providers', async () => {
+    // SAFETY: The test fixture defines the asserted runtime shape.
     asMocked(fetch).mockResolvedValue({
       ok: true,
       status: 200,
@@ -95,6 +99,7 @@ describe('fetchTemplateModels', () => {
     const previousHome = process.env.CLODEX_HOME;
     const previousTrace = process.env.CLODEX_TRACE;
     const secret = 'opaque.credential+$value[42]';
+    // SAFETY: The test fixture defines the asserted runtime shape.
     asMocked(fetch).mockResolvedValue({
       ok: false,
       status: 500,
@@ -119,6 +124,7 @@ describe('fetchTemplateModels', () => {
   });
 
   it('merges extra headers for custom endpoints needing plan/auth-tracking headers', async () => {
+    // SAFETY: The test fixture defines the asserted runtime shape.
     asMocked(fetch).mockResolvedValue({
       ok: true,
       status: 200,
@@ -139,6 +145,7 @@ describe('fetchTemplateModels', () => {
   });
 
   it('preserves provider-supported request parameters from model list rows', async () => {
+    // SAFETY: The test fixture defines the asserted runtime shape.
     asMocked(fetch).mockResolvedValue({
       ok: true,
       status: 200,
@@ -170,6 +177,7 @@ describe('fetchTemplateModels', () => {
       apiKeyOptional: true,
       anonymousFreeModels: true,
     });
+    // SAFETY: The test fixture defines the asserted runtime shape.
     asMocked(fetch).mockResolvedValue({
       ok: true,
       status: 200,
@@ -205,6 +213,7 @@ describe('fetchTemplateModels', () => {
   });
 
   it('derives verified free status from zero pricing even when provider flag is false', async () => {
+    // SAFETY: The test fixture defines the asserted runtime shape.
     asMocked(fetch).mockResolvedValue({
       ok: true,
       status: 200,

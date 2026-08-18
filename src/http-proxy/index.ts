@@ -1,29 +1,39 @@
 import pc from 'picocolors';
 import * as p from '@clack/prompts';
-import { loadPreferences } from '../config.js';
+import { loadPreferences } from '../config/config.js';
 import { DEFAULT_SERVER_PORT } from '../constants.js';
-import { fetchProviderCatalog, resolveLocalProviderApiKey } from '../provider-catalog.js';
-import { providersForTarget } from '../target-compatibility.js';
-import type { ProxyHandle, ProxyRoute, ProxyRouteRequestResolver } from '../proxy.js';
+import { fetchProviderCatalog, resolveLocalProviderApiKey } from '../models/provider-catalog.js';
+import { providersForTarget } from '../models/target-compatibility.js';
+import type { ProxyHandle, ProxyRoute, ProxyRouteRequestResolver } from '../proxy/index.js';
 import { buildHttpProxyRoutes, type HttpProxyRouteResult } from './routes.js';
 import { startHttpProxy, type HttpProxyHandle, type HttpProxyOptions } from './server.js';
 import { ensureHttpProxyCaBundle } from './ca.js';
-import { registerServerRuntimeState, unregisterServerRuntimeState } from '../server-runtime.js';
+import { registerServerRuntimeState, unregisterServerRuntimeState } from '../runtime/server-runtime.js';
 import {
   getInferenceRequestLogPath,
   getSessionLogPath,
   writeProxyLifecycleLog,
-} from '../trace-log.js';
-import { removeAnthropicProxyBypass } from '../wrapper-env.js';
+} from '../observability/trace-log.js';
+import { removeAnthropicProxyBypass } from '../runtime/wrapper-env.js';
 import {
   canonicalModelAliasName,
   describeModelAliasRejection,
   normalizeModelAliases,
-} from '../model-aliases.js';
-import type { ProxyModelAlias } from '../proxy.js';
+} from '../models/aliases.js';
+import type { ProxyModelAlias } from '../proxy/index.js';
 
 export interface LoadedHttpProxyRoutes extends HttpProxyRouteResult {
   favoriteCount: number;
+}
+
+function contextLabel(contextWindow: number | undefined): string {
+  if (!contextWindow || contextWindow <= 0) return '';
+  const scaled = contextWindow >= 1_000_000
+    ? `${Number((contextWindow / 1_000_000).toFixed(2))}M`
+    : contextWindow >= 1_000
+      ? `${Number((contextWindow / 1_000).toFixed(1))}K`
+      : String(contextWindow);
+  return ` (${scaled} context)`;
 }
 
 export async function loadHttpProxyRoutes(): Promise<LoadedHttpProxyRoutes> {
@@ -44,8 +54,7 @@ export async function loadHttpProxyRoutes(): Promise<LoadedHttpProxyRoutes> {
     };
   }
   const rawCatalog = providersForTarget(await fetchProviderCatalog({ agent: 'claude' }), 'claude');
-  const catalog = await Promise.all(rawCatalog.map(async provider => ({
-    ...provider,
+  const catalog = await Promise.all(rawCatalog.map(async provider => Object.assign({}, provider, {
     apiKey: (await resolveLocalProviderApiKey(provider)) ?? '',
   })));
   return {
@@ -61,21 +70,26 @@ export function liveProxyModelAliases(
   const inactive = normalizeModelAliases(loaded.unavailableAliases);
   return [
     ...loaded.aliases,
-    ...inactive.accepted.map(({ alias, source, sources }) => ({
-      name: alias.name,
-      ...(source.name === alias.name ? {} : { savedName: source.name }),
-      ...(sources.length === 1 && sources[0]!.name === alias.name
-        ? {}
-        : { sourceNames: [...new Set(sources.map(entry => entry.name))] }),
-      unavailableReason: 'target unavailable',
-    })),
-    ...inactive.rejections.map(rejection => ({
-      name: canonicalModelAliasName(rejection.alias.name),
-      ...(rejection.alias.name === canonicalModelAliasName(rejection.alias.name)
-        ? {}
-        : { savedName: rejection.alias.name }),
-      unavailableReason: describeModelAliasRejection(rejection.reason),
-    })),
+    ...inactive.accepted.map(({ alias, source, sources }) => {
+      const entry: ProxyModelAlias = {
+        name: alias.name,
+        unavailableReason: 'target unavailable',
+      };
+      if (source.name !== alias.name) entry.savedName = source.name;
+      if (sources.length !== 1 || sources[0]!.name !== alias.name) {
+        entry.sourceNames = [...new Set(sources.map(sourceEntry => sourceEntry.name))];
+      }
+      return entry;
+    }),
+    ...inactive.rejections.map(rejection => {
+      const name = canonicalModelAliasName(rejection.alias.name);
+      const entry: ProxyModelAlias = {
+        name,
+        unavailableReason: describeModelAliasRejection(rejection.reason),
+      };
+      if (rejection.alias.name !== name) entry.savedName = rejection.alias.name;
+      return entry;
+    }),
   ];
 }
 
@@ -85,15 +99,6 @@ export function formatHttpProxyModelLines(
 ): string[] {
   if (routes.length === 0) return ['  (no compatible favorite models)'];
   const routesById = new Map(routes.map(route => [route.aliasId, route]));
-  const contextLabel = (contextWindow: number | undefined): string => {
-    if (!contextWindow || contextWindow <= 0) return '';
-    const scaled = contextWindow >= 1_000_000
-      ? `${Number((contextWindow / 1_000_000).toFixed(2))}M`
-      : contextWindow >= 1_000
-        ? `${Number((contextWindow / 1_000).toFixed(1))}K`
-        : String(contextWindow);
-    return ` (${scaled} context)`;
-  };
   return [
     ...aliases.map(alias => {
       const route = routesById.get(alias.routeId);

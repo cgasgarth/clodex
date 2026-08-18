@@ -3,9 +3,10 @@ import { describe, expect, it } from 'bun:test';
 import {
   listenTcpServer,
   tcpListenerUrlHost,
+  waitForHttpListener,
   waitForTcpListener,
   waitForTcpListenerCandidate,
-} from '../src/listener-ready.js';
+} from '../src/transport/listener-ready.js';
 
 describe('tcp listener readiness', () => {
   it.each([
@@ -49,6 +50,26 @@ describe('tcp listener readiness', () => {
       probe: async () => {
         attempts += 1;
         return attempts === 3 ? 'ready' : 'unreachable';
+      },
+      delay: async (ms: number) => {
+        elapsedMs += ms;
+      },
+    });
+
+    await expect(readiness).resolves.toBe(true);
+    expect(attempts).toBe(3);
+    expect(elapsedMs).toBe(10);
+  });
+
+  it('retries until the HTTP listener serves a response', async () => {
+    let elapsedMs = 0;
+    let attempts = 0;
+
+    const readiness = waitForHttpListener('http://127.0.0.1:17645/', 20, {
+      now: () => elapsedMs,
+      probe: async () => {
+        attempts += 1;
+        return attempts === 3;
       },
       delay: async (ms: number) => {
         elapsedMs += ms;

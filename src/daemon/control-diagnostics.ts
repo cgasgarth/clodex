@@ -24,6 +24,14 @@ interface ActiveControlRequest {
   startedAt: number;
 }
 
+interface ControlDiagnosticExtra {
+  phase: 'pending' | 'failed' | 'completed';
+  thresholdMs?: number;
+  durationMs?: number;
+  errorType?: string;
+  statusCode?: number;
+}
+
 function rounded(value: number): number {
   return Math.round(value * 10) / 10;
 }
@@ -32,7 +40,7 @@ export function normalizeControlRoute(requestUrl: string): string {
   const url = new URL(requestUrl);
   let pathname = url.pathname;
   pathname = pathname.replace(/^\/v1\/accounts\/[^/]+\/select$/, '/v1/accounts/:id/select');
-  const keys = [...new Set(url.searchParams.keys())].sort();
+  const keys = [...new Set(url.searchParams.keys())].toSorted();
   return keys.length > 0 ? `${pathname}?${keys.join('&')}` : pathname;
 }
 
@@ -94,7 +102,9 @@ export class ControlRequestDiagnostics {
         this.report('control_request_failed', activeRequest, {
           phase: 'failed',
           durationMs,
-          errorType: failure instanceof Error ? failure.name : typeof failure,
+          errorType: failure instanceof Error
+            ? failure.name
+            : Object.prototype.toString.call(failure),
         });
       } else if (durationMs >= this.slowRequestMs) {
         this.report('control_request_slow', activeRequest, {
@@ -125,7 +135,7 @@ export class ControlRequestDiagnostics {
   private report(
     kind: string,
     request: ActiveControlRequest,
-    extra: Record<string, unknown>,
+    extra: ControlDiagnosticExtra,
   ): void {
     const memory = process.memoryUsage();
     const detail = {

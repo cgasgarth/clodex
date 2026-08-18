@@ -16,10 +16,19 @@ const PLACEHOLDER_KEYS = new Set([
   'no-key',
 ]);
 
-const ENV_FALLBACK_BY_PROVIDER: Record<string, string[]> = {
+const ENV_FALLBACK_BY_PROVIDER = new Map<string, string[]>(Object.entries({
   anthropic: ['ANTHROPIC_API_KEY'],
   openai: ['OPENAI_API_KEY'],
-};
+}));
+
+export interface SkippedRefreshResult {
+  id: string;
+  name: string;
+  ok: true;
+  skipped: true;
+  modelCount?: number;
+  reason: string;
+}
 
 export function isPlaceholderProviderKey(key: string | null | undefined): boolean {
   if (!key?.trim()) return true;
@@ -40,7 +49,7 @@ export function cachedModelCount(provider: RegistryProvider): number {
 export function skipWithCachedModels(
   provider: RegistryProvider,
   reason: string,
-): { id: string; name: string; ok: true; skipped: true; modelCount?: number; reason: string } {
+): SkippedRefreshResult {
   const count = cachedModelCount(provider);
   return {
     id: provider.id,
@@ -70,7 +79,7 @@ export async function resolveRefreshCredential(
   }
   if (!isLikelyPlaceholderKey(key)) return key;
 
-  for (const envVar of ENV_FALLBACK_BY_PROVIDER[provider.id] ?? []) {
+  for (const envVar of ENV_FALLBACK_BY_PROVIDER.get(provider.id) ?? []) {
     const fromEnv = process.env[envVar]?.trim();
     if (fromEnv && !isLikelyPlaceholderKey(fromEnv)) return fromEnv;
   }

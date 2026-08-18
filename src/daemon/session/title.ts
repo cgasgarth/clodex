@@ -1,3 +1,4 @@
+import { isString } from '../../runtime/type-guards.js';
 import {
   closeSync,
   openSync,
@@ -51,11 +52,11 @@ function titleFromJsonl(text: string): string | undefined {
   for (const line of text.split('\n')) {
     if (!line.includes('title')) continue;
     try {
-      const record = JSON.parse(line) as Record<string, unknown>;
-      if (record.type === 'ai-title' && typeof record.aiTitle === 'string') {
+      const record: { type?: string; aiTitle?: string; customTitle?: string } = JSON.parse(line);
+      if (record.type === 'ai-title' && isString(record.aiTitle)) {
         aiTitle = record.aiTitle.trim() || aiTitle;
       }
-      if (record.type === 'custom-title' && typeof record.customTitle === 'string') {
+      if (record.type === 'custom-title' && isString(record.customTitle)) {
         customTitle = record.customTitle.trim() || customTitle;
       }
     } catch {

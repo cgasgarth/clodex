@@ -3,8 +3,8 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { parseProxyLaunchTicket } from '../src/http-proxy/server.js';
-import { computeWrapperEnv } from '../src/wrapper-env.js';
-import { startProxyCatalog } from '../src/proxy.js';
+import { computeWrapperEnv } from '../src/runtime/wrapper-env.js';
+import { startProxyCatalog } from '../src/proxy/index.js';
 
 const roots: string[] = [];
 afterEach(() => {
@@ -69,7 +69,7 @@ describe('managed-account launch ticket transport', () => {
       expect(response.status).toBe(200);
       expect(observedTicket).toBe('ticket.part-two');
     } finally {
-      handle.close();
+      await handle.close();
     }
   });
 });

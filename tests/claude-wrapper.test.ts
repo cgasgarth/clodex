@@ -15,6 +15,7 @@ import { rootCertificates } from 'node:tls';
 import { fileURLToPath } from 'node:url';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'bun:test';
 import { buildBunTestEntry } from './bun-build.js';
+import { requireTcpAddress } from './test-helpers.js';
 
 interface WrapperResult {
   code: number | null;
@@ -90,11 +91,10 @@ async function openLoopbackServer(
       resolveListen();
     });
   });
-  const address = server.address();
-  if (!address || typeof address === 'string') {
-    server.close();
-    throw new Error('expected a TCP address for the wrapper test server');
-  }
+  const address = requireTcpAddress(
+    server.address(),
+    'expected a TCP address for the wrapper test server',
+  );
   return { server, port: address.port };
 }
 
@@ -147,6 +147,7 @@ function claudeInvocation(exitCode = 0): string[] {
 }
 
 function readLaunchEnv(): { baseUrl: string | null; httpProxy: string | null } {
+  // SAFETY: The test fixture defines the asserted runtime shape.
   return JSON.parse(readFileSync(launchMarker, 'utf8')) as {
     baseUrl: string | null;
     httpProxy: string | null;
@@ -195,7 +196,7 @@ afterEach(() => {
 
 // Windows keeps the spawn fallback, which cannot preserve the pid.
 const execReplacesProcessImage =
-  process.platform !== 'win32' && typeof process.execve === 'function';
+  process.platform !== 'win32' && process.execve !== undefined;
 
 describe('clodex-claude process wrapper', () => {
   it('reports an unlaunchable Claude binary instead of aborting the exec', async () => {
@@ -248,6 +249,7 @@ describe('clodex-claude process wrapper', () => {
         child.once('close', () => resolveExit());
       });
 
+      // SAFETY: The test fixture defines the asserted runtime shape.
       const identity = JSON.parse(readFileSync(identityMarker, 'utf8')) as {
         pid: number;
         pgid: number;
@@ -385,6 +387,7 @@ describe('clodex-claude process wrapper', () => {
     const control = createHttpServer(async (request, response) => {
       const chunks: Buffer[] = [];
       for await (const chunk of request) chunks.push(Buffer.from(chunk));
+      // SAFETY: The local control fixture sends this exact account payload.
       requests.push(chunks.length
         ? JSON.parse(Buffer.concat(chunks).toString('utf8')) as { accountId?: string }
         : {});
@@ -451,6 +454,7 @@ describe('clodex-claude process wrapper', () => {
         '--clodex-account=Two',
       ]);
       expect(first.code).toBe(0);
+      // SAFETY: The test fixture defines the asserted runtime shape.
       const firstLaunch = JSON.parse(readFileSync(ticketMarker, 'utf8')) as {
         proxy: string | null;
         baseUrl: string;

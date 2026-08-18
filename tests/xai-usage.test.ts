@@ -71,6 +71,7 @@ describe('xAI subscription usage', () => {
       }), { status: 200 }));
 
     const usage = await fetchXaiUsage('subscription-token', {
+      // SAFETY: The test fixture defines the asserted runtime shape.
       fetch: request as typeof fetch,
       now: () => new Date('2026-08-12T00:00:00Z'),
     });
@@ -101,6 +102,7 @@ describe('xAI subscription usage', () => {
     }), { status: 200 }));
 
     await expect(fetchXaiIdentity('subscription-token', {
+      // SAFETY: The test fixture defines the asserted runtime shape.
       fetch: request as typeof fetch,
     })).resolves.toEqual({
       accountId: 'user-456',
@@ -126,6 +128,7 @@ describe('xAI subscription usage', () => {
       }), { status: 200 }));
 
     await expect(fetchXaiUsage('subscription-token', {
+      // SAFETY: The test fixture defines the asserted runtime shape.
       fetch: request as typeof fetch,
     })).resolves.toMatchObject({ plan: 'SuperGrokPro' });
   });
@@ -134,6 +137,7 @@ describe('xAI subscription usage', () => {
     const request = vi.fn().mockResolvedValue(
       new Response(JSON.stringify({ userId: 'bad\nheader' }), { status: 200 }),
     );
+    // SAFETY: The test fixture defines the asserted runtime shape.
     await expect(fetchXaiUsage('subscription-token', { fetch: request as typeof fetch }))
       .rejects.toThrow('identity response is invalid');
     expect(request).toHaveBeenCalledOnce();

@@ -2,14 +2,14 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import * as env from '../src/env.js';
+import * as env from '../src/config/environment.js';
 import {
   formatRegistryAuthLabel,
   localProvidersToServerModels,
   providersForPicker,
   resolveLocalProviderApiKey,
   resolveProvidersForDisplay,
-} from '../src/provider-catalog.js';
+} from '../src/models/provider-catalog.js';
 import { emptyRegistry, saveRegistry } from '../src/registry/io.js';
 import { withRegistryWriteLockSync } from '../src/registry/lock.js';
 
@@ -36,6 +36,7 @@ describe('provider-catalog-display', () => {
 
   describe('providersForPicker', () => {
     it('sorts providers and models by name', () => {
+      // SAFETY: The test fixture defines the asserted runtime shape.
       const list = providersForPicker([
         { id: 'b', name: 'B Provider', apiKey: '', models: [{ id: 'b2', name: 'Z Model', family: '', modelFormat: 'openai', contextWindow: 1 }, { id: 'b1', name: 'A Model', family: '', modelFormat: 'openai', contextWindow: 1 }] },
         { id: 'a', name: 'A Provider', apiKey: '', models: [] }
@@ -49,6 +50,7 @@ describe('provider-catalog-display', () => {
 
   describe('resolveLocalProviderApiKey', () => {
     it('returns inline apiKey when present', async () => {
+      // SAFETY: The test fixture defines the asserted runtime shape.
       const provider = { id: 'groq', name: 'Groq', apiKey: 'direct-key', models: [] } as any;
       expect(await resolveLocalProviderApiKey(provider)).toBe('direct-key');
     });
@@ -68,17 +70,20 @@ describe('provider-catalog-display', () => {
       });
       withRegistryWriteLockSync(() => saveRegistry(registry));
 
+      // SAFETY: The test fixture defines the asserted runtime shape.
       const provider = { id: 'groq', name: 'Groq', apiKey: '', models: [] } as any;
       expect(await resolveLocalProviderApiKey(provider)).toBe('opencode-key');
       expect(env.resolveProviderCredential).toHaveBeenCalledWith('groq', 'keyring:provider:groq');
     });
 
     it('returns an empty credential for providers declared authType none', async () => {
+      // SAFETY: The test fixture defines the asserted runtime shape.
       const provider = { id: 'local', name: 'Local', apiKey: '', authType: 'none', models: [] } as any;
       expect(await resolveLocalProviderApiKey(provider)).toBe('');
     });
 
     it('does not resurrect a direct key for an explicitly anonymous provider', async () => {
+      // SAFETY: The test fixture defines the asserted runtime shape.
       const provider = {
         id: 'local',
         name: 'Local',
@@ -92,6 +97,7 @@ describe('provider-catalog-display', () => {
 
     it('falls back to the OAuth keyring ref when there is no registry authRef and no zen/go/anonymous special case', async () => {
       vi.spyOn(env, 'resolveProviderCredential').mockResolvedValue('oauth-key');
+      // SAFETY: The test fixture defines the asserted runtime shape.
       const provider = { id: 'openai', name: 'OpenAI', apiKey: '', models: [] } as any;
       expect(await resolveLocalProviderApiKey(provider)).toBe('oauth-key');
       expect(env.resolveProviderCredential).toHaveBeenCalledWith('openai', 'keyring:oauth:provider:openai');
@@ -99,6 +105,7 @@ describe('provider-catalog-display', () => {
 
     it('uses the materialized authRef even when the current environment selects another store', async () => {
       vi.spyOn(env, 'resolveProviderCredential').mockResolvedValue('oauth-key');
+      // SAFETY: The test fixture defines the asserted runtime shape.
       const provider = {
         id: 'openai-oauth',
         name: 'OpenAI (ChatGPT)',
@@ -138,25 +145,31 @@ describe('provider-catalog-display', () => {
 
   describe('formatRegistryAuthLabel', () => {
     it('distinguishes OAuth, API key, and env refs', () => {
+      // SAFETY: The test fixture defines the asserted runtime shape.
       expect(formatRegistryAuthLabel({
         authRef: 'keyring:oauth:provider:xai',
         authType: 'oauth',
       } as any)).toBe('keychain (OAuth)');
+      // SAFETY: The test fixture defines the asserted runtime shape.
       expect(formatRegistryAuthLabel({
         authRef: 'keyring:provider:groq',
         authType: 'api',
       } as any)).toBe('keychain (API key)');
+      // SAFETY: The test fixture defines the asserted runtime shape.
       expect(formatRegistryAuthLabel({
         authRef: TEST_HELPER_REF,
         authType: 'oauth',
       } as any)).toBe('helper (OAuth)');
+      // SAFETY: The test fixture defines the asserted runtime shape.
       expect(formatRegistryAuthLabel({
         authRef: `helper:v1:${'b'.repeat(64)}:provider:groq`,
         authType: 'api',
       } as any)).toBe('helper (API key)');
+      // SAFETY: The test fixture defines the asserted runtime shape.
       expect(formatRegistryAuthLabel({
         authRef: 'env:OPENAI_API_KEY',
       } as any)).toBe('env:OPENAI_API_KEY');
+      // SAFETY: The test fixture defines the asserted runtime shape.
       expect(formatRegistryAuthLabel({
         authRef: 'none:anonymous',
         authType: 'none',

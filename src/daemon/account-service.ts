@@ -1,3 +1,4 @@
+import { isNumber, isObject, isString } from '../runtime/type-guards.js';
 import {
   createHmac,
   randomBytes,
@@ -13,16 +14,17 @@ import { dirname } from 'node:path';
 import {
   resolveProviderCredential,
   resolveProviderOAuthAccountId,
-} from '../env.js';
+} from '../config/environment.js';
 import {
   extractOpenAiAccountId,
   extractOpenAiEmail,
 } from '../oauth/openai.js';
-import type { ProxyRoute } from '../proxy.js';
-import { getDaemonTicketKeyPath } from '../paths.js';
-import { getTemplateById } from '../provider-templates.js';
+import type { ProxyRoute } from '../proxy/index.js';
+import { getDaemonTicketKeyPath } from '../config/paths.js';
+import { getTemplateById } from '../providers/templates.js';
 import { loadRegistry, loadRegistryStrict, saveRegistry } from '../registry/io.js';
 import { withRegistryWriteLockSync } from '../registry/lock.js';
+import type { RegistryProvider } from '../registry/types.js';
 import type { DaemonAccountController, DaemonAccountView } from './control-api.js';
 import type { ApiProcessingMode } from './api-pricing.js';
 import {
@@ -39,6 +41,7 @@ import {
   fetchXaiUsage,
   type XaiUsageSnapshot,
 } from './xai-usage.js';
+import { diagnosticRecord } from '../observability/trace-log.js';
 
 const LAUNCH_TICKET_TTL_MS = 30 * 24 * 60 * 60_000;
 const USAGE_REFRESH_MS = 90_000;
@@ -80,6 +83,14 @@ interface LaunchTicketPayload {
   processingMode: ApiProcessingMode;
 }
 
+interface LaunchTicketWirePayload {
+  v: number;
+  a: LaunchTicket['accountIds'];
+  i: number;
+  n: string;
+  p?: 'fast';
+}
+
 export function providerDisplayName(providerId: ManagedOAuthProviderId): string {
   return providerId === 'openai-oauth' ? 'OpenAI (ChatGPT)' : 'xAI (SuperGrok)';
 }
@@ -119,6 +130,11 @@ export function syncManagedProviderCredential(
       const templateId = registryTemplateId(providerId);
       const template = getTemplateById(templateId);
       if (!template) throw new Error(`OAuth provider template is unavailable: ${providerId}`);
+      const api: RegistryProvider['api'] = {
+        npm: template.npm,
+        url: template.defaultBaseUrl ?? '',
+      };
+      if (template.headers) api.headers = template.headers;
       registry.providers.push({
         id: providerId,
         templateId,
@@ -126,11 +142,7 @@ export function syncManagedProviderCredential(
         enabled: true,
         authRef,
         authType: 'oauth',
-        api: {
-          npm: template.npm,
-          url: template.defaultBaseUrl ?? '',
-          ...(template.headers ? { headers: template.headers } : {}),
-        },
+        api,
         addedAt: new Date().toISOString(),
       });
     }
@@ -226,10 +238,11 @@ export class DaemonAccountService implements DaemonAccountController {
     accountId?: string,
     processingMode: ApiProcessingMode = 'standard',
   ): LaunchTicket | null {
-    const selected = Object.fromEntries(MANAGED_PROVIDER_IDS.flatMap(providerId => {
+    const selected: LaunchTicket['accountIds'] = {};
+    for (const providerId of MANAGED_PROVIDER_IDS) {
       const account = this.store.selected(providerId);
-      return account ? [[providerId, account.id]] : [];
-    })) as LaunchTicket['accountIds'];
+      if (account) selected[providerId] = account.id;
+    }
     const pinned: LaunchTicket['accountIds'] = {};
     if (accountId) {
       const account = findAccount(this.store, accountId);
@@ -238,13 +251,14 @@ export class DaemonAccountService implements DaemonAccountController {
       pinned[account.providerId] = account.id;
     }
     if (Object.keys(selected).length === 0 && processingMode === 'standard') return null;
-    const payload = Buffer.from(JSON.stringify({
+    const ticketPayload: LaunchTicketWirePayload = {
       v: 3,
       a: pinned,
       i: this.dependencies.now(),
       n: randomBytes(12).toString('base64url'),
-      ...(processingMode === 'fast' ? { p: 'fast' } : {}),
-    })).toString('base64url');
+    };
+    if (processingMode === 'fast') ticketPayload.p = 'fast';
+    const payload = Buffer.from(JSON.stringify(ticketPayload)).toString('base64url');
     const signature = createHmac('sha256', this.ticketKey).update(payload).digest('base64url');
     const labels = Object.values(selected).flatMap(id => {
       const account = this.store.list().find(item => item.id === id);
@@ -271,24 +285,30 @@ export class DaemonAccountService implements DaemonAccountController {
     }
     if (received.length !== expected.length || !timingSafeEqual(received, expected)) return null;
     try {
-      const parsed = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as {
+      const parsed: {
         v?: unknown;
         a?: unknown;
         i?: unknown;
         p?: unknown;
-      };
+      } = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
       if (
         parsed.v !== 3
         || !parsed.a
-        || typeof parsed.a !== 'object'
-        || typeof parsed.i !== 'number'
+        || !isObject(parsed.a)
+        || !isNumber(parsed.i)
         || !Number.isFinite(parsed.i)
         || parsed.i > this.dependencies.now() + 60_000
         || this.dependencies.now() - parsed.i > LAUNCH_TICKET_TTL_MS
         || (parsed.p !== undefined && parsed.p !== 'fast')
       ) return null;
+      const pinnedAccountIds: LaunchTicket['accountIds'] = {};
+      const parsedAccountIds = diagnosticRecord(parsed.a);
+      for (const providerId of MANAGED_PROVIDER_IDS) {
+        const accountId = parsedAccountIds[providerId];
+        if (isString(accountId)) pinnedAccountIds[providerId] = accountId;
+      }
       return {
-        pinnedAccountIds: parsed.a,
+        pinnedAccountIds,
         processingMode: parsed.p === 'fast' ? 'fast' : 'standard',
       };
     } catch {
@@ -304,7 +324,7 @@ export class DaemonAccountService implements DaemonAccountController {
     if (!launch) return null;
     const id = launch.pinnedAccountIds[providerId]
       ?? this.store.selected(providerId)?.id;
-    return typeof id === 'string'
+    return isString(id)
       ? this.store.list(providerId).find(account => account.id === id) ?? null
       : null;
   }

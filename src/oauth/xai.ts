@@ -1,9 +1,11 @@
 // xai.ts — native SuperGrok OAuth device-code flow
 
 import { VERSION } from '../constants.js';
+import { isNumber, isObject, isString } from '../runtime/type-guards.js';
 import { positiveSecondsToMs, sleepMs } from './pkce.js';
 import { postOAuthRefresh } from './refresh-http.js';
 import type { OAuthTokenResponse } from './types.js';
+import type { JsonObject } from './responses-websocket/types.js';
 
 const CLIENT_ID = 'b1a00492-073a-47ea-816f-4c329264a828';
 const ISSUER = 'https://auth.x.ai';
@@ -38,7 +40,15 @@ interface XaiOAuthError {
   error?: string;
 }
 
-function oauthHeaders(): Record<string, string> {
+interface XaiOAuthHeaders {
+  [key: string]: string;
+}
+
+function isJsonObject<Value>(value: Value): value is Value & JsonObject {
+  return isObject(value) && !Array.isArray(value);
+}
+
+function oauthHeaders(): XaiOAuthHeaders {
   return {
     Accept: 'application/json',
     'Content-Type': 'application/x-www-form-urlencoded',
@@ -48,17 +58,17 @@ function oauthHeaders(): Record<string, string> {
   };
 }
 
-function assertDeviceCodeData(value: unknown): XaiDeviceCodeData {
-  if (!value || typeof value !== 'object') {
+function assertDeviceCodeData<Value>(value: Value): XaiDeviceCodeData {
+  if (!isJsonObject(value)) {
     throw new Error('xAI device authorization returned an invalid response');
   }
-  const data = value as Partial<XaiDeviceCodeData>;
+  const data = value;
   if (
-    typeof data.device_code !== 'string'
+    !isString(data.device_code)
     || !data.device_code
-    || typeof data.user_code !== 'string'
+    || !isString(data.user_code)
     || !data.user_code
-    || typeof data.verification_uri !== 'string'
+    || !isString(data.verification_uri)
   ) {
     throw new Error('xAI device authorization returned an invalid response');
   }
@@ -71,7 +81,13 @@ function assertDeviceCodeData(value: unknown): XaiDeviceCodeData {
   ) {
     throw new Error('xAI device authorization returned an untrusted verification URL');
   }
-  return data as XaiDeviceCodeData;
+  return {
+    device_code: data.device_code,
+    user_code: data.user_code,
+    verification_uri: data.verification_uri,
+    expires_in: isNumber(data.expires_in) ? data.expires_in : undefined,
+    interval: isNumber(data.interval) ? data.interval : undefined,
+  };
 }
 
 async function requestXaiDeviceCode(): Promise<XaiDeviceCodeData> {
@@ -112,6 +128,7 @@ async function pollXaiDeviceCodeToken(
         client_id: CLIENT_ID,
       }).toString(),
     });
+    // SAFETY: The OAuth token endpoint returns the documented token/error envelope.
     const body = await response.json().catch(() => ({})) as OAuthTokenResponse & XaiOAuthError;
     if (response.ok) return body;
     if (body.error === 'authorization_pending') continue;

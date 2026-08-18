@@ -8,7 +8,7 @@ import {
   removeDaemonRuntimeState,
   writeDaemonRuntimeState,
 } from '../src/daemon/runtime.js';
-import { getDaemonRuntimePath } from '../src/paths.js';
+import { getDaemonRuntimePath } from '../src/config/paths.js';
 
 const roots: string[] = [];
 afterEach(() => {

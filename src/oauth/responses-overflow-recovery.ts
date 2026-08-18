@@ -1,13 +1,13 @@
 import { createHash } from 'node:crypto';
-import { IMAGE_INPUT_TOKEN_ESTIMATE } from '../anthropic-endpoints.js';
+import { IMAGE_INPUT_TOKEN_ESTIMATE } from '../providers/anthropic-endpoints.js';
+import { isBoolean, isNumber, isObject, isString } from '../runtime/type-guards.js';
 import {
   compactResponsesWindow,
   RESPONSES_COMPACT_TIMEOUT_MS,
   ResponsesCompactionError,
   type ResponsesCompactionUsage,
 } from './responses-compaction.js';
-
-type JsonObject = Record<string, unknown>;
+import type { JsonObject, JsonValue } from './responses-websocket/types.js';
 
 const MODEL_OUTPUT_KINDS = new Set([
   'reasoning',
@@ -43,16 +43,16 @@ const REJECTED_DIAGNOSTIC_LIMIT = 16;
 
 export interface OverflowRecoverySource {
   kind: Exclude<OverflowRecoverySourceKind, 'inferred'>;
-  prefix: unknown[];
-  tail: unknown[];
+  prefix: JsonValue[];
+  tail: JsonValue[];
   /** Provider-reported input tokens for the accepted prefix when available. */
   prefixInputTokens?: number;
 }
 
 export interface OverflowRecoveryCandidate {
   source: OverflowRecoverySourceKind;
-  prefix: unknown[];
-  tail: unknown[];
+  prefix: JsonValue[];
+  tail: JsonValue[];
   prefixFingerprint: string;
   tailFingerprint: string;
   estimatedPrefixTokens: number;
@@ -60,7 +60,7 @@ export interface OverflowRecoveryCandidate {
 }
 
 export interface PlanResponsesOverflowRecoveryOptions {
-  fullInput: unknown[];
+  fullInput: JsonValue[];
   sources?: OverflowRecoverySource[];
   compactThreshold: number;
   contextWindow: number;
@@ -78,7 +78,7 @@ export interface ResponsesOverflowRecoveryPlan {
 }
 
 interface ProgressiveOverflowRecoveryStep {
-  input: unknown[];
+  input: JsonValue[];
   estimatedInputTokens: number;
 }
 
@@ -98,7 +98,7 @@ interface ProgressiveOverflowRecoveryAcceptedEvent {
 }
 
 export interface ProgressiveOverflowRecoveryOptions {
-  fullInput: unknown[];
+  fullInput: JsonValue[];
   sources?: OverflowRecoverySource[];
   compactThreshold: number;
   contextWindow: number;
@@ -116,7 +116,7 @@ export interface ProgressiveOverflowRecoveryOptions {
 
 export interface ProgressiveOverflowRecoveryResult {
   recovered: boolean;
-  input: unknown[];
+  input: JsonValue[];
   estimatedInputTokens?: number;
   stages: number;
   reason:
@@ -148,55 +148,58 @@ export interface ResponsesOverflowRecoverySessionOptions {
   deadlineMs?: number;
   finalCreateReserveMs?: number;
   now?: () => number;
-  onDiagnostic?: (event: Record<string, unknown>) => void;
+  onDiagnostic?: (event: JsonObject) => void;
 }
 
 export interface ResponsesOverflowRecoveryRequest {
   reason: OverflowRecoveryReason;
-  input: unknown[];
+  input: JsonValue[];
   sources?: OverflowRecoverySource[];
   estimatedInputTokens?: number;
   forceInitialCompaction?: boolean;
 }
 
-function record(value: unknown): JsonObject | undefined {
-  return value && typeof value === 'object' && !Array.isArray(value)
-    ? value as JsonObject
-    : undefined;
+function record(value: JsonValue): JsonObject | undefined {
+  return isObject(value) && !Array.isArray(value) ? value : undefined;
 }
 
-function responsesItemKind(value: unknown): string {
+function responsesItemKind(value: JsonValue): string {
   const item = record(value);
-  if (!item) return typeof value;
-  if (typeof item.type === 'string') return item.type;
-  if (typeof item.role === 'string') return item.role;
+  if (!item) {
+    if (isString(value)) return 'string';
+    if (isNumber(value)) return 'number';
+    if (isBoolean(value)) return 'boolean';
+    return value === undefined ? 'undefined' : 'object';
+  }
+  if (isString(item.type)) return item.type;
+  if (isString(item.role)) return item.role;
   return 'object';
 }
 
-function isAssistantMessage(value: unknown): boolean {
+function isAssistantMessage(value: JsonValue): boolean {
   const item = record(value);
   return responsesItemKind(value) === 'message' && item?.role !== 'user';
 }
 
-function isModelOutput(value: unknown): boolean {
+function isModelOutput(value: JsonValue): boolean {
   const kind = responsesItemKind(value);
   return (MODEL_OUTPUT_KINDS.has(kind) || kind.endsWith('_call'))
     && (kind !== 'message' || isAssistantMessage(value));
 }
 
-function callId(value: unknown): string | undefined {
+function callId(value: JsonValue): string | undefined {
   const item = record(value);
   const valueId = item?.call_id;
-  return typeof valueId === 'string' && valueId.length > 0 ? valueId : undefined;
+  return isString(valueId) && valueId.length > 0 ? valueId : undefined;
 }
 
-function itemFingerprint(items: unknown[]): string {
+function itemFingerprint(items: JsonValue[]): string {
   return createHash('sha256').update(JSON.stringify(items)).digest('hex').slice(0, 16);
 }
 
-function approximateItemTokens(value: unknown): number {
+function approximateItemTokens(value: JsonValue): number {
   let imageCount = 0;
-  const rawSerialized: unknown = JSON.stringify(value, (_key, nested: unknown) => {
+  const rawSerialized = JSON.stringify(value, (_key, nested) => {
     const item = record(nested);
     if (item?.type === 'input_image' || item?.type === 'input_audio') {
       imageCount += 1;
@@ -204,23 +207,23 @@ function approximateItemTokens(value: unknown): number {
     }
     return nested;
   });
-  const serialized = typeof rawSerialized === 'string' ? rawSerialized : '';
+  const serialized = isString(rawSerialized) ? rawSerialized : '';
   return Math.max(1, Math.ceil(Buffer.byteLength(serialized, 'utf8') / 4))
     + imageCount * IMAGE_INPUT_TOKEN_ESTIMATE;
 }
 
-export function approximateResponsesItemsTokens(items: unknown[]): number {
+export function approximateResponsesItemsTokens(items: JsonValue[]): number {
   return items.reduce<number>((total, item) => total + approximateItemTokens(item), 0);
 }
 
-function fixedPromptTokens(fullInput: unknown[], estimatedInputTokens?: number): number {
+function fixedPromptTokens(fullInput: JsonValue[], estimatedInputTokens?: number): number {
   if (estimatedInputTokens === undefined) return 0;
   return Math.max(0, estimatedInputTokens - approximateResponsesItemsTokens(fullInput));
 }
 
 function dependencyViolation(
-  prefix: unknown[],
-  tail: unknown[],
+  prefix: JsonValue[],
+  tail: JsonValue[],
   trustAcceptedPrefix: boolean,
 ): string | undefined {
   const prefixCalls = new Set<string>();
@@ -228,7 +231,7 @@ function dependencyViolation(
   const tailCalls = new Set<string>();
   const tailOutputs = new Set<string>();
 
-  const collect = (items: unknown[], calls: Set<string>, outputs: Set<string>) => {
+  const collect = (items: JsonValue[], calls: Set<string>, outputs: Set<string>) => {
     for (const item of items) {
       const kind = responsesItemKind(item);
       const id = callId(item);
@@ -264,12 +267,12 @@ interface DependencyCounts {
   tailOutputs: number;
 }
 
-function isToolCall(value: unknown): boolean {
+function isToolCall(value: JsonValue): boolean {
   const kind = responsesItemKind(value);
   return kind.endsWith('_call') || kind === 'function_call' || kind === 'custom_tool_call';
 }
 
-function isToolOutput(value: unknown): boolean {
+function isToolOutput(value: JsonValue): boolean {
   const kind = responsesItemKind(value);
   return TOOL_OUTPUT_KINDS.has(kind) || kind.endsWith('_call_output');
 }
@@ -282,10 +285,12 @@ function isToolOutput(value: unknown): boolean {
  * O(n²) main-thread scan. This tracker initializes once and updates only the
  * call id crossing each cut.
  */
-function inferredDependencyTracker(input: unknown[]): {
-  moveToTail: (value: unknown) => void;
+interface InferredDependencyTracker {
+  moveToTail: (value: JsonValue) => void;
   violation: () => string | undefined;
-} {
+}
+
+function inferredDependencyTracker(input: JsonValue[]): InferredDependencyTracker {
   const counts = new Map<string, DependencyCounts>();
   const crossing = new Set<string>();
   const missingTailProducer = new Set<string>();
@@ -340,11 +345,16 @@ function inferredDependencyTracker(input: unknown[]): {
   };
 }
 
-function inferredBoundary(input: unknown[], cut: number): boolean {
+function inferredBoundary(input: JsonValue[], cut: number): boolean {
   return cut > 0 && isModelOutput(input[cut]) && !isModelOutput(input[cut - 1]);
 }
 
-function sumItemTokens(input: unknown[]): { itemTokens: number[]; total: number } {
+interface ItemTokenSum {
+  itemTokens: number[];
+  total: number;
+}
+
+function sumItemTokens(input: JsonValue[]): ItemTokenSum {
   const itemTokens = input.map(approximateItemTokens);
   return {
     itemTokens,
@@ -357,12 +367,14 @@ function fixedPromptTokensFromTotal(total: number, estimatedInputTokens?: number
   return Math.max(0, estimatedInputTokens - total);
 }
 
-function sourceCandidate(source: OverflowRecoverySource): {
+interface SourceCandidate {
   source: Exclude<OverflowRecoverySourceKind, 'inferred'>;
-  prefix: unknown[];
-  tail: unknown[];
+  prefix: JsonValue[];
+  tail: JsonValue[];
   prefixInputTokens?: number;
-} {
+}
+
+function sourceCandidate(source: OverflowRecoverySource): SourceCandidate {
   return {
     source: source.kind,
     prefix: source.prefix,
@@ -372,18 +384,20 @@ function sourceCandidate(source: OverflowRecoverySource): {
 }
 
 function candidateTokenEstimate(
-  items: unknown[],
+  items: JsonValue[],
   fixedTokens: number,
 ): number {
   return fixedTokens + approximateResponsesItemsTokens(items);
 }
 
-function boundedRejectionRecorder(
-  rejected: ResponsesOverflowRecoveryPlan['rejected'],
-): {
+interface RejectionRecorder {
   reject: (source: OverflowRecoverySourceKind, reason: string) => void;
   count: () => number;
-} {
+}
+
+function boundedRejectionRecorder(
+  rejected: ResponsesOverflowRecoveryPlan['rejected'],
+): RejectionRecorder {
   let rejectedCount = 0;
   return {
     reject: (source, reason) => {
@@ -502,9 +516,9 @@ export function planResponsesOverflowRecovery(
 }
 
 export function estimatedRebasedInputTokens(
-  compactedOutput: unknown[],
-  tail: unknown[],
-  fullInput: unknown[],
+  compactedOutput: JsonValue[],
+  tail: JsonValue[],
+  fullInput: JsonValue[],
   estimatedInputTokens: number | undefined,
   compactOutputTokens?: number,
 ): number {
@@ -670,8 +684,8 @@ export class ResponsesOverflowRecoverySession {
       : { ok: true, remainingMs };
   }
 
-  recordExternalCompaction(
-    error?: unknown,
+  recordExternalCompaction<Cause>(
+    error?: Cause,
     usage?: ResponsesCompactionUsage,
     countContextRejection = true,
   ): void {
@@ -837,7 +851,7 @@ export class ResponsesOverflowRecoverySession {
         rebasedItems: input.length, estimatedRebasedTokens: estimatedInputTokens,
         prefixFingerprint: candidate.prefixFingerprint, tailFingerprint: candidate.tailFingerprint,
         attemptCount: this.attemptedPrefixes.size, compactCallAttempt: claim.attempt, stage,
-        ...(compacted.usage ?? {}),
+        ...compacted.usage,
       });
       this.emit({
         event: 'ws_compaction', outcome: 'completed',
@@ -849,7 +863,7 @@ export class ResponsesOverflowRecoverySession {
         tailItems: candidate.tail.length,
         estimatedRebasedTokens: estimatedInputTokens,
         compactCallAttempt: claim.attempt,
-        ...(compacted.usage ?? {}),
+        ...compacted.usage,
       });
       if (estimatedInputTokens >= this.options.contextWindow) {
         this.emit({
@@ -869,7 +883,7 @@ export class ResponsesOverflowRecoverySession {
         source: candidate.source, contextWindow: this.options.contextWindow,
         prefixFingerprint: candidate.prefixFingerprint, attemptCount: this.attemptedPrefixes.size,
         compactCallAttempt: claim.attempt, stage,
-        errorType: error instanceof Error ? error.name : typeof error,
+        errorType: error instanceof Error ? error.name : 'UnknownError',
         statusCode: compactError?.statusCode, failureClass: compactError?.failureClass,
         errorCode: compactError?.errorCode, providerErrorType: compactError?.errorType,
         errorFingerprint: compactError?.errorFingerprint,
@@ -891,7 +905,7 @@ export class ResponsesOverflowRecoverySession {
     }
   }
 
-  private emit(event: Record<string, unknown>): void {
+  private emit(event: JsonObject): void {
     this.options.onDiagnostic?.(event);
   }
 

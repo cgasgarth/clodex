@@ -138,7 +138,10 @@ export class SecondwindWorkerPool {
       stdin: 'ignore',
       stdout: 'ignore',
       stderr: 'inherit',
-      ipc: message => this.handleResponse(slot, child, message as WorkerResponse),
+      ipc: message => {
+        // SAFETY: Only the paired secondwind worker sends messages to this IPC channel.
+        this.handleResponse(slot, child, message as WorkerResponse);
+      },
       onExit: (_process, exitCode, signalCode, error) => {
         this.handleExit(slot, child, exitCode, signalCode, error);
       },
@@ -158,10 +161,11 @@ export class SecondwindWorkerPool {
     if (response.error) {
       pending.reject(new Error(response.error));
     } else if (response.body) {
-      pending.resolve({
+      const result: WorkerRewriteResult = {
         body: new Uint8Array(response.body),
-        ...(response.stats ? { stats: response.stats } : {}),
-      });
+      };
+      if (response.stats) result.stats = response.stats;
+      pending.resolve(result);
     } else {
       pending.reject(new Error('Secondwind process returned no body'));
     }

@@ -6,26 +6,26 @@ import {
   fmtModel,
   fmtEnabledStar,
   formatModelLabel,
-} from '../ui.js';
+} from '../ui/prompts.js';
 import * as p from '@clack/prompts';
 import { MAX_MODEL_CATALOG } from '../constants.js';
-import { loadPreferences, savePreferences } from '../config.js';
-import { fetchProviderCatalog, providersForPicker } from '../provider-catalog.js';
+import { loadPreferences, savePreferences } from '../config/config.js';
+import { fetchProviderCatalog, providersForPicker } from '../models/provider-catalog.js';
 import type { FavoriteModel, LocalProvider, LocalProviderModel } from '../types.js';
-import { addFavorite, removeFavorite, isFavorite } from '../favorites.js';
+import { addFavorite, removeFavorite, isFavorite } from '../models/favorites.js';
 import {
   canonicalModelAliasName,
   modelAliasMatchesName,
   modelAliasMatchesStoredName,
   modelAliasTarget,
   parseModelAliasAssignment,
-} from '../model-aliases.js';
+} from '../models/aliases.js';
 import {
   browseByProviderChoice,
   buildGlobalFavoriteIndex,
   pickGlobalFavoriteModel,
-} from '../favorites-picker.js';
-import { favoriteProviderDisplayName } from '../favorite-provider-display.js';
+} from '../models/favorites-picker.js';
+import { favoriteProviderDisplayName } from '../models/favorite-provider-display.js';
 import {
   loadHttpProxyRoutes,
   printHttpProxyModels,
@@ -110,16 +110,18 @@ async function selectFavoriteAddition(
   return provider ? { provider, models: [globalPick.model] } : null;
 }
 
-function applyFavoriteAddition(
-  favorites: FavoriteModel[],
-  addition: FavoriteAddition,
-  maxFavorites: number,
-): {
+interface FavoriteAdditionResult {
   favorites: FavoriteModel[];
   addedModels: LocalProviderModel[];
   duplicateCount: number;
   limitReached: boolean;
-} {
+}
+
+function applyFavoriteAddition(
+  favorites: FavoriteModel[],
+  addition: FavoriteAddition,
+  maxFavorites: number,
+): FavoriteAdditionResult {
   let nextFavorites = favorites;
   const addedModels: LocalProviderModel[] = [];
   let duplicateCount = 0;
@@ -248,7 +250,7 @@ export async function runModelsCommand(opts: FavoritesCommandOptions = {}): Prom
 
   if (favoriteProviders.length === 0) {
     p.log.warn('No providers found.');
-    p.log.info(`${pc.dim('Add a provider with ')}${pc.cyan('clodex providers')}${pc.dim('.')}`);
+    p.log.info(`${pc.dim('Add a provider with ')}${pc.cyan('clodex providers')}${pc.dim('./')}`);
     relayOutro('Done');
     return 0;
   }

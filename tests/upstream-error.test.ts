@@ -8,7 +8,7 @@ import {
   isTransientUpstreamStatus,
   sdkUpstreamErrorDetails,
   upstreamHttpStatus,
-} from '../src/upstream-error.js';
+} from '../src/transport/upstream-error.js';
 
 function apiCallError(overrides: {
   statusCode: number;
@@ -23,6 +23,19 @@ function apiCallError(overrides: {
     requestBodyValues: {},
     ...overrides,
   });
+}
+
+function streamStatusFor(code: string | undefined, type: string | undefined): number {
+  const frame = { type: 'error', sequence_number: 0, error: { code, type, message: 'failed' } };
+  return upstreamHttpStatus(frame, formatUpstreamError(frame));
+}
+
+function rateLimitFrame(message: string) {
+  return {
+    type: 'error',
+    sequence_number: 0,
+    error: { type: 'rate_limit_error', code: '429', message },
+  };
 }
 
 describe('sdkUpstreamErrorDetails retry-after extraction', () => {
@@ -217,22 +230,18 @@ describe('provider stream error frames', () => {
     // The same failure must not report a different status depending on whether
     // it landed before or after the first output chunk, so this mirrors
     // @ai-sdk/openai's own getStatusCode discriminators.
-    const statusFor = (code: string | undefined, type: string | undefined) => {
-      const frame = { type: 'error', sequence_number: 0, error: { code, type, message: 'failed' } };
-      return upstreamHttpStatus(frame, formatUpstreamError(frame));
-    };
-    expect(statusFor('rate_limit_exceeded', undefined)).toBe(429);
-    expect(statusFor('insufficient_quota', undefined)).toBe(429);
-    expect(statusFor(undefined, 'authentication_error')).toBe(401);
-    expect(statusFor(undefined, 'permission_error')).toBe(403);
-    expect(statusFor(undefined, 'not_found_error')).toBe(404);
-    expect(statusFor('context_length_exceeded', undefined)).toBe(400);
-    expect(statusFor('invalid_prompt', undefined)).toBe(400);
-    expect(statusFor('overloaded_error', undefined)).toBe(503);
-    expect(statusFor('timeout', undefined)).toBe(504);
-    expect(statusFor('server_error', undefined)).toBe(500);
+    expect(streamStatusFor('rate_limit_exceeded', undefined)).toBe(429);
+    expect(streamStatusFor('insufficient_quota', undefined)).toBe(429);
+    expect(streamStatusFor(undefined, 'authentication_error')).toBe(401);
+    expect(streamStatusFor(undefined, 'permission_error')).toBe(403);
+    expect(streamStatusFor(undefined, 'not_found_error')).toBe(404);
+    expect(streamStatusFor('context_length_exceeded', undefined)).toBe(400);
+    expect(streamStatusFor('invalid_prompt', undefined)).toBe(400);
+    expect(streamStatusFor('overloaded_error', undefined)).toBe(503);
+    expect(streamStatusFor('timeout', undefined)).toBe(504);
+    expect(streamStatusFor('server_error', undefined)).toBe(500);
     // clodex's own synthetic frames carry the stringified status as the code.
-    expect(statusFor('429', 'rate_limit_error')).toBe(429);
+    expect(streamStatusFor('429', 'rate_limit_error')).toBe(429);
   });
 
   it('never infers a status from digits in the provider message', () => {
@@ -307,16 +316,11 @@ describe('provider stream error frames', () => {
   it('recovers a rate-limit backoff hint that survives only in message text', () => {
     // The AI SDK's chunk schema is a closed zod object, so it strips
     // `retry_after_seconds`; the hint reaches us only as prose.
-    const frame = (message: string) => ({
-      type: 'error',
-      sequence_number: 0,
-      error: { type: 'rate_limit_error', code: '429', message },
-    });
-    expect(sdkUpstreamErrorDetails(frame('throttled; retry after 7s')))
+    expect(sdkUpstreamErrorDetails(rateLimitFrame('throttled; retry after 7s')))
       .toMatchObject({ statusCode: 429, isRetryable: true, retryAfterSeconds: 7 });
     // Clamped so a hostile or absurd hint cannot park a client past the
     // 120s no-event stream abort.
-    expect(sdkUpstreamErrorDetails(frame('throttled; retry after 3600s'))?.retryAfterSeconds).toBe(60);
+    expect(sdkUpstreamErrorDetails(rateLimitFrame('throttled; retry after 3600s'))?.retryAfterSeconds).toBe(60);
   });
 
   it('preserves the WebSocket transport code and treats it as transient', () => {

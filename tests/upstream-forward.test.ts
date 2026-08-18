@@ -1,6 +1,6 @@
 // tests/upstream-forward.test.ts
 import { describe, it, expect, vi } from 'bun:test';
-import { anthropicUpstreamHeaders, fetchWithOAuthRetry } from '../src/upstream-forward.js';
+import { anthropicUpstreamHeaders, fetchWithOAuthRetry } from '../src/transport/upstream-forward.js';
 
 describe('anthropicUpstreamHeaders', () => {
   it('includes bearer and x-api-key', () => {

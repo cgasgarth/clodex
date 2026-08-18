@@ -4,14 +4,16 @@ import {
   secondwindWorkerCount,
   secondwindWorkerShard,
 } from '../src/daemon/secondwind-worker-pool.js';
+import type { JsonObject } from './test-helpers.js';
 
 const workerUrl = new URL('./fixtures/secondwind-pool-worker.ts', import.meta.url);
 
 function decode(body: Uint8Array): { workerId: string } {
+  // SAFETY: The test fixture defines the asserted runtime shape.
   return JSON.parse(new TextDecoder().decode(body)) as { workerId: string };
 }
 
-function encode(request: Record<string, unknown>): Uint8Array {
+function encode(request: JsonObject): Uint8Array {
   return new TextEncoder().encode(JSON.stringify(request));
 }
 

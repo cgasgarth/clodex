@@ -1,14 +1,14 @@
 import { importActual } from './bun-import-actual.js';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'bun:test';
 import { addProviderFromTemplate } from '../src/registry/add-template.js';
-import { credentialInstanceAuthRef } from '../src/credential-helper.js';
-import * as env from '../src/env.js';
+import { credentialInstanceAuthRef } from '../src/credentials/helper.js';
+import * as env from '../src/config/environment.js';
 import * as providerFactory from '../src/provider-factory.js';
 import * as fetchTemplate from '../src/registry/fetch-template-models.js';
 import * as io from '../src/registry/io.js';
 import * as cleanupJournal from '../src/registry/credential-cleanup-journal.js';
 import * as pricing from '../src/registry/pricing.js';
-import type { ProviderTemplate } from '../src/provider-templates.js';
+import type { ProviderTemplate } from '../src/providers/templates.js';
 import type { ProviderRegistry } from '../src/registry/types.js';
 import { asMocked, createHoisted } from './test-helpers.js';
 
@@ -18,6 +18,7 @@ const lockState = createHoisted(() => ({
   credentialActive: false,
   providerActive: false,
   credentialTails: new Map<string, Promise<void>>(),
+  // SAFETY: The test fixture defines the asserted runtime shape.
   afterRegistryUnlock: null as null | (() => void),
   providerTails: new Map<string, Promise<void>>(),
 }));
@@ -26,9 +27,8 @@ const journalState = createHoisted(() => ({
 }));
 let registryState: ProviderRegistry;
 
-vi.mock('../src/env.js', () => {
-  const importOriginal = <T>() => importActual<T>('../src/env.js', import.meta.url);
-  const actual = importOriginal<typeof import('../src/env.js')>();
+vi.mock('../src/config/environment.js', () => {
+  const actual = importActual<typeof import('../src/config/environment.js')>('../src/config/environment.js', import.meta.url);
   return {
     ...actual,
     deleteProviderCredential: vi.fn(),
@@ -63,7 +63,7 @@ vi.mock('../src/registry/pricing.js', () => ({
   buildPricingIndex: vi.fn(),
 }));
 vi.mock('../src/registry/lock.js', () => ({
-  withRegistryWriteLock: vi.fn(async (operation: () => unknown) => {
+  withRegistryWriteLock: vi.fn(async <T>(operation: () => T | Promise<T>): Promise<T> => {
     const previous = lockState.registryTail;
     let release!: () => void;
     const gate = new Promise<void>(resolve => { release = resolve; });
@@ -80,7 +80,10 @@ vi.mock('../src/registry/lock.js', () => ({
       afterUnlock?.();
     }
   }),
-  withCredentialMutationLock: vi.fn(async (authRef: string, operation: () => unknown) => {
+  withCredentialMutationLock: vi.fn(async <T>(
+    authRef: string,
+    operation: () => T | Promise<T>,
+  ): Promise<T> => {
     const previous = lockState.credentialTails.get(authRef) ?? Promise.resolve();
     let release!: () => void;
     const gate = new Promise<void>(resolve => {
@@ -100,7 +103,10 @@ vi.mock('../src/registry/lock.js', () => ({
       }
     }
   }),
-  withProviderMutationLock: vi.fn(async (providerSlot: string, operation: () => unknown) => {
+  withProviderMutationLock: vi.fn(async <T>(
+    providerSlot: string,
+    operation: () => T | Promise<T>,
+  ): Promise<T> => {
     const previous = lockState.providerTails.get(providerSlot) ?? Promise.resolve();
     let release!: () => void;
     const gate = new Promise<void>(resolve => {
@@ -366,6 +372,7 @@ describe('registry/add-template', () => {
     });
     expect(env.provisionProviderCredential).not.toHaveBeenCalled();
     expect(env.saveProviderCredential).not.toHaveBeenCalled();
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const savedRegistry = asMocked(io.saveRegistry).mock.calls.at(-1)?.[0] as ProviderRegistry;
     expect(savedRegistry.providers[0]?.authRef).toBe('none:anonymous');
   });
@@ -437,6 +444,7 @@ describe('registry/add-template', () => {
     );
     expect(env.saveProviderCredential).not.toHaveBeenCalled();
     
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const savedRegistry = asMocked(io.saveRegistry).mock.calls.at(-1)?.[0] as ProviderRegistry;
     expect(savedRegistry.providers).toHaveLength(1); // Replaced, not duplicated
     expect(savedRegistry.providers[0]?.name).toBe('Test Provider');

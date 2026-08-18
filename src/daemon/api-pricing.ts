@@ -8,10 +8,19 @@ const LONG_CONTEXT_INPUT_MULTIPLIER = 2;
 const LONG_CONTEXT_OUTPUT_MULTIPLIER = 1.5;
 const CACHE_WRITE_INPUT_MULTIPLIER = 1.25;
 
-export interface ApiTokenRates {
+interface ApiTokenRates {
   input: number;
   cachedInput: number;
   output: number;
+}
+
+interface ApiRateCatalog {
+  readonly [modelId: string]: ApiTokenRates;
+}
+
+interface GrokContextRates {
+  shortContext: ApiTokenRates;
+  longContext: ApiTokenRates;
 }
 
 export type ApiProcessingMode = 'standard' | 'fast';
@@ -33,29 +42,26 @@ export interface ApiPricedUsage {
 }
 
 /** Standard processing prices in USD per one million tokens. */
-export const GPT_5_6_API_RATES: Readonly<Record<string, ApiTokenRates>> = {
+export const GPT_5_6_API_RATES: ApiRateCatalog = {
   'gpt-5.6-sol': { input: 5, cachedInput: 0.5, output: 30 },
   'gpt-5.6-terra': { input: 2, cachedInput: 0.2, output: 12 },
   'gpt-5.6-luna': { input: 0.2, cachedInput: 0.02, output: 1.2 },
 };
 
 /** Fast processing prices in USD per one million tokens (2x Standard). */
-export const GPT_5_6_PRIORITY_API_RATES: Readonly<Record<string, ApiTokenRates>> = {
+export const GPT_5_6_PRIORITY_API_RATES: ApiRateCatalog = {
   'gpt-5.6-sol': { input: 10, cachedInput: 1, output: 60 },
   'gpt-5.6-terra': { input: 4, cachedInput: 0.4, output: 24 },
   'gpt-5.6-luna': { input: 0.4, cachedInput: 0.04, output: 2.4 },
 };
 
 /** Grok 4.5 API prices used as the public API equivalent for subscription-only Grok 4.6. */
-export const GROK_4_5_API_RATES: Readonly<{
-  shortContext: ApiTokenRates;
-  longContext: ApiTokenRates;
-}> = {
+export const GROK_4_5_API_RATES: Readonly<GrokContextRates> = {
   shortContext: { input: 2, cachedInput: 0.3, output: 6 },
   longContext: { input: 4, cachedInput: 0.6, output: 12 },
 };
 
-export function normalizeApiProcessingMode(value: unknown): ApiProcessingMode {
+export function normalizeApiProcessingMode<Value>(value: Value): ApiProcessingMode {
   return value === 'fast' || value === 'priority' ? 'fast' : 'standard';
 }
 

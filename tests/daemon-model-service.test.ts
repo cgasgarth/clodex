@@ -4,7 +4,7 @@ import {
   type ModelServiceDependencies,
 } from '../src/daemon/model-service.js';
 import type { LoadedHttpProxyRoutes } from '../src/http-proxy/index.js';
-import type { ProxyRoute } from '../src/proxy.js';
+import type { ProxyRoute } from '../src/proxy/index.js';
 import type { FavoriteModel, UserPreferences } from '../src/types.js';
 
 const modelSeeds = [

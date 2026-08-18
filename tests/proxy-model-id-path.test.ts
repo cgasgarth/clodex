@@ -1,12 +1,12 @@
 import { describe, it, expect, afterEach } from 'bun:test';
 import http from 'node:http';
-import { startProxy, type ProxyHandle } from '../src/proxy.js';
+import { startProxy, type ProxyHandle } from '../src/proxy/index.js';
 
 describe('proxy GET /v1/models with models/ prefix ids', () => {
   let handle: ProxyHandle | null = null;
 
-  afterEach(() => {
-    handle?.close();
+  afterEach(async () => {
+    await handle?.close();
     handle = null;
   });
 
@@ -28,6 +28,7 @@ describe('proxy GET /v1/models with models/ prefix ids', () => {
 
     const list = await get('/v1/models');
     expect(list.status).toBe(200);
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const listJson = JSON.parse(list.body) as { data: Array<{ id: string; context_window: number }> };
     expect(listJson.data[0]?.id).toBe('gemini-3.5-flash[1m]');
     expect(listJson.data[0]?.context_window).toBe(1_000_000);

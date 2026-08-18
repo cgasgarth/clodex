@@ -5,7 +5,7 @@
  */
 
 function reverseSegment(value: string): string {
-  return [...value].reverse().join('');
+  return Array.from(value).toReversed().join('');
 }
 
 /** `anthropic-{provider}__{model}` → reverse provider + model segments (self-inverse). */

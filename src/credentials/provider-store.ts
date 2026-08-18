@@ -1,10 +1,17 @@
 import { randomUUID } from 'node:crypto';
+import type { ProviderDataValue } from '../types.js';
+import {
+  isBoolean,
+  isNumber,
+  isObject,
+  isString,
+} from '../runtime/type-guards.js';
 import {
   deleteCredentialHelperAccount,
   isCredentialAccountInstance,
   readCredentialHelperAccount,
   writeCredentialHelperAccount,
-} from '../credential-helper.js';
+} from './helper.js';
 import {
   oauthCredentialToKeychainJson,
   parseStoredOAuthCredential,
@@ -136,7 +143,7 @@ export async function resolveProviderOAuthAccountId(
 export async function resolveProviderOAuthProviderData(
   authRef: string,
   diag?: (msg: string) => void,
-): Promise<Record<string, unknown> | undefined> {
+): Promise<Record<string, ProviderDataValue> | undefined> {
   const parsed = parseAuthRef(authRef);
   if (
     !parsed
@@ -145,7 +152,39 @@ export async function resolveProviderOAuthProviderData(
     || !oauthProviderIdFromAccount(parsed.account)
   ) return undefined;
   const raw = await readStoredCredential(parsed, diag);
-  return parseStoredOAuthCredential(raw)?.providerData;
+  const providerData = parseStoredOAuthCredential(raw)?.providerData;
+  if (!providerData) return undefined;
+  const normalized: Record<string, ProviderDataValue> = {};
+  for (const [key, value] of Object.entries(providerData)) {
+    const parsedValue = parseProviderDataValue(value);
+    if (parsedValue === undefined) return undefined;
+    normalized[key] = parsedValue;
+  }
+  return normalized;
+}
+
+function parseProviderDataValue<Value>(value: Value): ProviderDataValue | undefined {
+  if (value === null) return null;
+  if (isString(value)) return value;
+  if (isBoolean(value)) return value;
+  if (isNumber(value)) return Number.isFinite(value) ? value : undefined;
+  if (Array.isArray(value)) {
+    const values: ProviderDataValue[] = [];
+    for (const entry of value) {
+      const parsed = parseProviderDataValue(entry);
+      if (parsed === undefined) return undefined;
+      values.push(parsed);
+    }
+    return values;
+  }
+  if (!isObject(value)) return undefined;
+  const record: Record<string, ProviderDataValue> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    const parsed = parseProviderDataValue(entry);
+    if (parsed === undefined) return undefined;
+    record[key] = parsed;
+  }
+  return record;
 }
 
 function decodeProviderSecret(raw: string | null, allowOpaqueJson = false): string | null {
@@ -155,14 +194,15 @@ function decodeProviderSecret(raw: string | null, allowOpaqueJson = false): stri
   const oauth = parseStoredOAuthCredential(trimmed);
   if (oauth) return oauth.access;
   try {
+    // SAFETY: Only the named optional credential fields are read and validated below.
     const parsed = JSON.parse(trimmed) as { type?: string; access?: string; token?: string };
     if (parsed.type === 'wellknown') {
-      return typeof parsed.token === 'string' && parsed.token.trim()
+      return isString(parsed.token) && parsed.token.trim()
         ? parsed.token.trim()
         : null;
     }
     if (allowOpaqueJson && parsed.type === 'oauth') {
-      return typeof parsed.access === 'string' && parsed.access.trim()
+      return isString(parsed.access) && parsed.access.trim()
         ? parsed.access.trim()
         : null;
     }
@@ -187,12 +227,13 @@ function cacheOAuthCredential(
   stateKey: string,
   credential: StoredOAuthCredential,
 ): void {
-  oauthCredentialCache.set(stateKey, {
+  const cached: CachedOAuthCredential = {
     access: credential.access,
     expires: credential.expires,
-    ...(credential.accessRejected === true ? { accessRejected: true as const } : {}),
     checkedAt: Date.now(),
-  });
+  };
+  if (credential.accessRejected === true) cached.accessRejected = true;
+  oauthCredentialCache.set(stateKey, cached);
 }
 
 function cachedOAuthCredentialIsUsable(

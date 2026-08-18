@@ -33,8 +33,9 @@ async function run(command: string[], cwd: string): Promise<void> {
 
 async function installedGlobally(globalManifestPath: string): Promise<boolean> {
   try {
+    // SAFETY: This local package manifest is used only for an optional dependency lookup.
     const manifest = JSON.parse(await readFile(globalManifestPath, 'utf8')) as {
-      dependencies?: Record<string, unknown>;
+      dependencies?: Record<string, string>;
     };
     return Object.hasOwn(manifest.dependencies ?? {}, PACKAGE_NAME);
   } catch {
@@ -81,7 +82,9 @@ export async function installGlobalCheckout(
     }
     await mkdir(packageDirectory, { recursive: true, mode: 0o700 });
     const nextArchive = `${stableArchive}.${process.pid}.next`;
-    await copyFile(join(packDirectory, archives[0]!), nextArchive);
+    const archive = archives[0];
+    if (!archive) throw new Error('bun pm pack did not produce an archive');
+    await copyFile(join(packDirectory, archive), nextArchive);
     await rename(nextArchive, stableArchive);
     await run([
       process.execPath,

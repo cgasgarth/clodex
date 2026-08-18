@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { isCredentialAccountInstance } from '../../credential-helper.js';
+import { isCredentialAccountInstance } from '../helper.js';
 import {
   getCredentialMutationLockPath,
   withRegistryWriteLock,
@@ -143,12 +143,13 @@ function persistUnverifiableKeyringDeletion(
   blockLegacy = false,
 ): boolean {
   try {
-    writeKeyringJournal(keyring, account, {
+    const journal: KeyringChunkJournal = {
       mode: 'delete',
       generations: [],
-      ...(blockLegacy ? { blockLegacy: true } : {}),
       unverifiable: true,
-    });
+    };
+    if (blockLegacy) journal.blockLegacy = true;
+    writeKeyringJournal(keyring, account, journal);
     diag?.('unverifiable credential state was marked for verified deletion');
     return true;
   } catch {
@@ -385,9 +386,9 @@ function writeKeyringAccountLocked(
         mode: 'short',
         generations: previousMarker ? [previousMarker] : [],
         shortDigest,
-        ...(previousShortDigest ? { fallbackShortDigest: previousShortDigest } : {}),
-        ...(unpublished ? { unpublished: true } : {}),
       };
+      if (previousShortDigest) transitionJournal.fallbackShortDigest = previousShortDigest;
+      if (unpublished) transitionJournal.unpublished = true;
       writeKeyringJournal(keyring, account, transitionJournal);
       accountEntry.setPassword(key);
       if (unpublished) {
@@ -417,9 +418,9 @@ function writeKeyringAccountLocked(
     const transitionJournal: KeyringChunkJournal = {
       mode: 'write',
       generations: [marker, ...(previousMarker ? [previousMarker] : [])],
-      ...(previousShortDigest ? { fallbackShortDigest: previousShortDigest } : {}),
-      ...(unpublished ? { unpublished: true } : {}),
     };
+    if (previousShortDigest) transitionJournal.fallbackShortDigest = previousShortDigest;
+    if (unpublished) transitionJournal.unpublished = true;
     writeKeyringJournal(keyring, account, transitionJournal);
     for (const [i, chunk] of chunks.entries()) {
       new keyring.Entry(KEYRING_CHUNK_SERVICE, keyringChunkAccount(account, marker, i)).setPassword(
@@ -638,13 +639,14 @@ export async function deleteKeyringAccount(
         diag?.('keyring cleanup has too many pending generations');
         return false;
       }
-      writeKeyringJournal(keyring, account, {
+      const deleteJournal: KeyringChunkJournal = {
         mode: 'delete',
         generations,
-        ...(shortDigest ? { shortDigest } : {}),
-        ...(blockLegacy ? { blockLegacy: true } : {}),
-        ...(unverifiable ? { unverifiable: true } : {}),
-      });
+      };
+      if (shortDigest) deleteJournal.shortDigest = shortDigest;
+      if (blockLegacy) deleteJournal.blockLegacy = true;
+      if (unverifiable) deleteJournal.unverifiable = true;
+      writeKeyringJournal(keyring, account, deleteJournal);
       return reconcileKeyringJournal(keyring, account, diag);
     } catch (err) {
       diag?.(classifyKeyringError(err));

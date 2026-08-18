@@ -1,3 +1,4 @@
+import { isObject, isString } from '../runtime/type-guards.js';
 import { randomUUID } from 'node:crypto';
 import {
   chmodSync,
@@ -8,7 +9,9 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { dirname } from 'node:path';
-import { getDaemonAccountsPath } from '../paths.js';
+import { getDaemonAccountsPath } from '../config/paths.js';
+import { diagnosticRecord } from '../observability/trace-log.js';
+import type { DiagnosticValue } from '../observability/trace-log.js';
 
 export const MAX_DAEMON_ACCOUNTS = 5;
 const ACCOUNT_STORE_VERSION = 2;
@@ -43,48 +46,62 @@ function normalizeLabel(label: string): string {
   return label.trim().replace(/\s+/g, ' ').slice(0, 80);
 }
 
-function parseProviderId(value: unknown): ManagedOAuthProviderId | null {
-  return value === 'openai-oauth' || value === 'xai-oauth' ? value : null;
+interface ParsedDaemonAccountState {
+  state: DaemonAccountState;
+  migrated: boolean;
+}
+
+interface UntrustedDaemonAccountState {
+  version?: DiagnosticValue;
+  accounts?: DiagnosticValue;
+  selectedAccountIds?: DiagnosticValue;
+  selectedAccountId?: DiagnosticValue;
+}
+
+function parseProviderId(value: DiagnosticValue): ManagedOAuthProviderId | null {
+  if (!isString(value)) return null;
+  if (value === 'openai-oauth') return 'openai-oauth';
+  if (value === 'xai-oauth') return 'xai-oauth';
+  return null;
 }
 
 function parseAccount(
-  value: unknown,
+  value: DiagnosticValue,
   fallbackProviderId?: ManagedOAuthProviderId,
 ): DaemonAccountRecord | null {
-  if (!value || typeof value !== 'object') return null;
-  const account = value as Partial<DaemonAccountRecord>;
+  if (!value || !isObject(value)) return null;
+  const account = diagnosticRecord(value);
   if (
-    typeof account.id !== 'string'
+    !isString(account.id)
     || !account.id
-    || typeof account.label !== 'string'
+    || !isString(account.label)
     || !normalizeLabel(account.label)
-    || typeof account.authRef !== 'string'
+    || !isString(account.authRef)
     || !account.authRef
-    || typeof account.createdAt !== 'string'
-    || typeof account.updatedAt !== 'string'
+    || !isString(account.createdAt)
+    || !isString(account.updatedAt)
   ) return null;
   const providerId = parseProviderId(account.providerId) ?? fallbackProviderId;
   if (!providerId) return null;
-  return {
+  const parsedAccount: DaemonAccountRecord = {
     id: account.id,
     providerId,
     label: normalizeLabel(account.label),
-    ...(typeof account.email === 'string' && account.email.trim()
-      ? { email: account.email.trim().slice(0, 320) }
-      : {}),
-    ...(typeof account.accountId === 'string' && account.accountId.trim()
-      ? { accountId: account.accountId.trim().slice(0, 200) }
-      : {}),
     authRef: account.authRef,
     createdAt: account.createdAt,
     updatedAt: account.updatedAt,
   };
+  if (isString(account.email) && account.email.trim()) {
+    parsedAccount.email = account.email.trim().slice(0, 320);
+  }
+  if (isString(account.accountId) && account.accountId.trim()) {
+    parsedAccount.accountId = account.accountId.trim().slice(0, 200);
+  }
+  return parsedAccount;
 }
 
-function parseState(raw: string): { state: DaemonAccountState; migrated: boolean } {
-  const parsed = JSON.parse(raw) as Partial<DaemonAccountState> & {
-    selectedAccountId?: unknown;
-  };
+function parseState(raw: string): ParsedDaemonAccountState {
+  const parsed: UntrustedDaemonAccountState = JSON.parse(raw);
   if ((parsed.version !== 1 && parsed.version !== ACCOUNT_STORE_VERSION) || !Array.isArray(parsed.accounts)) {
     throw new Error('Managed account store has an unsupported version');
   }
@@ -100,7 +117,10 @@ function parseState(raw: string): { state: DaemonAccountState; migrated: boolean
   ) {
     throw new Error('Managed account store contains invalid accounts');
   }
-  const savedSelections = !migrated && parsed.selectedAccountIds && typeof parsed.selectedAccountIds === 'object'
+  const savedSelections = !migrated
+    && parsed.selectedAccountIds
+    && isObject(parsed.selectedAccountIds)
+    && !Array.isArray(parsed.selectedAccountIds)
     ? parsed.selectedAccountIds
     : {};
   const selectedAccountIds: DaemonAccountState['selectedAccountIds'] = {};
@@ -108,7 +128,7 @@ function parseState(raw: string): { state: DaemonAccountState; migrated: boolean
     const candidate = migrated && providerId === 'openai-oauth'
       ? parsed.selectedAccountId
       : savedSelections[providerId];
-    const selected = typeof candidate === 'string'
+    const selected = isString(candidate)
       && accounts.some(account => account.providerId === providerId && account.id === candidate)
       ? candidate
       : accounts.find(account => account.providerId === providerId)?.id;
@@ -134,7 +154,9 @@ export class DaemonAccountStore {
       if (parsed.migrated) this.save(parsed.state);
       return parsed.state;
     } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
+      const code = isObject(error) && 'code' in error && isString(error.code)
+        ? error.code
+        : undefined;
       if (code === 'ENOENT') {
         return { version: ACCOUNT_STORE_VERSION, selectedAccountIds: {}, accounts: [] };
       }
@@ -183,12 +205,12 @@ export class DaemonAccountStore {
       id: account.id ?? randomUUID(),
       providerId,
       label,
-      ...(account.email ? { email: account.email.trim() } : {}),
-      ...(account.accountId ? { accountId: account.accountId.trim() } : {}),
       authRef: account.authRef,
       createdAt: now,
       updatedAt: now,
     };
+    if (account.email) record.email = account.email.trim();
+    if (account.accountId) record.accountId = account.accountId.trim();
     state.accounts.push(record);
     state.selectedAccountIds[record.providerId] ??= record.id;
     this.save(state);

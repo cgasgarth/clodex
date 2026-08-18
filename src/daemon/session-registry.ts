@@ -71,7 +71,7 @@ export class DaemonSessionRegistry {
       }
     }
     return [...this.sessions.values()]
-      .sort((left, right) => right.lastActivityAt.localeCompare(left.lastActivityAt))
-      .map(({ requestIds: _requestIds, ...session }) => ({ ...session }));
+      .toSorted((left, right) => right.lastActivityAt.localeCompare(left.lastActivityAt))
+      .map(({ requestIds: _requestIds, ...session }) => Object.assign({}, session));
   }
 }

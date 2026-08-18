@@ -1,3 +1,4 @@
+import { isNumber, isObject, isString } from '../runtime/type-guards.js';
 import { createHash } from 'node:crypto';
 import {
   chmodSync,
@@ -11,7 +12,7 @@ import { Database } from 'bun:sqlite';
 import {
   getDaemonMetricsDbPath,
   getDaemonMetricsPath,
-} from '../paths.js';
+} from '../config/paths.js';
 import {
   effectiveApiProcessingMode,
   estimateApiCost,
@@ -19,6 +20,13 @@ import {
   type ApiProcessingMode,
   type ApiCostBreakdown,
 } from './api-pricing.js';
+import type { JsonValue } from '../oauth/responses-websocket/types.js';
+
+declare global {
+  interface Array<T> {
+    toSorted(compareFn?: (left: T, right: T) => number): T[];
+  }
+}
 
 const METRICS_RETENTION_MS = 400 * 24 * 60 * 60_000;
 const ONE_MINUTE_MS = 60_000;
@@ -147,32 +155,29 @@ export function hashSessionId(value: string | undefined): string | undefined {
     : undefined;
 }
 
-function safeInteger(value: unknown): number {
-  return typeof value === 'number' && Number.isFinite(value)
+function safeInteger(value: JsonValue): number {
+  return isNumber(value) && Number.isFinite(value)
     ? Math.max(0, Math.round(value))
     : 0;
 }
 
-function safeIdentifier(value: unknown, max: number): string | undefined {
-  return typeof value === 'string' && value.trim()
+function safeIdentifier(value: JsonValue, max: number): string | undefined {
+  return isString(value) && value.trim()
     ? value.trim().slice(0, max)
     : undefined;
 }
 
 function parseMetricLine(line: string): DaemonMetricEvent | null {
   try {
-    const value = JSON.parse(line) as Partial<DaemonMetricEvent>;
+    const value: Partial<DaemonMetricEvent> = JSON.parse(line);
     if (
-      typeof value.timestamp !== 'string'
+      !isString(value.timestamp)
       || !Number.isFinite(Date.parse(value.timestamp))
-      || typeof value.modelId !== 'string'
-      || typeof value.provider !== 'string'
+      || !isString(value.modelId)
+      || !isString(value.provider)
     ) return null;
-    return {
+    const event: DaemonMetricEvent = {
       timestamp: value.timestamp,
-      ...(safeIdentifier(value.requestId, 100) ? { requestId: safeIdentifier(value.requestId, 100) } : {}),
-      ...(safeIdentifier(value.sessionHash, 32) ? { sessionHash: safeIdentifier(value.sessionHash, 32) } : {}),
-      ...(safeIdentifier(value.accountId, 100) ? { accountId: safeIdentifier(value.accountId, 100) } : {}),
       processingMode: normalizeApiProcessingMode(value.processingMode),
       modelId: value.modelId.slice(0, 200),
       provider: value.provider.slice(0, 100),
@@ -180,21 +185,25 @@ function parseMetricLine(line: string): DaemonMetricEvent | null {
       cachedInputTokens: safeInteger(value.cachedInputTokens),
       cacheWriteTokens: safeInteger(value.cacheWriteTokens),
       outputTokens: safeInteger(value.outputTokens),
-      ...(value.durationMs !== undefined ? { durationMs: safeInteger(value.durationMs) } : {}),
       error: value.error === true,
       cancelled: value.cancelled === true,
     };
+    const requestId = safeIdentifier(value.requestId, 100);
+    const sessionHash = safeIdentifier(value.sessionHash, 32);
+    const accountId = safeIdentifier(value.accountId, 100);
+    if (requestId) event.requestId = requestId;
+    if (sessionHash) event.sessionHash = sessionHash;
+    if (accountId) event.accountId = accountId;
+    if (value.durationMs !== undefined) event.durationMs = safeInteger(value.durationMs);
+    return event;
   } catch {
     return null;
   }
 }
 
 function rowToEvent(row: MetricRow): DaemonMetricEvent {
-  return {
+  const event: DaemonMetricEvent = {
     timestamp: row.timestamp,
-    ...(row.request_id ? { requestId: row.request_id } : {}),
-    ...(row.session_hash ? { sessionHash: row.session_hash } : {}),
-    ...(row.account_id ? { accountId: row.account_id } : {}),
     processingMode: normalizeApiProcessingMode(row.processing_mode),
     modelId: row.model_id,
     provider: row.provider,
@@ -202,10 +211,14 @@ function rowToEvent(row: MetricRow): DaemonMetricEvent {
     cachedInputTokens: row.cached_input_tokens,
     cacheWriteTokens: row.cache_write_tokens,
     outputTokens: row.output_tokens,
-    ...(row.duration_ms !== null ? { durationMs: row.duration_ms } : {}),
     error: row.error === 1,
     cancelled: row.cancelled === 1,
   };
+  if (row.request_id) event.requestId = row.request_id;
+  if (row.session_hash) event.sessionHash = row.session_hash;
+  if (row.account_id) event.accountId = row.account_id;
+  if (row.duration_ms !== null) event.durationMs = row.duration_ms;
+  return event;
 }
 
 function emptyBucket(timestampMs: number): DaemonMetricBucket {
@@ -276,11 +289,11 @@ function aggregateMetricEvents(events: DaemonMetricEvent[]): PersistedMetricAggr
     const aggregate = aggregates.get(key) ?? {
       ...emptyBucket(timestampMs),
       timestampMs,
-      ...(event.accountId ? { accountId: event.accountId } : {}),
       processingMode,
       modelId: event.modelId,
       provider: event.provider,
     };
+    if (event.accountId) aggregate.accountId = event.accountId;
     aggregate.inputTokens += safeInteger(event.inputTokens);
     aggregate.cachedInputTokens += safeInteger(event.cachedInputTokens);
     aggregate.cacheWriteTokens += safeInteger(event.cacheWriteTokens);
@@ -300,7 +313,7 @@ function aggregateMetricEvents(events: DaemonMetricEvent[]): PersistedMetricAggr
     addCost(aggregate, estimateApiCost(usage), effectiveApiProcessingMode(usage));
     aggregates.set(key, aggregate);
   }
-  return [...aggregates.values()].sort((left, right) =>
+  return [...aggregates.values()].toSorted((left, right) =>
     left.timestampMs - right.timestampMs
     || (left.accountId ?? '').localeCompare(right.accountId ?? '')
     || left.modelId.localeCompare(right.modelId)
@@ -309,7 +322,7 @@ function aggregateMetricEvents(events: DaemonMetricEvent[]): PersistedMetricAggr
 
 function parseMetricBatch(payload: string): PersistedMetricAggregate[] {
   try {
-    const values: unknown = JSON.parse(payload);
+    const values: JsonValue = JSON.parse(payload);
     if (!Array.isArray(values)) return [];
     return values.flatMap(value => normalizePersistedMetricAggregate(value));
   } catch {
@@ -317,19 +330,45 @@ function parseMetricBatch(payload: string): PersistedMetricAggregate[] {
   }
 }
 
-function normalizePersistedMetricAggregate(value: unknown): PersistedMetricAggregate[] {
-  if (!value || typeof value !== 'object') return [];
-  const row = value as Record<string, unknown>;
+interface PersistedMetricInput {
+  timestampMs?: JsonValue;
+  timestamp?: JsonValue;
+  accountId?: JsonValue;
+  processingMode?: JsonValue;
+  modelId?: JsonValue;
+  provider?: JsonValue;
+  inputTokens?: JsonValue;
+  cachedInputTokens?: JsonValue;
+  cacheWriteTokens?: JsonValue;
+  outputTokens?: JsonValue;
+  requests?: JsonValue;
+  errors?: JsonValue;
+  cancellations?: JsonValue;
+  durationMs?: JsonValue;
+  inputCost?: JsonValue;
+  cacheCost?: JsonValue;
+  outputCost?: JsonValue;
+  totalCost?: JsonValue;
+  pricedRequests?: JsonValue;
+  unpricedRequests?: JsonValue;
+  standardRequests?: JsonValue;
+  fastRequests?: JsonValue;
+  standardCost?: JsonValue;
+  fastCost?: JsonValue;
+}
+
+function normalizePersistedMetricAggregate(value: JsonValue): PersistedMetricAggregate[] {
+  if (!value || !isObject(value) || Array.isArray(value)) return [];
+  const row: PersistedMetricInput = value;
   if (!Number.isFinite(row.timestampMs)
-    || typeof row.modelId !== 'string'
-    || typeof row.provider !== 'string') return [];
+    || !isString(row.modelId)
+    || !isString(row.provider)) return [];
   const timestampMs = Number(row.timestampMs);
   const bucket = emptyBucket(timestampMs);
-  return [{
+  const aggregate: PersistedMetricAggregate = {
     ...bucket,
-    timestamp: typeof row.timestamp === 'string' ? row.timestamp : bucket.timestamp,
+    timestamp: isString(row.timestamp) ? row.timestamp : bucket.timestamp,
     timestampMs,
-    ...(typeof row.accountId === 'string' ? { accountId: row.accountId } : {}),
     processingMode: normalizeApiProcessingMode(row.processingMode),
     modelId: row.modelId,
     provider: row.provider,
@@ -351,11 +390,13 @@ function normalizePersistedMetricAggregate(value: unknown): PersistedMetricAggre
     fastRequests: safeInteger(row.fastRequests),
     standardCost: safeAmount(row.standardCost),
     fastCost: safeAmount(row.fastCost),
-  }];
+  };
+  if (isString(row.accountId)) aggregate.accountId = row.accountId;
+  return [aggregate];
 }
 
-function safeAmount(value: unknown): number {
-  return typeof value === 'number' && Number.isFinite(value) ? Math.max(0, value) : 0;
+function safeAmount(value: JsonValue): number {
+  return isNumber(value) && Number.isFinite(value) ? Math.max(0, value) : 0;
 }
 
 function addAggregate(
@@ -585,9 +626,9 @@ export class DaemonMetricsStore {
       .filter(aggregate =>
         aggregate.timestampMs >= sinceMs
         && (!accountId || aggregate.accountId === accountId))
-      .map<DaemonMetricEvent>(aggregate => ({
+      .map<DaemonMetricEvent>(aggregate => {
+        const event: DaemonMetricEvent = {
         timestamp: aggregate.timestamp,
-        ...(aggregate.accountId ? { accountId: aggregate.accountId } : {}),
         processingMode: aggregate.processingMode,
         modelId: aggregate.modelId,
         provider: aggregate.provider,
@@ -598,12 +639,15 @@ export class DaemonMetricsStore {
         durationMs: aggregate.durationMs,
         error: aggregate.errors > 0,
         cancelled: aggregate.cancellations > 0,
-      }));
+        };
+        if (aggregate.accountId) event.accountId = aggregate.accountId;
+        return event;
+      });
     const pending = this.pendingEvents.filter(event =>
       Date.parse(event.timestamp) >= sinceMs
       && (!accountId || event.accountId === accountId));
     return [...rows.map(rowToEvent), ...persisted, ...pending]
-      .sort((left, right) => Date.parse(left.timestamp) - Date.parse(right.timestamp));
+      .toSorted((left, right) => Date.parse(left.timestamp) - Date.parse(right.timestamp));
   }
 
   buckets(
@@ -722,7 +766,7 @@ export class DaemonMetricsStore {
       tokensReduced: safeInteger(row?.tokens_reduced) + pending.tokensReduced,
       estimatedTokenRequests:
         safeInteger(row?.estimated_token_requests) + pending.estimatedTokenRequests,
-      estimatedSavingsUsd: typeof row?.estimated_savings_usd === 'number'
+      estimatedSavingsUsd: isNumber(row?.estimated_savings_usd)
         && Number.isFinite(row.estimated_savings_usd)
         ? Math.max(0, row.estimated_savings_usd) + pending.estimatedSavingsUsd
         : pending.estimatedSavingsUsd,

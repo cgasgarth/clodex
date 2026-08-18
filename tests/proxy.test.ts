@@ -5,26 +5,40 @@ import http from 'node:http';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { aliasModelId, startProxy, startProxyCatalog, type ProxyRoute } from '../src/proxy.js';
-import { makeRouteResolver, resolveCatalogModelAliases } from '../src/catalog.js';
-import { flushTraceLogs, getProxyDebugLogPath } from '../src/trace-log.js';
+import { aliasModelId, startProxy, startProxyCatalog, type ProxyRoute } from '../src/proxy/index.js';
+import { makeRouteResolver, resolveCatalogModelAliases } from '../src/models/catalog.js';
+import { flushTraceLogs, getProxyDebugLogPath } from '../src/observability/trace-log.js';
 import {
   anthropicMessagesEndpoint,
   estimateAnthropicInputTokens,
   normalizeAnthropicGatewayPath,
-} from '../src/anthropic-endpoints.js';
+} from '../src/providers/anthropic-endpoints.js';
 import { withResponsesWebSocketDiagnosticContext } from '../src/oauth/responses-websocket.js';
 import type { LocalProvider, ModelAlias } from '../src/types.js';
-import { asMocked, restoreTestGlobals, stubTestGlobal, waitForCondition } from './test-helpers.js';
+import {
+  asMocked,
+  requireTcpAddress,
+  restoreTestGlobals,
+  stubTestGlobal,
+  waitForCondition,
+  type JsonObject,
+  type JsonValue,
+} from './test-helpers.js';
 
 async function readFlushedLog(path: string): Promise<string> {
   await flushTraceLogs(path);
   return readFileSync(path, 'utf8');
 }
 
+function openAiSseChunk(delta: JsonObject, finish: string | null): string {
+  return `data: ${JSON.stringify({
+    id: 'c', object: 'chat.completion.chunk', created: 1, model: 'translated-model',
+    choices: [{ index: 0, delta, finish_reason: finish }],
+  })}\n\n`;
+}
+
 vi.mock('../src/oauth/responses-websocket.js', () => {
-  const importOriginal = <T>() => importActual<T>('../src/oauth/responses-websocket.js', import.meta.url);
-  const actual = importOriginal<typeof import('../src/oauth/responses-websocket.js')>();
+  const actual = importActual<typeof import('../src/oauth/responses-websocket.js')>('../src/oauth/responses-websocket.js', import.meta.url);
   return {
     ...actual,
     withResponsesWebSocketDiagnosticContext: vi.fn(
@@ -37,7 +51,7 @@ vi.mock('../src/oauth/responses-websocket.js', () => {
 function postToProxy(
   port: number,
   token: string,
-  body: unknown,
+  body: JsonValue,
   relayRequestId?: string,
   path = '/v1/messages',
   claudeSessionId?: string,
@@ -46,21 +60,22 @@ function postToProxy(
 ): Promise<{ status: number; body: string; headers: http.IncomingHttpHeaders }> {
   return new Promise((resolve, reject) => {
     const payload = JSON.stringify(body);
+    const headers: http.OutgoingHttpHeaders = {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${token}`,
+      'anthropic-version': '2023-06-01',
+      'Content-Length': Buffer.byteLength(payload),
+    };
+    if (relayRequestId) headers['x-relay-request-id'] = relayRequestId;
+    if (claudeSessionId) headers['x-claude-code-session-id'] = claudeSessionId;
+    if (claudeAgentId) headers['x-claude-code-agent-id'] = claudeAgentId;
     const req = http.request(
       {
         hostname: '127.0.0.1',
         port,
         path,
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`,
-          'anthropic-version': '2023-06-01',
-          'Content-Length': Buffer.byteLength(payload),
-          ...(relayRequestId ? { 'x-relay-request-id': relayRequestId } : {}),
-          ...(claudeSessionId ? { 'x-claude-code-session-id': claudeSessionId } : {}),
-          ...(claudeAgentId ? { 'x-claude-code-agent-id': claudeAgentId } : {}),
-        },
+        headers,
       },
       (res) => {
         let data = '';
@@ -134,9 +149,10 @@ describe('Anthropic endpoint routing', () => {
       modelFormat: 'anthropic',
       providerId: 'test-provider',
     };
-    let upstreamBody: Record<string, unknown> | undefined;
+    let upstreamBody: JsonObject | undefined;
     const fetchMock = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
-      upstreamBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      // SAFETY: The test fixture defines the asserted runtime shape.
+      upstreamBody = JSON.parse(String(init?.body)) as JsonObject;
       return new Response(JSON.stringify({
         id: 'msg_optimized',
         type: 'message',
@@ -194,7 +210,7 @@ describe('Anthropic endpoint routing', () => {
         messages: [{ role: 'user', content: 'optimized in endpoint' }],
       });
     } finally {
-      handle.close();
+      await handle.close();
       restoreTestGlobals();
     }
   });
@@ -257,7 +273,7 @@ describe('Anthropic endpoint routing', () => {
       expect(optimizeRequest.mock.calls[1]?.[0].processingMode).toBe('standard');
       expect(optimizeRequest.mock.calls[2]?.[0].processingMode).toBe('fast');
     } finally {
-      handle.close();
+      await handle.close();
       restoreTestGlobals();
     }
   });
@@ -303,7 +319,7 @@ describe('SDK anonymous route handling', () => {
       stream: false,
     });
 
-    handle.close();
+    await handle.close();
     expect(res.status).toBe(502);
     expect(res.body).not.toContain('Missing API key');
   });
@@ -343,12 +359,13 @@ describe('SDK anonymous route handling', () => {
 
       expect(res.status).toBe(200);
       expect(fetchMock).toHaveBeenCalledOnce();
-      const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+      // SAFETY: The test fixture defines the asserted runtime shape.
+      const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
       const headers = new Headers(init.headers);
       expect(headers.has('authorization')).toBe(false);
       expect(headers.has('x-api-key')).toBe(false);
     } finally {
-      handle.close();
+      await handle.close();
       restoreTestGlobals();
     }
   });
@@ -411,7 +428,8 @@ describe('SDK anonymous route handling', () => {
       expect(tokens.status).toBe(200);
       expect(JSON.parse(tokens.body)).toEqual({ input_tokens: 17 });
       expect(fetchMock).toHaveBeenCalledTimes(2);
-      const calls = fetchMock.mock.calls as unknown as Array<[string, RequestInit]>;
+      // SAFETY: The test fixture defines the asserted runtime shape.
+      const calls = fetchMock.mock.calls as Array<[string, RequestInit]>;
       expect(calls.map(([url]) => url)).toEqual([
         'https://anonymous.example/v1/messages',
         'https://anonymous.example/v1/messages/count_tokens',
@@ -425,7 +443,7 @@ describe('SDK anonymous route handling', () => {
         expect(headers.get('x-custom')).toBe('preserved');
       }
     } finally {
-      handle.close();
+      await handle.close();
       restoreTestGlobals();
     }
   });
@@ -462,7 +480,7 @@ describe('catalog model aliases', () => {
       handle.replaceCatalog([{ ...route }], route.aliasId, [{ ...aliases[0]! }]);
       expect(await lookup()).toBe(200);
     } finally {
-      handle.close();
+      await handle.close();
     }
   });
 
@@ -519,7 +537,7 @@ describe('catalog model aliases', () => {
       }
       expect(fetchMock).not.toHaveBeenCalled();
     } finally {
-      handle.close();
+      await handle.close();
       restoreTestGlobals();
     }
   });
@@ -551,7 +569,7 @@ describe('catalog model aliases', () => {
       }
       expect(fetchMock).not.toHaveBeenCalled();
     } finally {
-      handle.close();
+      await handle.close();
       restoreTestGlobals();
     }
   });
@@ -611,13 +629,14 @@ describe('catalog model aliases', () => {
       });
 
       expect(response.status).toBe(400);
+      // SAFETY: The test fixture defines the asserted runtime shape.
       const message = JSON.parse(response.body).error.message as string;
       expect(message).toContain('orbit');
       expect(message).toMatch(/conflict/i);
       expect(message).not.toContain('clodex patch');
       expect(fetchMock).not.toHaveBeenCalled();
     } finally {
-      handle.close();
+      await handle.close();
       restoreTestGlobals();
     }
   });
@@ -681,7 +700,7 @@ describe('catalog model aliases', () => {
       }
       expect(fetchMock).toHaveBeenCalledTimes(1);
     } finally {
-      handle.close();
+      await handle.close();
       restoreTestGlobals();
     }
   });
@@ -752,8 +771,10 @@ describe('catalog model aliases', () => {
       // Resolved to the alias target (not the default route's missing SDK → 502)
       expect(res.status).toBe(200);
       expect(fetchMock).toHaveBeenCalledOnce();
-      const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+      // SAFETY: The test fixture defines the asserted runtime shape.
+      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
       expect(String(url)).toContain('upstream-solver.example');
+      // SAFETY: The test fixture defines the asserted runtime shape.
       expect(JSON.parse(init.body as string).model).toBe('Solver-V1');
 
       // Both foreground and background-wrapper discovery paths resolve.
@@ -780,7 +801,7 @@ describe('catalog model aliases', () => {
       }, undefined, '/anthropic/v1/messages');
       expect(prefixedMessages.status).toBe(200);
     } finally {
-      handle.close();
+      await handle.close();
     }
   });
 
@@ -814,7 +835,7 @@ describe('catalog model aliases', () => {
       });
       expect(status).toBe(404);
     } finally {
-      handle.close();
+      await handle.close();
     }
   });
 });
@@ -849,7 +870,7 @@ describe('token counting', () => {
       expect(JSON.parse(res.body).input_tokens).toBeGreaterThan(0);
       expect(refreshToken).not.toHaveBeenCalled();
     } finally {
-      handle.close();
+      await handle.close();
     }
   });
 
@@ -885,7 +906,7 @@ describe('token counting', () => {
         }),
       );
     } finally {
-      handle.close();
+      await handle.close();
       restoreTestGlobals();
     }
   });
@@ -909,8 +930,7 @@ describe('translated request cancellation', () => {
       upstream.once('error', reject);
       upstream.listen(0, '127.0.0.1', () => resolve());
     });
-    const address = upstream.address();
-    if (!address || typeof address === 'string') throw new Error('test upstream did not bind');
+    const address = requireTcpAddress(upstream.address(), 'test upstream did not bind');
 
     const route: ProxyRoute = {
       aliasId: 'clodex:test:translated-model',
@@ -981,7 +1001,7 @@ describe('translated request cancellation', () => {
     } finally {
       if (previousKeepAlive === undefined) delete process.env.CLODEX_STREAM_KEEPALIVE_INTERVAL_MS;
       else process.env.CLODEX_STREAM_KEEPALIVE_INTERVAL_MS = previousKeepAlive;
-      handle.close();
+      await handle.close();
       upstream.closeAllConnections();
       await new Promise<void>(resolve => upstream.close(() => resolve()));
       rmSync(dir, { recursive: true, force: true });
@@ -989,8 +1009,7 @@ describe('translated request cancellation', () => {
   }, 20_000);
 });
 
-describe('SDK translated error logging', () => {
-  it('returns an HTTP error when request translation throws instead of leaving the client pending', async () => {
+it('returns an HTTP error when request translation throws instead of leaving the client pending', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'clodex-sdk-translation-error-'));
     const inferenceLogPath = join(dir, 'inference.jsonl');
     const route: ProxyRoute = {
@@ -1025,7 +1044,7 @@ describe('SDK translated error logging', () => {
         translatedBytes: 0,
       }));
     } finally {
-      handle.close();
+      await handle.close();
       rmSync(dir, { recursive: true, force: true });
     }
   });
@@ -1044,8 +1063,7 @@ describe('SDK translated error logging', () => {
       upstream.once('error', reject);
       upstream.listen(0, '127.0.0.1', () => resolve());
     });
-    const address = upstream.address();
-    if (!address || typeof address === 'string') throw new Error('test upstream did not bind');
+    const address = requireTcpAddress(upstream.address(), 'test upstream did not bind');
 
     const route: ProxyRoute = {
       aliasId: 'clodex:test:translated-model',
@@ -1102,7 +1120,7 @@ describe('SDK translated error logging', () => {
     } finally {
       if (previousRequestPreview === undefined) delete process.env['CLODEX_LOG_REQUEST_PREVIEW'];
       else process.env['CLODEX_LOG_REQUEST_PREVIEW'] = previousRequestPreview;
-      handle.close();
+      await handle.close();
       await new Promise<void>(resolve => upstream.close(() => resolve()));
       rmSync(dir, { recursive: true, force: true });
     }
@@ -1126,8 +1144,7 @@ describe('SDK translated error logging', () => {
       upstream.once('error', reject);
       upstream.listen(0, '127.0.0.1', () => resolve());
     });
-    const address = upstream.address();
-    if (!address || typeof address === 'string') throw new Error('test upstream did not bind');
+    const address = requireTcpAddress(upstream.address(), 'test upstream did not bind');
 
     const route: ProxyRoute = {
       aliasId: 'clodex:test:rate-limited-model',
@@ -1154,7 +1171,7 @@ describe('SDK translated error logging', () => {
       expect(res.headers['retry-after']).toBe('60');
       expect(res.body).toContain('rate limited');
     } finally {
-      handle.close();
+      await handle.close();
       await new Promise<void>(resolve => upstream.close(() => resolve()));
     }
   }, 20_000);
@@ -1180,8 +1197,7 @@ describe('SDK translated error logging', () => {
       upstream.once('error', reject);
       upstream.listen(0, '127.0.0.1', () => resolve());
     });
-    const address = upstream.address();
-    if (!address || typeof address === 'string') throw new Error('test upstream did not bind');
+    const address = requireTcpAddress(upstream.address(), 'test upstream did not bind');
 
     const route: ProxyRoute = {
       aliasId: 'clodex:test:translated-model',
@@ -1222,7 +1238,7 @@ describe('SDK translated error logging', () => {
         recoveryAction: 'none',
       }));
     } finally {
-      handle.close();
+      await handle.close();
       await new Promise<void>(resolve => upstream.close(() => resolve()));
       rmSync(dir, { recursive: true, force: true });
     }
@@ -1254,8 +1270,7 @@ describe('SDK translated error logging', () => {
       upstream.once('error', reject);
       upstream.listen(0, '127.0.0.1', () => resolve());
     });
-    const address = upstream.address();
-    if (!address || typeof address === 'string') throw new Error('test upstream did not bind');
+    const address = requireTcpAddress(upstream.address(), 'test upstream did not bind');
     const route: ProxyRoute = {
       aliasId: 'clodex:test:translated-model',
       realModelId: 'translated-model',
@@ -1299,7 +1314,7 @@ describe('SDK translated error logging', () => {
         requestId: `req-${agentId}`,
       }));
     } finally {
-      handle.close();
+      await handle.close();
       await new Promise<void>(resolve => upstream.close(() => resolve()));
       rmSync(dir, { recursive: true, force: true });
     }
@@ -1328,8 +1343,7 @@ describe('SDK translated error logging', () => {
       upstream.once('error', reject);
       upstream.listen(0, '127.0.0.1', () => resolve());
     });
-    const address = upstream.address();
-    if (!address || typeof address === 'string') throw new Error('test upstream did not bind');
+    const address = requireTcpAddress(upstream.address(), 'test upstream did not bind');
     const route: ProxyRoute = {
       aliasId: 'clodex:test:translated-model',
       realModelId: 'translated-model',
@@ -1370,7 +1384,7 @@ describe('SDK translated error logging', () => {
       expect(entries.some(entry => entry.event === 'translation_failed')).toBe(false);
       expect(entries.some(entry => entry.event === 'upstream_error')).toBe(false);
     } finally {
-      handle.close();
+      await handle.close();
       await new Promise<void>(resolve => upstream.close(() => resolve()));
       rmSync(dir, { recursive: true, force: true });
     }
@@ -1397,8 +1411,7 @@ describe('SDK translated error logging', () => {
       upstream.once('error', reject);
       upstream.listen(0, '127.0.0.1', () => resolve());
     });
-    const address = upstream.address();
-    if (!address || typeof address === 'string') throw new Error('test upstream did not bind');
+    const address = requireTcpAddress(upstream.address(), 'test upstream did not bind');
     const route: ProxyRoute = {
       aliasId: 'grok',
       realModelId: 'grok-4.6',
@@ -1431,7 +1444,7 @@ describe('SDK translated error logging', () => {
       expect(response.body).toContain('event: message_stop');
     } finally {
       releaseUpstream();
-      handle.close();
+      await handle.close();
       await new Promise<void>(resolve => upstream.close(() => resolve()));
       rmSync(dir, { recursive: true, force: true });
     }
@@ -1454,8 +1467,7 @@ describe('SDK translated error logging', () => {
       upstream.once('error', reject);
       upstream.listen(0, '127.0.0.1', () => resolve());
     });
-    const address = upstream.address();
-    if (!address || typeof address === 'string') throw new Error('test upstream did not bind');
+    const address = requireTcpAddress(upstream.address(), 'test upstream did not bind');
     const route: ProxyRoute = {
       aliasId: 'grok',
       realModelId: 'grok-4.6',
@@ -1490,7 +1502,7 @@ describe('SDK translated error logging', () => {
       }));
       expect(entries.some(entry => entry.event === 'translation_retrying')).toBe(false);
     } finally {
-      handle.close();
+      await handle.close();
       await new Promise<void>(resolve => upstream.close(() => resolve()));
       rmSync(dir, { recursive: true, force: true });
     }
@@ -1513,8 +1525,7 @@ describe('SDK translated error logging', () => {
       upstream.once('error', reject);
       upstream.listen(0, '127.0.0.1', () => resolve());
     });
-    const address = upstream.address();
-    if (!address || typeof address === 'string') throw new Error('test upstream did not bind');
+    const address = requireTcpAddress(upstream.address(), 'test upstream did not bind');
     const route: ProxyRoute = {
       aliasId: 'clodex:test:translated-model',
       realModelId: 'translated-model',
@@ -1554,7 +1565,7 @@ describe('SDK translated error logging', () => {
         recoveryAction: 'none',
       }));
     } finally {
-      handle.close();
+      await handle.close();
       await new Promise<void>(resolve => upstream.close(() => resolve()));
       rmSync(dir, { recursive: true, force: true });
     }
@@ -1607,8 +1618,7 @@ describe('SDK translated error logging', () => {
       upstream.once('error', reject);
       upstream.listen(0, '127.0.0.1', () => resolve());
     });
-    const address = upstream.address();
-    if (!address || typeof address === 'string') throw new Error('test upstream did not bind');
+    const address = requireTcpAddress(upstream.address(), 'test upstream did not bind');
     const route: ProxyRoute = {
       aliasId: 'clodex:test:translated-model',
       realModelId: 'translated-model',
@@ -1643,7 +1653,7 @@ describe('SDK translated error logging', () => {
       expect(entries.some(entry => entry.event === 'translation_failed')).toBe(false);
       expect(entries.some(entry => entry.event === 'upstream_error')).toBe(false);
     } finally {
-      handle.close();
+      await handle.close();
       await new Promise<void>(resolve => upstream.close(() => resolve()));
       rmSync(dir, { recursive: true, force: true });
     }
@@ -1666,8 +1676,7 @@ describe('SDK translated error logging', () => {
       upstream.once('error', reject);
       upstream.listen(0, '127.0.0.1', () => resolve());
     });
-    const address = upstream.address();
-    if (!address || typeof address === 'string') throw new Error('test upstream did not bind');
+    const address = requireTcpAddress(upstream.address(), 'test upstream did not bind');
     const route: ProxyRoute = {
       aliasId: 'clodex:test:translated-model',
       realModelId: 'translated-model',
@@ -1711,7 +1720,7 @@ describe('SDK translated error logging', () => {
       }));
       expect(entries.filter(entry => entry.event === 'translation_retrying')).toHaveLength(2);
     } finally {
-      handle.close();
+      await handle.close();
       await new Promise<void>(resolve => upstream.close(() => resolve()));
       rmSync(dir, { recursive: true, force: true });
     }
@@ -1733,8 +1742,7 @@ describe('SDK translated error logging', () => {
       upstream.once('error', reject);
       upstream.listen(0, '127.0.0.1', () => resolve());
     });
-    const address = upstream.address();
-    if (!address || typeof address === 'string') throw new Error('test upstream did not bind');
+    const address = requireTcpAddress(upstream.address(), 'test upstream did not bind');
 
     const route: ProxyRoute = {
       aliasId: 'clodex:test:small-context',
@@ -1759,6 +1767,7 @@ describe('SDK translated error logging', () => {
       }, 'req-context-overflow');
 
       expect(res.status).toBe(400);
+      // SAFETY: The test fixture defines the asserted runtime shape.
       const body = JSON.parse(res.body) as {
         type: string;
         error: { type: string; message: string };
@@ -1771,7 +1780,7 @@ describe('SDK translated error logging', () => {
       });
       expect(body.error.message).toMatch(/^prompt is too long: \d+ tokens > 10 maximum$/);
     } finally {
-      handle.close();
+      await handle.close();
       await new Promise<void>(resolve => upstream.close(() => resolve()));
     }
   }, 20_000);
@@ -1795,8 +1804,7 @@ describe('SDK translated error logging', () => {
       upstream.once('error', reject);
       upstream.listen(0, '127.0.0.1', () => resolve());
     });
-    const address = upstream.address();
-    if (!address || typeof address === 'string') throw new Error('test upstream did not bind');
+    const address = requireTcpAddress(upstream.address(), 'test upstream did not bind');
 
     const route: ProxyRoute = {
       aliasId: 'clodex:test:translated-model',
@@ -1881,7 +1889,7 @@ describe('SDK translated error logging', () => {
       expect(completed.translatedBytes).toBeGreaterThan(0);
       expect(completed.translatedChunks).toBeGreaterThan(0);
     } finally {
-      handle.close();
+      await handle.close();
       await new Promise<void>(resolve => upstream.close(() => resolve()));
       rmSync(dir, { recursive: true, force: true });
     }
@@ -1894,17 +1902,12 @@ describe('SDK translated error logging', () => {
     // adapter buffers every tool-input-delta and only flushes input_json_delta at
     // completion, so nothing is written downstream during that window — the exact
     // shape that tripped Claude Code's ~180s read-idle abort in production.
-    const chunk = (delta: unknown, finish: string | null) =>
-      `data: ${JSON.stringify({
-        id: 'c', object: 'chat.completion.chunk', created: 1, model: 'translated-model',
-        choices: [{ index: 0, delta, finish_reason: finish }],
-      })}\n\n`;
     const upstream = http.createServer((req, res) => {
       req.resume();
       req.once('end', () => {
         res.writeHead(200, { 'Content-Type': 'text/event-stream' });
         res.flushHeaders();
-        res.write(chunk(
+        res.write(openAiSseChunk(
           { role: 'assistant', tool_calls: [{ index: 0, id: 'call_1', type: 'function', function: { name: 'myTool', arguments: '{"v":"' } }] },
           null,
         ));
@@ -1912,12 +1915,12 @@ describe('SDK translated error logging', () => {
         const argTimer = setInterval(() => {
           emitted += 1;
           if (emitted <= 32) {
-            res.write(chunk({ tool_calls: [{ index: 0, function: { arguments: 'a' } }] }, null));
+            res.write(openAiSseChunk({ tool_calls: [{ index: 0, function: { arguments: 'a' } }] }, null));
             return;
           }
           clearInterval(argTimer);
-          res.write(chunk({ tool_calls: [{ index: 0, function: { arguments: '"}' } }] }, null));
-          res.write(chunk({}, 'tool_calls'));
+          res.write(openAiSseChunk({ tool_calls: [{ index: 0, function: { arguments: '"}' } }] }, null));
+          res.write(openAiSseChunk({}, 'tool_calls'));
           res.write('data: [DONE]\n\n');
           res.end();
         }, 25);
@@ -1927,8 +1930,7 @@ describe('SDK translated error logging', () => {
       upstream.once('error', reject);
       upstream.listen(0, '127.0.0.1', () => resolve());
     });
-    const address = upstream.address();
-    if (!address || typeof address === 'string') throw new Error('test upstream did not bind');
+    const address = requireTcpAddress(upstream.address(), 'test upstream did not bind');
 
     const route: ProxyRoute = {
       aliasId: 'clodex:test:translated-model',
@@ -1974,7 +1976,7 @@ describe('SDK translated error logging', () => {
     } finally {
       if (prevKeepAlive === undefined) delete process.env.CLODEX_STREAM_KEEPALIVE_INTERVAL_MS;
       else process.env.CLODEX_STREAM_KEEPALIVE_INTERVAL_MS = prevKeepAlive;
-      handle.close();
+      await handle.close();
       upstream.closeAllConnections();
       await new Promise<void>(resolve => upstream.close(() => resolve()));
       rmSync(dir, { recursive: true, force: true });
@@ -2004,8 +2006,7 @@ describe('SDK translated error logging', () => {
       upstream.once('error', reject);
       upstream.listen(0, '127.0.0.1', () => resolve());
     });
-    const address = upstream.address();
-    if (!address || typeof address === 'string') throw new Error('test upstream did not bind');
+    const address = requireTcpAddress(upstream.address(), 'test upstream did not bind');
     const route: ProxyRoute = {
       aliasId: 'clodex:test:delayed-model',
       realModelId: 'translated-model',
@@ -2051,7 +2052,7 @@ describe('SDK translated error logging', () => {
     } finally {
       if (previousKeepAlive === undefined) delete process.env.CLODEX_STREAM_KEEPALIVE_INTERVAL_MS;
       else process.env.CLODEX_STREAM_KEEPALIVE_INTERVAL_MS = previousKeepAlive;
-      handle.close();
+      await handle.close();
       upstream.closeAllConnections();
       await new Promise<void>(resolve => upstream.close(() => resolve()));
       rmSync(dir, { recursive: true, force: true });
@@ -2077,8 +2078,7 @@ describe('SDK translated error logging', () => {
       upstream.once('error', reject);
       upstream.listen(0, '127.0.0.1', () => resolve());
     });
-    const address = upstream.address();
-    if (!address || typeof address === 'string') throw new Error('test upstream did not bind');
+    const address = requireTcpAddress(upstream.address(), 'test upstream did not bind');
     const route: ProxyRoute = {
       aliasId: 'clodex:test:translated-model',
       realModelId: 'translated-model',
@@ -2113,12 +2113,11 @@ describe('SDK translated error logging', () => {
         phase: 'waiting_for_sdk',
       }));
     } finally {
-      handle.close();
+      await handle.close();
       await new Promise<void>(resolve => upstream.close(() => resolve()));
       rmSync(dir, { recursive: true, force: true });
     }
   }, 20_000);
-});
 
 describe('anthropic passthrough debug logging', () => {
   afterEach(() => {
@@ -2154,7 +2153,7 @@ describe('anthropic passthrough debug logging', () => {
       stream: true,
     });
 
-    handle.close();
+    await handle.close();
     expect(res.status).toBe(429);
     const log = await readFlushedLog(getProxyDebugLogPath());
     expect(log).toContain('anthropic upstream 429');
@@ -2192,10 +2191,13 @@ describe('anthropic passthrough debug logging', () => {
       stream: true,
     });
 
-    handle.close();
+    await handle.close();
     const [, init] = asMocked(fetch).mock.calls[0]!;
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const headers = init?.headers as Record<string, string>;
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const body = JSON.parse(String(init?.body)) as { metadata?: { user_id?: string } };
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const userId = JSON.parse(body.metadata!.user_id!) as { session_id: string };
     expect(headers['X-Claude-Code-Session-Id']).toBe(userId.session_id);
   });
@@ -2233,8 +2235,9 @@ describe('anthropic passthrough debug logging', () => {
       stream: false,
     });
 
-    handle.close();
+    await handle.close();
     const [, init] = asMocked(fetch).mock.calls[0]!;
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const body = JSON.parse(String(init?.body)) as { system?: Array<{ type: string; text: string }> };
     expect(body.system?.[0]?.text).toBe('x-anthropic-billing-header: cc_version=2.1.195.0; cc_entrypoint=cli;');
     expect(body.system?.[1]?.text).toBe('You are helpful.');
@@ -2260,6 +2263,7 @@ describe('OAuth route credential resolution', () => {
       authType: 'oauth',
       refreshToken: vi.fn(async () => 'oauth-token'),
     };
+    // SAFETY: The test fixture defines the asserted runtime shape.
     asMocked(withResponsesWebSocketDiagnosticContext).mockReturnValueOnce({
       id: 'msg-compact',
       type: 'message',
@@ -2295,7 +2299,7 @@ describe('OAuth route credential resolution', () => {
         expect.any(Function),
       );
     } finally {
-      handle.close();
+      await handle.close();
     }
   });
 
@@ -2336,11 +2340,11 @@ describe('OAuth route credential resolution', () => {
       expect(refreshToken).toHaveBeenCalledTimes(1);
       expect(route.apiKey).toBe('fresh-oauth-token');
       const [, init] = asMocked(fetch).mock.calls[0]!;
-      expect((init?.headers as Record<string, string>).Authorization).toBe(
+      expect(new Headers(init?.headers).get('Authorization')).toBe(
         'Bearer fresh-oauth-token',
       );
     } finally {
-      handle.close();
+      await handle.close();
     }
   });
 
@@ -2411,7 +2415,7 @@ describe('OAuth route credential resolution', () => {
         ),
       ).toEqual(['Bearer rejected-oauth-token', 'Bearer fresh-oauth-token']);
     } finally {
-      handle.close();
+      await handle.close();
     }
   });
 
@@ -2456,7 +2460,7 @@ describe('OAuth route credential resolution', () => {
       expect(refreshToken).toHaveBeenCalledTimes(2);
       expect(route.apiKey).toBe('fresh-oauth-token');
     } finally {
-      handle.close();
+      await handle.close();
     }
   });
 
@@ -2499,7 +2503,7 @@ describe('OAuth route credential resolution', () => {
       expect(refreshToken).toHaveBeenCalledTimes(2);
       expect(route.apiKey).toBe('rejected-oauth-token');
     } finally {
-      handle.close();
+      await handle.close();
     }
   });
 });

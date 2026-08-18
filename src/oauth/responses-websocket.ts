@@ -1,7 +1,8 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { FetchFunction } from '@ai-sdk/provider-utils';
-import { outboundProxyUrlForTarget } from '../outbound-proxy.js';
-import { loadBunNativeWebSocket } from '../bun-websocket.js';
+import { outboundProxyUrlForTarget } from '../transport/outbound-proxy.js';
+import { loadBunNativeWebSocket } from '../transport/bun-websocket.js';
+import { isBigInt, isBoolean, isFunction, isNumber, isObject, isString, isSymbol, isUndefined } from '../runtime/type-guards.js';
 import {
   compactResponsesWindow,
   resolveOpenAiCompactionRearmThreshold,
@@ -23,6 +24,7 @@ import {
 import type {
   ResponsesWebSocketDiagnosticEvent,
   JsonObject,
+  JsonValue,
   RequestContext,
   ConnectionEntry,
   CompactionCheckpoint,
@@ -86,6 +88,18 @@ import {
 
 export * from './responses-websocket/api/public.js';
 
+function runtimeTypeName<Value>(value: Value): string {
+  if (value instanceof Error) return value.name;
+  if (isUndefined(value)) return 'undefined';
+  if (isString(value)) return 'string';
+  if (isNumber(value)) return 'number';
+  if (isBoolean(value)) return 'boolean';
+  if (isBigInt(value)) return 'bigint';
+  if (isSymbol(value)) return 'symbol';
+  if (isFunction(value)) return 'function';
+  return 'object';
+}
+
 /**
  * Build a fetch transport backed by persistent, session-aware Responses sockets.
  * Each returned Response still represents exactly one AI SDK request.
@@ -101,6 +115,7 @@ export function createResponsesWebSocketFetch(
   // native compaction opt-in, even if a caller accidentally supplies a path.
   const checkpointStoreDir = checkpointStoreDirectory(options);
 
+  // SAFETY: This async implementation matches the provider-utils FetchFunction contract.
   return (async (requestUrl, init): Promise<Response> => {
     const WebSocket = options.webSocketConstructor
       ?? loadBunNativeWebSocket();
@@ -130,7 +145,7 @@ export function createResponsesWebSocketFetch(
       }))
       .filter((candidate): candidate is { entry: ConnectionEntry; match: ContinuationMatch } => candidate.match !== undefined)
       // Prefer the longest matching history, which produces the smallest delta.
-        .sort((left, right) => left.match.delta.length - right.match.delta.length
+        .toSorted((left, right) => left.match.delta.length - right.match.delta.length
         || continuationMatchRank(left.match.mode) - continuationMatchRank(right.match.mode));
     let selected: ConnectionEntry | undefined = matches[0]?.entry;
     let selectedMatch = matches[0]?.match;
@@ -163,7 +178,7 @@ export function createResponsesWebSocketFetch(
           checkpoint: CompactionCheckpoint;
           match: ContinuationMatch;
         } => candidate.match !== undefined)
-      .sort((left, right) => left.match.delta.length - right.match.delta.length
+      .toSorted((left, right) => left.match.delta.length - right.match.delta.length
           || continuationMatchRank(left.match.mode) - continuationMatchRank(right.match.mode)
           || (left.checkpoint.lastInputTokens ?? Number.MAX_SAFE_INTEGER)
             - (right.checkpoint.lastInputTokens ?? Number.MAX_SAFE_INTEGER))
@@ -195,7 +210,7 @@ export function createResponsesWebSocketFetch(
       }, diagnosticCorrelation);
     }
     const diagnosticEntry = selected
-      ?? [...idleCandidates].sort((left, right) => right.lastUsedAt - left.lastUsedAt)[0]
+      ?? [...idleCandidates].toSorted((left, right) => right.lastUsedAt - left.lastUsedAt)[0]
       ?? candidates[0];
     debug(
       `lookup key=${debugKey(partitionKey)} prompt=${debugKey(promptFingerprint)} hit=${candidates.length > 0} heads=${candidates.length} active_connections=${connectionCount()}`,
@@ -208,7 +223,7 @@ export function createResponsesWebSocketFetch(
     }
     let sendPayload = payload;
     let retryPayload: JsonObject | undefined;
-    let compactedInputBase: unknown[] | undefined;
+    let compactedInputBase: JsonValue[] | undefined;
     let supersededEntry: ConnectionEntry | undefined;
     let continued = false;
     let persistent = Boolean(partitionKey);
@@ -269,7 +284,7 @@ export function createResponsesWebSocketFetch(
           : undefined;
     let compacted = false;
     let compactionUsage: ResponsesCompactionUsage | undefined;
-    let failedTriggerCompactedInput: unknown[] | undefined;
+    let failedTriggerCompactedInput: JsonValue[] | undefined;
     let terminalOverflowReason: string | undefined;
     let terminalRecoveryFailure: ResponsesCompactionError | undefined;
     let overflowRebasedEstimate: number | undefined;
@@ -385,10 +400,13 @@ export function createResponsesWebSocketFetch(
         deadlineMs: options.overflowRecoveryDeadlineMs,
         finalCreateReserveMs: options.overflowRecoveryFinalCreateReserveMs,
         now: resolvedOptions.now,
-        onDiagnostic: event => emitDiagnostic(options, event as ResponsesWebSocketDiagnosticEvent, diagnosticCorrelation),
+        onDiagnostic: event => {
+          // SAFETY: Overflow recovery emits the same structured diagnostic contract.
+          emitDiagnostic(options, event as ResponsesWebSocketDiagnosticEvent, diagnosticCorrelation);
+        },
       })
       : undefined;
-    const commitOverflowRebase = (rebasedInput: unknown[], rebasedEstimate: number): void => {
+    const commitOverflowRebase = (rebasedInput: JsonValue[], rebasedEstimate: number): void => {
       sendPayload = { ...payload, input: rebasedInput };
       delete sendPayload.previous_response_id;
       retryPayload = sendPayload;
@@ -597,7 +615,7 @@ export function createResponsesWebSocketFetch(
             retainedItems: compactedInput.length - result.output.length,
             compactedItems: result.output.length,
             triggerWireBytes: result.triggerWireBytes,
-            ...(result.usage ?? {}),
+            ...result.usage,
           }, diagnosticCorrelation);
         } catch (error) {
           const triggerError = error instanceof ResponsesCompactionError ? error : undefined;
@@ -620,11 +638,9 @@ export function createResponsesWebSocketFetch(
             postCompactionInputTokens: provisionalPostCompactionInputTokens,
             measuredInputTokens,
             estimatedInputTokens,
-            errorType: boundedDiagnosticIdentifier(
-              error instanceof Error ? error.name : typeof error,
-            ),
-            statusCode: error && typeof error === 'object' && 'statusCode' in error
-              && typeof error.statusCode === 'number'
+            errorType: boundedDiagnosticIdentifier(runtimeTypeName(error)),
+            statusCode: isObject(error) && 'statusCode' in error
+              && isNumber(error.statusCode)
               ? error.statusCode
               : undefined,
           }, diagnosticCorrelation);
@@ -711,7 +727,7 @@ export function createResponsesWebSocketFetch(
             estimatedInputTokens,
             sourceItems: inputArray(compactPayload).length,
             compactedItems: result.output.length,
-            ...(usage ?? {}),
+            ...usage,
           }, diagnosticCorrelation);
         } catch (error) {
           const compactError = error instanceof ResponsesCompactionError ? error : undefined;
@@ -735,9 +751,7 @@ export function createResponsesWebSocketFetch(
             contextWindow,
             measuredInputTokens,
             estimatedInputTokens,
-            errorType: boundedDiagnosticIdentifier(
-              error instanceof Error ? error.name : typeof error,
-            ),
+            errorType: boundedDiagnosticIdentifier(runtimeTypeName(error)),
             statusCode: compactError?.statusCode,
             failureClass: compactError?.failureClass,
             errorCode: boundedDiagnosticIdentifier(compactError?.errorCode),
@@ -924,11 +938,12 @@ export function createResponsesWebSocketFetch(
         accountIdHash: options.accountId
           ? createHash('sha256').update(options.accountId).digest('hex').slice(0, 16)
           : '',
-        model: typeof payload.model === 'string' ? payload.model : undefined,
-        effort: typeof (payload.reasoning as JsonObject | undefined)?.effort === 'string'
-          ? String((payload.reasoning as JsonObject).effort).trim().toLowerCase()
+        model: isString(payload.model) ? payload.model : undefined,
+        effort: isObject(payload.reasoning) && 'effort' in payload.reasoning
+          && isString(payload.reasoning.effort)
+          ? payload.reasoning.effort.trim().toLowerCase()
           : '',
-        promptCacheKey: typeof payload.prompt_cache_key === 'string' ? payload.prompt_cache_key : undefined,
+        promptCacheKey: isString(payload.prompt_cache_key) ? payload.prompt_cache_key : undefined,
       },
       promptFingerprint,
       promptFieldHashes,
@@ -1026,7 +1041,7 @@ export function createResponsesWebSocketFetch(
         reason: compactionReason,
         checkpointItems: checkpoint.compactedInput.length,
         checkpointDurable,
-        ...(compactionUsage ?? {}),
+        ...compactionUsage,
       }, diagnosticCorrelation);
       return syntheticClaudeCompactionResponse(
         responseId,

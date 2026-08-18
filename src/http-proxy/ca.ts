@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import forge from 'node-forge';
-import { getAppHome } from '../paths.js';
+import { getAppHome } from '../config/paths.js';
 
 export interface HttpProxyCertificates {
   caCertPath: string;
@@ -25,7 +25,16 @@ function serialNumber(): string {
   return bytes.toString('hex');
 }
 
-function certPaths(): Record<'dir' | 'caCert' | 'caKey' | 'serverCert' | 'serverKey' | 'version', string> {
+interface CertificatePaths {
+  dir: string;
+  caCert: string;
+  caKey: string;
+  serverCert: string;
+  serverKey: string;
+  version: string;
+}
+
+function certPaths(): CertificatePaths {
   const dir = join(getAppHome(), CERT_DIR);
   return {
     dir,

@@ -1,5 +1,6 @@
 import { ResponsesCompactionError } from '../../responses-compaction.js';
-import type { JsonObject, RequestContext, ConnectionEntry } from '../types.js';
+import type { JsonObject, JsonValue, RequestContext, ConnectionEntry } from '../types.js';
+import type { PromptFieldHashes } from '../fingerprint.js';
 import { connectionEntries } from '../state.js';
 import { inputArray } from '../fingerprint.js';
 import { conversationItemKind, isOpaqueCompactionKind } from '../continuation.js';
@@ -8,15 +9,21 @@ import { outgoingPayload, dispatchContext, deleteEntry } from '../transport.js';
 
 interface CompactionTriggerOptions {
   entry: ConnectionEntry;
-  delta: unknown[];
+  delta: JsonValue[];
   compactTimeoutMs: number;
   payload: JsonObject;
-  promptFieldHashes: Record<string, string>;
+  promptFieldHashes: PromptFieldHashes;
   instructionsSnapshot?: string;
   partitionKey?: string;
-  diagnostic?: (event: { event: string } & Record<string, unknown>) => void;
+  diagnostic?: (event: { event: string } & JsonObject) => void;
   createReplacement: () => ConnectionEntry;
   signal?: AbortSignal | null;
+}
+
+interface CompactionTriggerResult {
+  output: JsonValue[];
+  usage?: import('../protocol.js').ResponseUsage;
+  triggerWireBytes: number;
 }
 
 export async function runCompactionTrigger({
@@ -30,11 +37,7 @@ export async function runCompactionTrigger({
   diagnostic,
   createReplacement,
   signal,
-}: CompactionTriggerOptions): Promise<{
-  output: unknown[];
-  usage?: import('../protocol.js').ResponseUsage;
-  triggerWireBytes: number;
-}> {
+}: CompactionTriggerOptions): Promise<CompactionTriggerResult> {
       if (!entry.responseId) {
         throw new ResponsesCompactionError('Native compaction trigger requires a live response chain');
       }

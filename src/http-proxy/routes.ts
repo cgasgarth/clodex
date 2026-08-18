@@ -1,13 +1,13 @@
 import { MAX_MODEL_CATALOG } from '../constants.js';
-import { localModelToRoute } from '../catalog.js';
+import { localModelToRoute } from '../models/catalog.js';
 import { isSdkMigratedNpm } from '../provider-factory.js';
-import { claudeCodeClientModelId } from '../context-model-id.js';
-import type { ProxyRoute } from '../proxy.js';
+import { claudeCodeClientModelId } from '../models/context-model-id.js';
+import type { ProxyRoute } from '../proxy/index.js';
 import {
   normalizeModelAliases,
   type StoredModelAlias,
-} from '../model-aliases.js';
-import { formatModelLabel } from '../ui.js';
+} from '../models/aliases.js';
+import { formatModelLabel } from '../ui/prompts.js';
 import type { FavoriteModel, LocalProvider, LocalProviderModel } from '../types.js';
 
 export const HTTP_PROXY_MODEL_PREFIX = 'clodex:';
@@ -49,7 +49,7 @@ export interface ResolvedHttpProxyAlias {
 export function buildHttpProxyRoutes(
   providers: LocalProvider[],
   favorites: FavoriteModel[],
-  modelAliases: unknown = undefined,
+  modelAliases?: Parameters<typeof normalizeModelAliases>[0],
   max = MAX_MODEL_CATALOG,
 ): HttpProxyRouteResult {
   const routes: ProxyRoute[] = [];
@@ -100,16 +100,15 @@ export function buildHttpProxyRoutes(
       continue;
     }
     const sourceNames = [...new Set(sources.map(source => source.name))];
-    aliases.push({
+    const resolvedAlias: ResolvedHttpProxyAlias = {
       name: alias.name,
       routeId: route.aliasId,
       displayName: route.displayName,
-      ...(
-        sourceNames.length === 1 && sourceNames[0] === alias.name
-          ? {}
-          : { sourceNames }
-      ),
-    });
+    };
+    if (sourceNames.length !== 1 || sourceNames[0] !== alias.name) {
+      resolvedAlias.sourceNames = sourceNames;
+    }
+    aliases.push(resolvedAlias);
   }
 
   return { routes, unavailable, unsupported, aliases, unavailableAliases };

@@ -1,3 +1,4 @@
+import { isNumber, isObject, isString } from '../../runtime/type-guards.js';
 import { createHash } from 'node:crypto';
 import {
   KEYRING_GENERATION_PATTERN,
@@ -26,6 +27,11 @@ import type {
   KeyringApi,
 } from './base.js';
 import { persistKeyringManagedState } from './state.js';
+import { diagnosticRecord } from '../../observability/trace-log.js';
+
+interface UntrustedJournalMarker {
+  value: unknown;
+}
 
 export function readKeyringAccountFromService(
   keyring: KeyringApi,
@@ -96,11 +102,10 @@ export function parseKeyringChunkMarker(value: string | null): KeyringChunkMarke
   ) {
     throw new Error('keyring credential has an invalid chunk marker');
   }
-  return {
-    count,
-    ...(generation ? { generation } : {}),
-    ...(digest ? { digest } : {}),
-  };
+  const marker: KeyringChunkMarker = { count };
+  if (generation) marker.generation = generation;
+  if (digest) marker.digest = digest;
+  return marker;
 }
 
 export function encodeKeyringChunkMarker(marker: KeyringChunkMarker): string {
@@ -111,26 +116,29 @@ export function encodeKeyringChunkMarker(marker: KeyringChunkMarker): string {
   return `${KEYRING_CHUNK_PREFIX}v2:${marker.generation}:${marker.count}`;
 }
 
-function parseJournalMarker(value: unknown): KeyringChunkMarker {
-  if (!value || typeof value !== 'object') {
+function parseJournalMarker(
+  value: UntrustedJournalMarker['value'],
+): KeyringChunkMarker {
+  if (!value || !isObject(value)) {
     throw new Error('keyring credential has an invalid cleanup journal');
   }
-  const candidate = value as Partial<KeyringChunkMarker>;
+  const candidate = diagnosticRecord(value);
   if (
-    !Number.isSafeInteger(candidate.count)
-    || (candidate.count ?? 0) < 1
-    || (candidate.count ?? 0) > KEYRING_MAX_CHUNKS
+    !isNumber(candidate.count)
+    || !Number.isSafeInteger(candidate.count)
+    || candidate.count < 1
+    || candidate.count > KEYRING_MAX_CHUNKS
     || (
       candidate.generation !== undefined
       && (
-        typeof candidate.generation !== 'string'
+        !isString(candidate.generation)
         || !KEYRING_GENERATION_PATTERN.test(candidate.generation)
       )
     )
     || (
       candidate.digest !== undefined
       && (
-        typeof candidate.digest !== 'string'
+        !isString(candidate.digest)
         || !/^[0-9a-f]{64}$/.test(candidate.digest)
         || candidate.generation === undefined
       )
@@ -138,11 +146,10 @@ function parseJournalMarker(value: unknown): KeyringChunkMarker {
   ) {
     throw new Error('keyring credential has an invalid cleanup journal');
   }
-  return {
-    count: candidate.count!,
-    ...(candidate.generation ? { generation: candidate.generation } : {}),
-    ...(candidate.digest ? { digest: candidate.digest } : {}),
-  };
+  const marker: KeyringChunkMarker = { count: candidate.count };
+  if (candidate.generation) marker.generation = candidate.generation;
+  if (candidate.digest) marker.digest = candidate.digest;
+  return marker;
 }
 
 class InvalidKeyringJournalError extends Error {
@@ -157,9 +164,9 @@ export function parseKeyringChunkJournal(value: string): KeyringChunkJournal {
     throw new InvalidKeyringJournalError();
   }
   try {
-    const parsed = JSON.parse(
+    const parsed: UntrustedKeyringChunkJournal = JSON.parse(
       value.slice(KEYRING_JOURNAL_PREFIX.length),
-    ) as UntrustedKeyringChunkJournal;
+    );
     if (
       (parsed.mode !== 'write' &&
         parsed.mode !== 'short' &&
@@ -172,14 +179,14 @@ export function parseKeyringChunkJournal(value: string): KeyringChunkJournal {
           : KEYRING_MAX_DELETE_GENERATIONS) ||
       (parsed.mode === 'write' && parsed.generations.length < 1) ||
       (parsed.mode === 'short' &&
-        (typeof parsed.shortDigest !== 'string' || !/^[0-9a-f]{64}$/.test(parsed.shortDigest))) ||
+        (!isString(parsed.shortDigest) || !/^[0-9a-f]{64}$/.test(parsed.shortDigest))) ||
       (parsed.mode !== 'short' && parsed.mode !== 'delete' && parsed.shortDigest !== undefined) ||
       (parsed.mode === 'delete' &&
         parsed.shortDigest !== undefined &&
-        (typeof parsed.shortDigest !== 'string' || !/^[0-9a-f]{64}$/.test(parsed.shortDigest))) ||
+        (!isString(parsed.shortDigest) || !/^[0-9a-f]{64}$/.test(parsed.shortDigest))) ||
       (parsed.fallbackShortDigest !== undefined &&
         ((parsed.mode !== 'write' && parsed.mode !== 'short') ||
-          typeof parsed.fallbackShortDigest !== 'string' ||
+          !isString(parsed.fallbackShortDigest) ||
           !/^[0-9a-f]{64}$/.test(parsed.fallbackShortDigest))) ||
       (parsed.unpublished !== undefined &&
         ((parsed.mode !== 'write' && parsed.mode !== 'short') || !parsed.unpublished)) ||
@@ -212,16 +219,17 @@ export function parseKeyringChunkJournal(value: string): KeyringChunkJournal {
     ) {
       throw new Error('invalid');
     }
-    return {
+    const journal: KeyringChunkJournal = {
       mode: parsed.mode,
       generations,
-      ...(parsed.shortDigest ? { shortDigest: parsed.shortDigest } : {}),
-      ...(parsed.fallbackShortDigest ? { fallbackShortDigest: parsed.fallbackShortDigest } : {}),
-      ...(parsed.unpublished ? { unpublished: true } : {}),
-      ...(parsed.publicationAttempted ? { publicationAttempted: true } : {}),
-      ...(parsed.blockLegacy ? { blockLegacy: true } : {}),
-      ...(parsed.unverifiable ? { unverifiable: true } : {}),
     };
+    if (parsed.shortDigest) journal.shortDigest = parsed.shortDigest;
+    if (parsed.fallbackShortDigest) journal.fallbackShortDigest = parsed.fallbackShortDigest;
+    if (parsed.unpublished) journal.unpublished = true;
+    if (parsed.publicationAttempted) journal.publicationAttempted = true;
+    if (parsed.blockLegacy) journal.blockLegacy = true;
+    if (parsed.unverifiable) journal.unverifiable = true;
+    return journal;
   } catch {
     throw new InvalidKeyringJournalError();
   }
@@ -267,15 +275,11 @@ export function keyringDeleteJournalFits(
   if (generations.length > KEYRING_MAX_DELETE_GENERATIONS) {
     return false;
   }
-  return (
-    encodeKeyringJournal({
-      mode: 'delete',
-      generations,
-      ...(shortDigest ? { shortDigest } : {}),
-      ...(blockLegacy ? { blockLegacy: true } : {}),
-      ...(unverifiable ? { unverifiable: true } : {}),
-    }).length <= KEYRING_MAX_ENTRY_CHARS
-  );
+  const journal: KeyringChunkJournal = { mode: 'delete', generations };
+  if (shortDigest) journal.shortDigest = shortDigest;
+  if (blockLegacy) journal.blockLegacy = true;
+  if (unverifiable) journal.unverifiable = true;
+  return encodeKeyringJournal(journal).length <= KEYRING_MAX_ENTRY_CHARS;
 }
 
 export function keyringChunkAccount(account: string, marker: KeyringChunkMarker, index: number): string {

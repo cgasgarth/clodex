@@ -3,9 +3,9 @@ import * as p from '@clack/prompts';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { loadPreferences, savePreferences } from '../src/config.js';
+import { loadPreferences, savePreferences } from '../src/config/config.js';
 import { reportInactiveCatalogAliases, runModelsCommand } from '../src/cli.js';
-import { getConfigPath } from '../src/paths.js';
+import { getConfigPath } from '../src/config/paths.js';
 
 let tempHome: string;
 

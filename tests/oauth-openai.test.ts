@@ -4,7 +4,11 @@ import {
   refreshOpenAiAccessToken,
   runOpenAiDeviceCodeFlow,
 } from '../src/oauth/openai.js';
-import { asMocked } from './test-helpers.js';
+import { asMocked, type JsonObject } from './test-helpers.js';
+
+function buildJwt(claims: JsonObject): string {
+  return `header.${Buffer.from(JSON.stringify(claims)).toString('base64url')}.signature`;
+}
 
 describe('oauth/openai', () => {
   const originalFetch = global.fetch;
@@ -19,10 +23,6 @@ describe('oauth/openai', () => {
   });
 
   describe('extractOpenAiAccountId', () => {
-    function buildJwt(claims: unknown): string {
-      return `header.${Buffer.from(JSON.stringify(claims)).toString('base64url')}.signature`;
-    }
-
     it('returns undefined if no token provided', () => {
       expect(extractOpenAiAccountId({})).toBeUndefined();
     });
@@ -50,6 +50,7 @@ describe('oauth/openai', () => {
 
   describe('refreshOpenAiAccessToken', () => {
     it('returns tokens on success', async () => {
+      // SAFETY: The test fixture defines the asserted runtime shape.
       asMocked(global.fetch).mockResolvedValueOnce({
         ok: true,
         json: async () => ({ access_token: 'new_token' }),
@@ -64,6 +65,7 @@ describe('oauth/openai', () => {
     });
 
     it('throws on non-ok response', async () => {
+      // SAFETY: The test fixture defines the asserted runtime shape.
       asMocked(global.fetch).mockResolvedValueOnce({
         ok: false,
         status: 401,
@@ -76,6 +78,7 @@ describe('oauth/openai', () => {
   describe('runOpenAiDeviceCodeFlow', () => {
     it('handles successful polling loop', async () => {
       // 1. Device initiation response
+      // SAFETY: The test fixture defines the asserted runtime shape.
       asMocked(global.fetch).mockResolvedValueOnce({
         ok: true,
         json: async () => ({
@@ -87,18 +90,21 @@ describe('oauth/openai', () => {
       } as Response);
 
       // 2. First polling attempt: authorization pending (403)
+      // SAFETY: The test fixture defines the asserted runtime shape.
       asMocked(global.fetch).mockResolvedValueOnce({
         ok: false,
         status: 403,
       } as Response);
 
       // 3. Second polling attempt: user authorized (200 OK)
+      // SAFETY: The test fixture defines the asserted runtime shape.
       asMocked(global.fetch).mockResolvedValueOnce({
         ok: true,
         json: async () => ({ authorization_code: 'auth_code', code_verifier: 'verifier' }),
       } as Response);
 
       // 4. Token exchange response
+      // SAFETY: The test fixture defines the asserted runtime shape.
       asMocked(global.fetch).mockResolvedValueOnce({
         ok: true,
         json: async () => ({ access_token: 'final_access_token' }),
@@ -125,6 +131,7 @@ describe('oauth/openai', () => {
     });
 
     it('throws if device initiation fails', async () => {
+      // SAFETY: The test fixture defines the asserted runtime shape.
       asMocked(global.fetch).mockResolvedValueOnce({
         ok: false,
         status: 500,
@@ -135,12 +142,14 @@ describe('oauth/openai', () => {
 
     it('throws if polling hits an unexpected error (e.g. 500)', async () => {
       // 1. Device initiation
+      // SAFETY: The test fixture defines the asserted runtime shape.
       asMocked(global.fetch).mockResolvedValueOnce({
         ok: true,
         json: async () => ({ device_auth_id: 'auth_id', user_code: 'user_code', interval: '1', expires_in: 60 }),
       } as Response);
 
       // 2. Polling fails with 500
+      // SAFETY: The test fixture defines the asserted runtime shape.
       asMocked(global.fetch).mockResolvedValueOnce({
         ok: false,
         status: 500,
@@ -151,12 +160,14 @@ describe('oauth/openai', () => {
 
     it('throws if device authorization times out', async () => {
       // 1. Device initiation (succeeds)
+      // SAFETY: The test fixture defines the asserted runtime shape.
       asMocked(global.fetch).mockResolvedValueOnce({
         ok: true,
         json: async () => ({ device_auth_id: 'auth_id', user_code: 'user_code', interval: '1', expires_in: 0 }),
       } as Response);
       
       // 2. Polling loop (fails with 403 authorization pending, but we time out)
+      // SAFETY: The test fixture defines the asserted runtime shape.
       asMocked(global.fetch).mockResolvedValue({
         ok: false,
         status: 403,

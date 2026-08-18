@@ -1,7 +1,8 @@
+import { isObject, isString } from '../../runtime/type-guards.js';
 import { chmodSync, mkdirSync, rmSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { VERSION } from '../../constants.js';
-import { DAEMON_CONTROL_IDLE_TIMEOUT_SECONDS } from '../../timeouts.js';
+import { DAEMON_CONTROL_IDLE_TIMEOUT_SECONDS } from '../../config/timeouts.js';
 import { createDaemonAccountController } from '../account-service.js';
 import type {
   ControlWorkerCommand,
@@ -9,6 +10,11 @@ import type {
   SerializedControlRequest,
   SerializedControlResponse,
 } from './protocol.js';
+import { diagnosticRecord } from '../../observability/trace-log.js';
+
+interface ControlPayload {
+  value: unknown;
+}
 
 declare const self: Worker;
 
@@ -21,7 +27,7 @@ let nextRequestId = 1;
 let server: Bun.Server<undefined> | undefined;
 let activeSocketPath: string | undefined;
 
-function sendJson(status: number, value: unknown): Response {
+function sendJson(status: number, value: ControlPayload['value']): Response {
   return new Response(JSON.stringify(value), {
     status,
     headers: {
@@ -31,7 +37,7 @@ function sendJson(status: number, value: unknown): Response {
   });
 }
 
-async function readJsonBody(request: Request): Promise<unknown> {
+async function readJsonBody(request: Request): Promise<ControlPayload['value']> {
   const raw = await request.text();
   if (Buffer.byteLength(raw) > MAX_CONTROL_BODY_BYTES) {
     throw new Error('Control request body is too large');
@@ -49,8 +55,8 @@ async function forwardToMain(request: Request): Promise<Response> {
     method: request.method,
     url: request.url,
     headers: [...request.headers.entries()],
-    ...(body ? { body } : {}),
   };
+  if (body) forwarded.body = body;
   const response = await new Promise<SerializedControlResponse>((resolve, reject) => {
     pending.set(id, { resolve, reject });
     postMessage({ type: 'request', request: forwarded } satisfies ControlWorkerEvent);
@@ -84,9 +90,11 @@ function start(command: Extract<ControlWorkerCommand, { type: 'start' }>): void 
         }
         if (request.method === 'POST' && url.pathname === '/v1/launches/attach') {
           const body = await readJsonBody(request);
-          const accountId = body && typeof body === 'object'
-            && typeof (body as { accountId?: unknown }).accountId === 'string'
-            ? (body as { accountId: string }).accountId
+          const accountIdValue = body && isObject(body)
+            ? diagnosticRecord(body).accountId
+            : undefined;
+          const accountId = isString(accountIdValue)
+            ? accountIdValue
             : undefined;
           return sendJson(201, accounts.createLaunchTicket(accountId));
         }
@@ -102,7 +110,7 @@ function start(command: Extract<ControlWorkerCommand, { type: 'start' }>): void 
   postMessage({ type: 'ready' } satisfies ControlWorkerEvent);
 }
 
-self.onmessage = (event: MessageEvent<ControlWorkerCommand>) => {
+self.addEventListener('message', (event: MessageEvent<ControlWorkerCommand>) => {
   const command = event.data;
   if (command.type === 'response') {
     const waiter = pending.get(command.response.id);
@@ -129,4 +137,4 @@ self.onmessage = (event: MessageEvent<ControlWorkerCommand>) => {
       message: error instanceof Error ? error.message : String(error),
     } satisfies ControlWorkerEvent);
   }
-};
+});

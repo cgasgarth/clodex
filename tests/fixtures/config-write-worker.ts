@@ -1,4 +1,4 @@
-import { setAppPathOverride } from '../../src/config.js';
+import { setAppPathOverride } from '../../src/config/config.js';
 
 const workerId = process.env['CONFIG_WRITE_WORKER_ID'];
 const writes = Number(process.env['CONFIG_WRITE_COUNT']);

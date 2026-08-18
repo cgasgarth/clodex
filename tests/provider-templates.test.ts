@@ -5,7 +5,7 @@ import {
   listAddableTemplates,
   listSupportedTemplates,
   listVisibleOAuthTemplates,
-} from '../src/provider-templates.js';
+} from '../src/providers/templates.js';
 import { fetchTemplateModels } from '../src/registry/fetch-template-models.js';
 import { stubTestGlobal } from './test-helpers.js';
 

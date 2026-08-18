@@ -4,7 +4,7 @@ import {
   contextWindowFromHeuristics,
   buildContextWindowIndex,
   DEFAULT_CONTEXT_WINDOW,
-} from '../src/context-window.js';
+} from '../src/models/context-window.js';
 
 describe('contextWindowFromHeuristics', () => {
   it.each([

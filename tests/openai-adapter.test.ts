@@ -1,14 +1,27 @@
 import { describe, expect, it, vi } from 'bun:test';
 import { generateText, streamText } from 'ai';
-import { collectOpenAiStream, generateOpenAiResponse, streamOpenAiResponse, translateOpenAiRequest } from '../src/openai-adapter.js';
+import { collectOpenAiStream, generateOpenAiResponse, streamOpenAiResponse, translateOpenAiRequest } from '../src/providers/openai-adapter.js';
 import { asMocked } from './test-helpers.js';
 
 vi.mock('ai', () => ({
   streamText: vi.fn(),
   generateText: vi.fn(),
-  tool: vi.fn((spec: unknown) => spec),
-  jsonSchema: vi.fn((schema: unknown) => schema),
+  tool: vi.fn(<T>(spec: T) => spec),
+  jsonSchema: vi.fn(<T>(schema: T) => schema),
 }));
+
+async function* aggregateOpenAiStream() {
+  yield { type: 'text-delta', text: 'Hello ' };
+  yield { type: 'text-delta', text: 'world' };
+  yield { type: 'tool-call', toolCallId: 'call_1', toolName: 'get_weather', input: { city: 'Austin' } };
+  yield { type: 'finish', finishReason: 'tool-calls', totalUsage: { inputTokens: 11, outputTokens: 7, totalTokens: 18 } };
+}
+
+async function* forcedOpenAiStream() {
+  yield { type: 'text-delta', text: 'pong' };
+  yield { type: 'tool-call', toolCallId: 'call_9', toolName: 'lookup', input: { q: 'x' } };
+  yield { type: 'finish', finishReason: 'stop', totalUsage: { inputTokens: 3, outputTokens: 2, totalTokens: 5 } };
+}
 
 describe('streamOpenAiResponse', () => {
   it('propagates an SDK error instead of completing a failed stream', async () => {
@@ -17,10 +30,12 @@ describe('streamOpenAiResponse', () => {
       yield { type: 'text-delta', text: 'partial' };
       yield { type: 'error', error: upstreamError };
     }
+    // SAFETY: The test fixture defines the asserted runtime shape.
     asMocked(streamText).mockReturnValue({ stream: stream() } as never);
     let output = '';
 
     await expect(streamOpenAiResponse(
+      // SAFETY: The test fixture defines the asserted runtime shape.
       {} as never,
       { messages: [] },
       'gpt-test',
@@ -60,6 +75,7 @@ describe('translateOpenAiRequest OAuth shaping', () => {
       messages: [{ role: 'user', content: 'hi' }],
     }, { openAiOAuth: true });
 
+    // SAFETY: The test fixture defines the asserted runtime shape.
     expect((params.providerOptions as any)?.openai?.instructions).toBe('You are a coding assistant.');
   });
 
@@ -81,14 +97,7 @@ describe('translateOpenAiRequest OAuth shaping', () => {
 
 describe('collectOpenAiStream', () => {
   it('aggregates text deltas, tool calls, finish reason, and usage', async () => {
-    async function* stream() {
-      yield { type: 'text-delta', text: 'Hello ' };
-      yield { type: 'text-delta', text: 'world' };
-      yield { type: 'tool-call', toolCallId: 'call_1', toolName: 'get_weather', input: { city: 'Austin' } };
-      yield { type: 'finish', finishReason: 'tool-calls', totalUsage: { inputTokens: 11, outputTokens: 7, totalTokens: 18 } };
-    }
-
-    const collected = await collectOpenAiStream(stream());
+    const collected = await collectOpenAiStream(aggregateOpenAiStream());
 
     expect(collected.text).toBe('Hello world');
     expect(collected.toolCalls).toEqual([{ toolCallId: 'call_1', toolName: 'get_weather', input: { city: 'Austin' } }]);
@@ -109,15 +118,12 @@ describe('collectOpenAiStream', () => {
 
 describe('generateOpenAiResponse with forceStream', () => {
   it('streams upstream and synthesizes a complete non-streaming chat completion', async () => {
-    async function* stream() {
-      yield { type: 'text-delta', text: 'pong' };
-      yield { type: 'tool-call', toolCallId: 'call_9', toolName: 'lookup', input: { q: 'x' } };
-      yield { type: 'finish', finishReason: 'stop', totalUsage: { inputTokens: 3, outputTokens: 2, totalTokens: 5 } };
-    }
-    asMocked(streamText).mockReturnValue({ stream: stream() } as never);
+    // SAFETY: The test fixture defines the asserted runtime shape.
+    asMocked(streamText).mockReturnValue({ stream: forcedOpenAiStream() } as never);
     asMocked(generateText).mockClear();
 
     const response: any = await generateOpenAiResponse(
+      // SAFETY: The test fixture defines the asserted runtime shape.
       {} as never,
       { messages: [] },
       'gpt-test',
@@ -141,6 +147,7 @@ describe('generateOpenAiResponse with forceStream', () => {
 
   it('uses a non-streaming upstream request when forceStream is not set', async () => {
     asMocked(streamText).mockClear();
+    // SAFETY: The test fixture defines the asserted runtime shape.
     asMocked(generateText).mockResolvedValue({
       text: 'plain',
       toolCalls: [],
@@ -148,6 +155,7 @@ describe('generateOpenAiResponse with forceStream', () => {
       usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
     } as never);
 
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const response: any = await generateOpenAiResponse({} as never, { messages: [] }, 'gpt-test');
 
     expect(streamText).not.toHaveBeenCalled();

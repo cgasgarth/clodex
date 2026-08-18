@@ -20,12 +20,12 @@ import {
   credentialAuthRef,
   readCredentialHelperAccount,
   writeCredentialHelperAccount,
-} from '../src/credential-helper.js';
+} from '../src/credentials/helper.js';
 import {
   deleteProviderCredential,
   resolveProviderCredential,
   saveProviderCredential,
-} from '../src/env.js';
+} from '../src/config/environment.js';
 import { oauthCredentialToKeychainJson } from '../src/oauth/types.js';
 import { refreshStoredOAuthCredential } from '../src/oauth/refresh.js';
 import { withRegistryWriteLock } from '../src/registry/lock.js';

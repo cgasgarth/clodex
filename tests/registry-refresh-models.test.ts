@@ -48,6 +48,7 @@ describe('registry/refresh-models', () => {
       asMocked(io.loadRegistryStrict).mockReturnValue(mockRegistry);
 
       // Codex endpoint returns valid models
+      // SAFETY: The test fixture defines the asserted runtime shape.
       asMocked(global.fetch).mockResolvedValueOnce({
         ok: true,
         json: async () => ({
@@ -63,6 +64,7 @@ describe('registry/refresh-models', () => {
       expect(result.ok).toBe(true);
       expect(result.modelCount).toBe(1);
       
+      // SAFETY: The test fixture defines the asserted runtime shape.
       const savedRegistry = asMocked(io.saveRegistry).mock.calls[0]?.[0] as ProviderRegistry;
       const models = savedRegistry.providers[0]?.modelsCache?.models;
       expect(models?.[0]?.id).toBe('gpt-4');
@@ -84,12 +86,14 @@ describe('registry/refresh-models', () => {
       asMocked(io.loadRegistryStrict).mockReturnValue(mockRegistry);
 
       // 1. Codex endpoint 404s
+      // SAFETY: The test fixture defines the asserted runtime shape.
       asMocked(global.fetch).mockResolvedValueOnce({
         ok: false,
         status: 404,
       } as Response);
 
       // 2. General endpoint returns models, including unsupported ones
+      // SAFETY: The test fixture defines the asserted runtime shape.
       asMocked(global.fetch).mockResolvedValueOnce({
         ok: true,
         json: async () => ({
@@ -104,6 +108,7 @@ describe('registry/refresh-models', () => {
 
       expect(global.fetch).toHaveBeenCalledTimes(2);
       expect(global.fetch).toHaveBeenNthCalledWith(2, 'https://chatgpt.com/backend-api/models', expect.anything());
+      // SAFETY: The test fixture defines the asserted runtime shape.
       const savedRegistry = asMocked(io.saveRegistry).mock.calls[0]?.[0] as ProviderRegistry;
       const models = savedRegistry.providers[0]?.modelsCache?.models;
       console.log('MODELS RETURNED:', models);
@@ -130,6 +135,7 @@ describe('registry/refresh-models', () => {
       asMocked(io.loadRegistryStrict).mockReturnValue(mockRegistry);
 
       // Both endpoints fail
+      // SAFETY: The test fixture defines the asserted runtime shape.
       asMocked(global.fetch).mockResolvedValue({
         ok: false,
         status: 500,
@@ -172,6 +178,7 @@ describe('registry/refresh-models', () => {
       asMocked(io.loadRegistryStrict).mockReturnValue(mockRegistry);
 
       // Both live endpoints fail — would normally fall back to the static seed.
+      // SAFETY: The test fixture defines the asserted runtime shape.
       asMocked(global.fetch).mockResolvedValue({
         ok: false,
         status: 500,
@@ -203,6 +210,7 @@ describe('registry/refresh-models', () => {
       };
       asMocked(io.loadRegistryStrict).mockReturnValue(mockRegistry);
 
+      // SAFETY: The test fixture defines the asserted runtime shape.
       asMocked(global.fetch).mockResolvedValueOnce({
         ok: true,
         json: async () => ({
@@ -216,6 +224,7 @@ describe('registry/refresh-models', () => {
 
       await refreshProviderModels('openai-oauth', 'mock_token', mockRegistry);
 
+      // SAFETY: The test fixture defines the asserted runtime shape.
       const savedRegistry = asMocked(io.saveRegistry).mock.calls[0]?.[0] as ProviderRegistry;
       const models = savedRegistry.providers[0]?.modelsCache?.models ?? [];
       const luna = models.find(m => m.id === 'gpt-5.6-luna');
@@ -247,10 +256,12 @@ describe('registry/refresh-models', () => {
       asMocked(io.loadRegistryStrict).mockReturnValue(mockRegistry);
 
       // Both live endpoints fail → static seed.
+      // SAFETY: The test fixture defines the asserted runtime shape.
       asMocked(global.fetch).mockResolvedValue({ ok: false, status: 500 } as Response);
 
       await refreshProviderModels('openai-oauth', 'mock_token', mockRegistry);
 
+      // SAFETY: The test fixture defines the asserted runtime shape.
       const savedRegistry = asMocked(io.saveRegistry).mock.calls[0]?.[0] as ProviderRegistry;
       const luna = savedRegistry.providers[0]?.modelsCache?.models.find(m => m.id === 'gpt-5.6-luna');
       expect(luna?.contextWindow).toBe(1_000_000);

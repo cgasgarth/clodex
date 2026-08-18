@@ -12,7 +12,7 @@ import {
   DASHBOARD_CONTROL_REQUEST_TIMEOUT_MS,
   DASHBOARD_USAGE_REQUEST_TIMEOUT_MS,
   PROVIDER_METADATA_TIMEOUT_MS,
-} from '../src/timeouts.js';
+} from '../src/config/timeouts.js';
 
 const roots: string[] = [];
 afterEach(() => {
@@ -70,6 +70,7 @@ describe('daemon control API', () => {
       ticket: 'opaque',
       accountIds: { 'openai-oauth': 'one' },
       accountLabel: 'One',
+      // SAFETY: The test fixture defines the asserted runtime shape.
       processingMode: processingMode as 'standard' | 'fast',
     }));
     let secondwindMode: 'off' | 'shadow' | 'on' = 'off';

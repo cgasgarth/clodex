@@ -2,7 +2,7 @@ import { describe, expect, it } from 'bun:test';
 import {
   effortProviderOptions,
   resolveReasoningCapabilities,
-} from '../src/reasoning-capabilities.js';
+} from '../src/models/reasoning-capabilities.js';
 
 describe('resolveReasoningCapabilities', () => {
   it('uses OpenRouter supported_parameters as the source for controllable reasoning', () => {

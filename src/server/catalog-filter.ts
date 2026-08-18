@@ -26,7 +26,7 @@ export function summarizeServerProviders(models: ServerModelInfo[]): string {
     counts.set(key, (counts.get(key) ?? 0) + 1);
   }
   return [...counts.entries()]
-    .sort((a, b) => a[0].localeCompare(b[0]))
+    .toSorted((a, b) => a[0].localeCompare(b[0]))
     .map(([name, count]) => `${name} (${count})`)
     .join(', ');
 }

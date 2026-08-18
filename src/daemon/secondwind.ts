@@ -1,7 +1,8 @@
+import { isNumber } from '../runtime/type-guards.js';
 import { performance } from 'node:perf_hooks';
-import { estimateAnthropicInputTokens } from '../anthropic-endpoints.js';
-import { loadPreferences, savePreferences } from '../config.js';
-import type { InferenceTraceEvent } from '../trace-log.js';
+import { estimateAnthropicInputTokens } from '../providers/anthropic-endpoints.js';
+import { loadPreferences, savePreferences } from '../config/config.js';
+import { diagnosticRecord, type InferenceTraceEvent } from '../observability/trace-log.js';
 import type { ApiProcessingMode } from './api-pricing.js';
 import { estimateApiCost } from './api-pricing.js';
 import {
@@ -14,6 +15,7 @@ import {
   SecondwindWorkerPool,
   type SecondwindWorkerPoolSnapshot,
 } from './secondwind-worker-pool.js';
+import type { JsonObject } from '../oauth/responses-websocket/types.js';
 
 const MAX_PENDING_SAVINGS = 2_048;
 const MAX_LATENCY_SAMPLES = 10_000;
@@ -27,12 +29,12 @@ interface SecondwindRewriteStats {
 }
 
 interface SecondwindSession {
-  rewrite(request: Record<string, unknown>, body?: Uint8Array): {
-    request?: Record<string, unknown>;
+  rewrite(request: JsonObject, body?: Uint8Array): {
+    request?: JsonObject;
     body?: Uint8Array;
     stats?: SecondwindRewriteStats;
   } | Promise<{
-    request?: Record<string, unknown>;
+    request?: JsonObject;
     body?: Uint8Array;
     stats?: SecondwindRewriteStats;
   }>;
@@ -46,7 +48,7 @@ type SecondwindSessionFactory = (
 export interface SecondwindRewriteRequest {
   requestId?: string;
   body: Buffer;
-  request: Record<string, unknown>;
+  request: JsonObject;
   sessionId?: string;
   reportingSessionId?: string;
   modelId: string;
@@ -131,8 +133,21 @@ interface ObservedRequestSavings {
   estimatedSavingsUsd: number;
 }
 
+interface TokenAccounting {
+  originalTokens: number;
+  optimizedTokens: number;
+  tokensReduced: number;
+  estimated: boolean;
+}
+
+interface SecondwindRewriteResult {
+  request?: JsonObject;
+  body?: Uint8Array;
+  stats?: SecondwindRewriteStats;
+}
+
 interface SecondwindServiceOptions {
-  initialMode?: unknown;
+  initialMode?: SecondwindMode;
   persistMode?: (mode: SecondwindMode) => void;
   createSession?: SecondwindSessionFactory;
   metrics?: SecondwindMetricsPersistence;
@@ -190,35 +205,30 @@ function loadLifetimeMetrics(
   }
 }
 
-function normalizeSecondwindMode(value: unknown): SecondwindMode {
+function normalizeSecondwindMode(value: SecondwindMode | undefined): SecondwindMode {
   if (value === 'off' || value === 'shadow') return value;
   return 'on';
 }
 
 function percentile(samples: number[], fraction: number): number {
   if (samples.length === 0) return 0;
-  const sorted = [...samples].sort((a, b) => a - b);
+  const sorted = samples.toSorted((a, b) => a - b);
   const index = Math.max(0, Math.ceil(sorted.length * fraction) - 1);
   return sorted[index] ?? 0;
 }
 
-function nonNegativeInteger(value: unknown): number | undefined {
-  return typeof value === 'number' && Number.isFinite(value) && value >= 0
+function nonNegativeInteger(value: number | undefined): number | undefined {
+  return isNumber(value) && Number.isFinite(value) && value >= 0
     ? Math.round(value)
     : undefined;
 }
 
 function tokenAccounting(
   stats: SecondwindRewriteStats | undefined,
-  originalRequest: Record<string, unknown>,
-  optimizedRequest: () => Record<string, unknown>,
+  originalRequest: JsonObject,
+  optimizedRequest: () => JsonObject,
   blocksRewritten: number,
-): {
-  originalTokens: number;
-  optimizedTokens: number;
-  tokensReduced: number;
-  estimated: boolean;
-} {
+): TokenAccounting {
   const measuredInput = nonNegativeInteger(stats?.input_tokens);
   const measuredOutput = nonNegativeInteger(stats?.output_tokens);
   const measuredSaved = nonNegativeInteger(stats?.tokens_saved);
@@ -298,7 +308,7 @@ function distributeTokens(total: number, weights: number[]): number[] {
   const remainder = total - distributed.reduce((sum, value) => sum + value, 0);
   const order = exact
     .map((value, index) => ({ index, fraction: value - Math.floor(value) }))
-    .sort((left, right) => right.fraction - left.fraction || left.index - right.index);
+    .toSorted((left, right) => right.fraction - left.fraction || left.index - right.index);
   for (let index = 0; index < remainder; index += 1) {
     const slot = order[index % order.length];
     if (!slot) break;
@@ -375,7 +385,20 @@ function observedRequestSavings(
 
 async function defaultCreateSession(): Promise<SecondwindSession> {
   const { Session } = await import('secondwind');
-  return new Session();
+  const session = new Session();
+  return {
+    rewrite(request) {
+      const nativeRequest: Parameters<typeof session.rewrite>[0] = JSON.parse(JSON.stringify(request));
+      const result = session.rewrite(nativeRequest);
+      return {
+        request: diagnosticRecord(result.request),
+        stats: result.stats,
+      };
+    },
+    close() {
+      session.close();
+    },
+  };
 }
 
 export class SecondwindService {
@@ -424,7 +447,7 @@ export class SecondwindService {
   }
 
   snapshot(): SecondwindSnapshot {
-    return {
+    const snapshot: SecondwindSnapshot = {
       mode: this.#mode,
       since: this.#since,
       loaded: this.#loaded,
@@ -433,21 +456,22 @@ export class SecondwindService {
       shadow: { ...this.#shadow },
       lifetime: { ...this.#lifetime },
       topSessions: [...this.#sessionSavings.values()]
-        .sort((left, right) =>
+        .toSorted((left, right) =>
           right.tokensReduced - left.tokensReduced
           || right.estimatedSavingsUsd - left.estimatedSavingsUsd
           || left.sessionHash.localeCompare(right.sessionHash))
         .slice(0, 3)
-        .map(session => ({ ...session })),
+        .map(session => Object.assign({}, session)),
       latency: {
         samples: this.#latencySamples.length,
         medianMs: percentile(this.#latencySamples, 0.5),
         p95Ms: percentile(this.#latencySamples, 0.95),
       },
       errors: this.#errors,
-      ...(this.#backendSnapshot ? { workers: this.#backendSnapshot() } : {}),
-      ...(this.#lastError ? { lastError: this.#lastError } : {}),
     };
+    if (this.#backendSnapshot) snapshot.workers = this.#backendSnapshot();
+    if (this.#lastError) snapshot.lastError = this.#lastError;
+    return snapshot;
   }
 
   handleTrace(event: InferenceTraceEvent): void {
@@ -510,15 +534,7 @@ export class SecondwindService {
       if (sessionKey) this.#markSessionActive(sessionKey);
       session = await this.#createSession(sessionKey);
       this.#loaded = true;
-      const rawResult: unknown = await session.rewrite(input.request, input.body);
-      if (!rawResult || typeof rawResult !== 'object') {
-        throw new Error('Secondwind returned an invalid rewritten request');
-      }
-      const result = rawResult as {
-        request?: unknown;
-        body?: unknown;
-        stats?: SecondwindRewriteStats;
-      };
+      const result: SecondwindRewriteResult = await session.rewrite(input.request, input.body);
 
       const blocksRewritten = Math.max(
         0,
@@ -526,16 +542,18 @@ export class SecondwindService {
       );
       // Preserve the exact inbound bytes when Secondwind made no change. Besides
       // avoiding needless serialization, this keeps prompt-cache prefixes stable.
-      let rewrittenRequest: Record<string, unknown> | undefined;
-      const readRewrittenRequest = (): Record<string, unknown> => {
+      let rewrittenRequest: JsonObject | undefined;
+      const readRewrittenRequest = (): JsonObject => {
         if (rewrittenRequest) return rewrittenRequest;
-        if (result.request && typeof result.request === 'object') {
-          rewrittenRequest = result.request as Record<string, unknown>;
-          return rewrittenRequest;
+        if (result.request) {
+          const request = result.request;
+          rewrittenRequest = request;
+          return request;
         }
         if (result.body instanceof Uint8Array) {
-          rewrittenRequest = JSON.parse(new TextDecoder().decode(result.body)) as Record<string, unknown>;
-          return rewrittenRequest;
+          const request: JsonObject = JSON.parse(new TextDecoder().decode(result.body));
+          rewrittenRequest = request;
+          return request;
         }
         throw new Error('Secondwind returned an invalid rewritten request');
       };
@@ -626,7 +644,7 @@ export class SecondwindService {
     pending: PendingSecondwindSavings,
     savings?: ObservedRequestSavings | number,
   ): void {
-    const detail: ObservedRequestSavings = typeof savings === 'number'
+    const detail: ObservedRequestSavings = isNumber(savings)
       ? {
           observedInputTokens: 0,
           savedInputTokens: pending.tokensReduced,

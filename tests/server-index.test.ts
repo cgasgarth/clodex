@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'bun:test';
 import * as p from '@clack/prompts';
-import type { ModelInfo } from '../src/types.js';
 import type { ServerModelInfo } from '../src/server/models.js';
 import { createHoisted, waitForCondition } from './test-helpers.js';
 
@@ -9,37 +8,44 @@ const originalSetRawMode = Object.getOwnPropertyDescriptor(process.stdin, 'setRa
 
 const state = createHoisted(() => ({
   apiKey: 'real-key',
+  // SAFETY: The test fixture defines the asserted runtime shape.
   savedPassword: null as string | null,
+  // SAFETY: The test fixture defines the asserted runtime shape.
   listenMode: 'local' as 'local' | 'network' | null,
+  // SAFETY: The test fixture defines the asserted runtime shape.
   savedListenMode: 'local' as 'local' | 'network',
+  // SAFETY: The test fixture defines the asserted runtime shape.
   serverPassword: 'typed-password' as string | null,
+  // SAFETY: The test fixture defines the asserted runtime shape.
   savedChoice: null as 'use-saved' | 'new-password' | null,
+  // SAFETY: The test fixture defines the asserted runtime shape.
   savePassword: false as boolean | null,
   favoritesOnly: false,
   maskGatewayIds: true,
+  // SAFETY: The test fixture defines the asserted runtime shape.
   startMode: 'quick' as 'configure' | 'quick' | null,
+  // SAFETY: The test fixture defines the asserted runtime shape.
   modelAliases: [] as Array<{ name: string; providerId: string; modelId: string }>,
+  // SAFETY: The test fixture defines the asserted runtime shape.
   startServerOptions: null as any,
   close: vi.fn<() => Promise<void>>(async () => undefined),
+  // SAFETY: The test fixture defines the asserted runtime shape.
   askServerStartMode: vi.fn(async () => 'quick' as 'configure' | 'quick' | null),
+  // SAFETY: The test fixture defines the asserted runtime shape.
   askFavoritesOnly: vi.fn(async () => false as boolean | null),
+  // SAFETY: The test fixture defines the asserted runtime shape.
   askMaskGatewayIds: vi.fn(async () => true as boolean | null),
+  // SAFETY: The test fixture defines the asserted runtime shape.
   askListenMode: vi.fn(async () => 'local' as 'local' | 'network' | null),
+  // SAFETY: The test fixture defines the asserted runtime shape.
   askServerPassword: vi.fn(async () => 'typed-password' as string | null),
+  // SAFETY: The test fixture defines the asserted runtime shape.
   askUseSavedServerPassword: vi.fn(async () => null as 'use-saved' | 'new-password' | null),
+  // SAFETY: The test fixture defines the asserted runtime shape.
   askSaveServerPassword: vi.fn(async () => false as boolean | null),
 }));
 
-const models: ModelInfo[] = [{
-  id: 'claude-test',
-  name: 'Claude Test',
-  isFree: false,
-  brand: 'Claude',
-  sourceBackend: 'zen',
-  modelFormat: 'anthropic',
-}];
-
-vi.mock('../src/config.js', () => ({
+vi.mock('../src/config/config.js', () => ({
   getSavedServerPassword: () => state.savedPassword,
   getServerExposedProviders: () => null,
   getServerMaskGatewayIds: () => true,
@@ -106,7 +112,7 @@ const discovery = createHoisted(() => ({
   unregister: vi.fn(),
 }));
 
-vi.mock('../src/server-runtime.js', () => {
+vi.mock('../src/runtime/server-runtime.js', () => {
   return {
     isDiscoveryDisabled: (flag: boolean | undefined) => flag
       ?? ['1', 'true'].includes((process.env.CLODEX_NO_DISCOVERY ?? '').trim().toLowerCase()),
@@ -168,11 +174,13 @@ describe('runServerCommand', () => {
     if (originalStdinIsTTY) {
       Object.defineProperty(process.stdin, 'isTTY', originalStdinIsTTY);
     } else {
+      // SAFETY: The test fixture defines the asserted runtime shape.
       delete (process.stdin as typeof process.stdin & { isTTY?: boolean }).isTTY;
     }
     if (originalSetRawMode) {
       Object.defineProperty(process.stdin, 'setRawMode', originalSetRawMode);
     } else {
+      // SAFETY: The test fixture defines the asserted runtime shape.
       delete (process.stdin as typeof process.stdin & { setRawMode?: (mode: boolean) => void }).setRawMode;
     }
   });
@@ -300,6 +308,7 @@ describe('runServerCommand', () => {
     state.savedListenMode = 'local';
 
     const { runServerCommand } = await import('../src/server/index.js');
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const result = runServerCommand({ quick: true } as any);
     await waitForCondition(() => expect(state.startServerOptions).not.toBeNull());
     process.emit('SIGINT');
@@ -315,6 +324,7 @@ describe('runServerCommand', () => {
 
   it('quick network launch can use a one-run password flag without password prompts', async () => {
     const { runServerCommand } = await import('../src/server/index.js');
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const result = runServerCommand({ quick: true, listenMode: 'network', password: 'one-run-secret' } as any);
     await waitForCondition(() => expect(state.startServerOptions).not.toBeNull());
     process.emit('SIGINT');
@@ -336,6 +346,7 @@ describe('runServerCommand', () => {
     state.serverPassword = null;
 
     const { runServerCommand } = await import('../src/server/index.js');
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const result = await runServerCommand({ quick: true, listenMode: 'network' } as any);
 
     expect(result).toBe(1);

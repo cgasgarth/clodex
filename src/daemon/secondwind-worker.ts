@@ -13,7 +13,7 @@ type WorkerMessage = WorkerRequest | WorkerCloseRequest;
 
 const sessions = new Map<string, Session>();
 
-function send(message: Record<string, unknown>): void {
+function send(message: Parameters<NonNullable<typeof process.send>>[0]): void {
   process.send?.(message);
 }
 
@@ -36,7 +36,10 @@ process.on('message', (message: WorkerMessage) => {
       session = new Session();
       if (message.sessionKey) sessions.set(message.sessionKey, session);
     }
-    const request = JSON.parse(new TextDecoder().decode(message.body)) as Record<string, unknown>;
+    // SAFETY: The parent sends a serialized request accepted by Session.rewrite.
+    const request = JSON.parse(
+      new TextDecoder().decode(message.body),
+    ) as Parameters<Session['rewrite']>[0];
     const result = session.rewrite(request);
     const body = new TextEncoder().encode(JSON.stringify(result.request));
     send({
