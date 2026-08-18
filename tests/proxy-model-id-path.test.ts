@@ -5,8 +5,8 @@ import { startProxy, type ProxyHandle } from '../src/proxy/index.js';
 describe('proxy GET /v1/models with models/ prefix ids', () => {
   let handle: ProxyHandle | null = null;
 
-  afterEach(() => {
-    handle?.close();
+  afterEach(async () => {
+    await handle?.close();
     handle = null;
   });
 

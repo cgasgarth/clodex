@@ -69,7 +69,7 @@ describe('managed-account launch ticket transport', () => {
       expect(response.status).toBe(200);
       expect(observedTicket).toBe('ticket.part-two');
     } finally {
-      handle.close();
+      await handle.close();
     }
   });
 });

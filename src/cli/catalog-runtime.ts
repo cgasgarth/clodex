@@ -94,7 +94,7 @@ export async function launchClaudeViaCatalog(
     claudeCodeClientModelId(startingRoute.aliasId, contextWindow),
     [...traceArgs, ...claudeArgs],
   );
-  proxyHandle.close();
+  await proxyHandle.close();
   if (trace) printTraceLog(debugLogPath);
   return exitCode;
 }

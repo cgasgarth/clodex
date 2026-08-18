@@ -92,7 +92,7 @@ describe('SDK proxy provider identity', () => {
       messages: [{ role: 'user', content: 'hi' }],
       stream: false,
     });
-    handle.close();
+    await handle.close();
 
     expect(res.status, res.body).toBe(200);
     expect(createLanguageModel).toHaveBeenCalledWith(expect.objectContaining({
@@ -124,7 +124,7 @@ describe('SDK proxy provider identity', () => {
       messages: [{ role: 'user', content: 'hi' }],
       stream: false,
     });
-    handle.close();
+    await handle.close();
 
     expect(res.status, res.body).toBe(200);
     expect(createLanguageModel).toHaveBeenCalledWith(expect.objectContaining({

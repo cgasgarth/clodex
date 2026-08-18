@@ -412,7 +412,7 @@ async function runDaemonProcess(): Promise<number> {
     if (runtime) removeDaemonRuntimeState(runtime.instanceId);
     unregisterServerRuntimeState(process.pid);
     await control?.close();
-    endpoint?.close();
+    await endpoint?.close();
     writeProxyLifecycleLog(inferenceLogPath, {
       event: 'proxy_stopped',
       pid: process.pid,

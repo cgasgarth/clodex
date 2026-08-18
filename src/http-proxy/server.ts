@@ -1373,7 +1373,7 @@ export async function startHttpProxy(options: HttpProxyOptions): Promise<HttpPro
   } catch (err) {
     adapterAgent?.destroy();
     mitmServer.close();
-    if (ownsAdapter) adapter?.close();
+    if (ownsAdapter) await adapter?.close();
     throw err;
   }
 
@@ -1393,7 +1393,7 @@ export async function startHttpProxy(options: HttpProxyOptions): Promise<HttpPro
       for (const socket of sockets) socket.destroy();
       await new Promise<void>(resolve => proxyServer.close(() => resolve()));
       await new Promise<void>(resolve => mitmServer.close(() => resolve()));
-      if (ownsAdapter) adapter?.close();
+      if (ownsAdapter) await adapter?.close();
     },
   };
 }

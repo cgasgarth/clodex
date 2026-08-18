@@ -54,7 +54,7 @@ describe('live proxy catalog replacement', () => {
       expect(disabledAlias.status).toBe(400);
       expect(await disabledAlias.text()).toContain('target disabled');
     } finally {
-      handle.close();
+      await handle.close();
     }
   });
 });

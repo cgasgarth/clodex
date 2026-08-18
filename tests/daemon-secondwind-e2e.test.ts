@@ -265,7 +265,7 @@ describe('single-endpoint daemon Secondwind integration', () => {
         .toMatchObject({ running: true, port: endpoint.port });
     } finally {
       await control.close();
-      endpoint.close();
+      await endpoint.close();
       secondwind.close();
       metrics.close();
       await upstream.stop(true);

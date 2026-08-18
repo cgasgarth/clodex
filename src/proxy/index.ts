@@ -346,7 +346,7 @@ export interface ProxyHandle {
     defaultAliasId: string,
     modelAliases?: ProxyModelAlias[],
   ) => void;
-  close: () => void;
+  close: () => Promise<void>;
 }
 
 /**
@@ -1183,10 +1183,10 @@ export async function startProxyCatalog(
         `catalog replaced: ${nextRoutes.length} model(s), default=${catalog.defaultRoute.aliasId}`,
       );
     },
-    close: () => {
+    close: async () => {
       process.off('unhandledRejection', onRejection);
       process.off('uncaughtException', onException);
-      void server.stop(true);
+      await server.stop(true);
     },
   };
 }

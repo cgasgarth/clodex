@@ -533,7 +533,7 @@ export async function runClaudeCommand(
     claudeCodeClientModelId(selectedModel.id, selectedModel.contextWindow),
     [...traceArgs, ...claudeArgs],
   );
-  proxyHandle?.close();
+  await proxyHandle?.close();
   if (trace) printTraceLog(debugLogPath);
   return exitCode;
 }

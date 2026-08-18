@@ -210,7 +210,7 @@ describe('Anthropic endpoint routing', () => {
         messages: [{ role: 'user', content: 'optimized in endpoint' }],
       });
     } finally {
-      handle.close();
+      await handle.close();
       restoreTestGlobals();
     }
   });
@@ -273,7 +273,7 @@ describe('Anthropic endpoint routing', () => {
       expect(optimizeRequest.mock.calls[1]?.[0].processingMode).toBe('standard');
       expect(optimizeRequest.mock.calls[2]?.[0].processingMode).toBe('fast');
     } finally {
-      handle.close();
+      await handle.close();
       restoreTestGlobals();
     }
   });
@@ -319,7 +319,7 @@ describe('SDK anonymous route handling', () => {
       stream: false,
     });
 
-    handle.close();
+    await handle.close();
     expect(res.status).toBe(502);
     expect(res.body).not.toContain('Missing API key');
   });
@@ -365,7 +365,7 @@ describe('SDK anonymous route handling', () => {
       expect(headers.has('authorization')).toBe(false);
       expect(headers.has('x-api-key')).toBe(false);
     } finally {
-      handle.close();
+      await handle.close();
       restoreTestGlobals();
     }
   });
@@ -443,7 +443,7 @@ describe('SDK anonymous route handling', () => {
         expect(headers.get('x-custom')).toBe('preserved');
       }
     } finally {
-      handle.close();
+      await handle.close();
       restoreTestGlobals();
     }
   });
@@ -480,7 +480,7 @@ describe('catalog model aliases', () => {
       handle.replaceCatalog([{ ...route }], route.aliasId, [{ ...aliases[0]! }]);
       expect(await lookup()).toBe(200);
     } finally {
-      handle.close();
+      await handle.close();
     }
   });
 
@@ -537,7 +537,7 @@ describe('catalog model aliases', () => {
       }
       expect(fetchMock).not.toHaveBeenCalled();
     } finally {
-      handle.close();
+      await handle.close();
       restoreTestGlobals();
     }
   });
@@ -569,7 +569,7 @@ describe('catalog model aliases', () => {
       }
       expect(fetchMock).not.toHaveBeenCalled();
     } finally {
-      handle.close();
+      await handle.close();
       restoreTestGlobals();
     }
   });
@@ -636,7 +636,7 @@ describe('catalog model aliases', () => {
       expect(message).not.toContain('clodex patch');
       expect(fetchMock).not.toHaveBeenCalled();
     } finally {
-      handle.close();
+      await handle.close();
       restoreTestGlobals();
     }
   });
@@ -700,7 +700,7 @@ describe('catalog model aliases', () => {
       }
       expect(fetchMock).toHaveBeenCalledTimes(1);
     } finally {
-      handle.close();
+      await handle.close();
       restoreTestGlobals();
     }
   });
@@ -801,7 +801,7 @@ describe('catalog model aliases', () => {
       }, undefined, '/anthropic/v1/messages');
       expect(prefixedMessages.status).toBe(200);
     } finally {
-      handle.close();
+      await handle.close();
     }
   });
 
@@ -835,7 +835,7 @@ describe('catalog model aliases', () => {
       });
       expect(status).toBe(404);
     } finally {
-      handle.close();
+      await handle.close();
     }
   });
 });
@@ -870,7 +870,7 @@ describe('token counting', () => {
       expect(JSON.parse(res.body).input_tokens).toBeGreaterThan(0);
       expect(refreshToken).not.toHaveBeenCalled();
     } finally {
-      handle.close();
+      await handle.close();
     }
   });
 
@@ -906,7 +906,7 @@ describe('token counting', () => {
         }),
       );
     } finally {
-      handle.close();
+      await handle.close();
       restoreTestGlobals();
     }
   });
@@ -1001,7 +1001,7 @@ describe('translated request cancellation', () => {
     } finally {
       if (previousKeepAlive === undefined) delete process.env.CLODEX_STREAM_KEEPALIVE_INTERVAL_MS;
       else process.env.CLODEX_STREAM_KEEPALIVE_INTERVAL_MS = previousKeepAlive;
-      handle.close();
+      await handle.close();
       upstream.closeAllConnections();
       await new Promise<void>(resolve => upstream.close(() => resolve()));
       rmSync(dir, { recursive: true, force: true });
@@ -1044,7 +1044,7 @@ it('returns an HTTP error when request translation throws instead of leaving the
         translatedBytes: 0,
       }));
     } finally {
-      handle.close();
+      await handle.close();
       rmSync(dir, { recursive: true, force: true });
     }
   });
@@ -1120,7 +1120,7 @@ it('returns an HTTP error when request translation throws instead of leaving the
     } finally {
       if (previousRequestPreview === undefined) delete process.env['CLODEX_LOG_REQUEST_PREVIEW'];
       else process.env['CLODEX_LOG_REQUEST_PREVIEW'] = previousRequestPreview;
-      handle.close();
+      await handle.close();
       await new Promise<void>(resolve => upstream.close(() => resolve()));
       rmSync(dir, { recursive: true, force: true });
     }
@@ -1171,7 +1171,7 @@ it('returns an HTTP error when request translation throws instead of leaving the
       expect(res.headers['retry-after']).toBe('60');
       expect(res.body).toContain('rate limited');
     } finally {
-      handle.close();
+      await handle.close();
       await new Promise<void>(resolve => upstream.close(() => resolve()));
     }
   }, 20_000);
@@ -1238,7 +1238,7 @@ it('returns an HTTP error when request translation throws instead of leaving the
         recoveryAction: 'none',
       }));
     } finally {
-      handle.close();
+      await handle.close();
       await new Promise<void>(resolve => upstream.close(() => resolve()));
       rmSync(dir, { recursive: true, force: true });
     }
@@ -1314,7 +1314,7 @@ it('returns an HTTP error when request translation throws instead of leaving the
         requestId: `req-${agentId}`,
       }));
     } finally {
-      handle.close();
+      await handle.close();
       await new Promise<void>(resolve => upstream.close(() => resolve()));
       rmSync(dir, { recursive: true, force: true });
     }
@@ -1384,7 +1384,7 @@ it('returns an HTTP error when request translation throws instead of leaving the
       expect(entries.some(entry => entry.event === 'translation_failed')).toBe(false);
       expect(entries.some(entry => entry.event === 'upstream_error')).toBe(false);
     } finally {
-      handle.close();
+      await handle.close();
       await new Promise<void>(resolve => upstream.close(() => resolve()));
       rmSync(dir, { recursive: true, force: true });
     }
@@ -1444,7 +1444,7 @@ it('returns an HTTP error when request translation throws instead of leaving the
       expect(response.body).toContain('event: message_stop');
     } finally {
       releaseUpstream();
-      handle.close();
+      await handle.close();
       await new Promise<void>(resolve => upstream.close(() => resolve()));
       rmSync(dir, { recursive: true, force: true });
     }
@@ -1502,7 +1502,7 @@ it('returns an HTTP error when request translation throws instead of leaving the
       }));
       expect(entries.some(entry => entry.event === 'translation_retrying')).toBe(false);
     } finally {
-      handle.close();
+      await handle.close();
       await new Promise<void>(resolve => upstream.close(() => resolve()));
       rmSync(dir, { recursive: true, force: true });
     }
@@ -1565,7 +1565,7 @@ it('returns an HTTP error when request translation throws instead of leaving the
         recoveryAction: 'none',
       }));
     } finally {
-      handle.close();
+      await handle.close();
       await new Promise<void>(resolve => upstream.close(() => resolve()));
       rmSync(dir, { recursive: true, force: true });
     }
@@ -1653,7 +1653,7 @@ it('returns an HTTP error when request translation throws instead of leaving the
       expect(entries.some(entry => entry.event === 'translation_failed')).toBe(false);
       expect(entries.some(entry => entry.event === 'upstream_error')).toBe(false);
     } finally {
-      handle.close();
+      await handle.close();
       await new Promise<void>(resolve => upstream.close(() => resolve()));
       rmSync(dir, { recursive: true, force: true });
     }
@@ -1720,7 +1720,7 @@ it('returns an HTTP error when request translation throws instead of leaving the
       }));
       expect(entries.filter(entry => entry.event === 'translation_retrying')).toHaveLength(2);
     } finally {
-      handle.close();
+      await handle.close();
       await new Promise<void>(resolve => upstream.close(() => resolve()));
       rmSync(dir, { recursive: true, force: true });
     }
@@ -1780,7 +1780,7 @@ it('returns an HTTP error when request translation throws instead of leaving the
       });
       expect(body.error.message).toMatch(/^prompt is too long: \d+ tokens > 10 maximum$/);
     } finally {
-      handle.close();
+      await handle.close();
       await new Promise<void>(resolve => upstream.close(() => resolve()));
     }
   }, 20_000);
@@ -1889,7 +1889,7 @@ it('returns an HTTP error when request translation throws instead of leaving the
       expect(completed.translatedBytes).toBeGreaterThan(0);
       expect(completed.translatedChunks).toBeGreaterThan(0);
     } finally {
-      handle.close();
+      await handle.close();
       await new Promise<void>(resolve => upstream.close(() => resolve()));
       rmSync(dir, { recursive: true, force: true });
     }
@@ -1976,7 +1976,7 @@ it('returns an HTTP error when request translation throws instead of leaving the
     } finally {
       if (prevKeepAlive === undefined) delete process.env.CLODEX_STREAM_KEEPALIVE_INTERVAL_MS;
       else process.env.CLODEX_STREAM_KEEPALIVE_INTERVAL_MS = prevKeepAlive;
-      handle.close();
+      await handle.close();
       upstream.closeAllConnections();
       await new Promise<void>(resolve => upstream.close(() => resolve()));
       rmSync(dir, { recursive: true, force: true });
@@ -2052,7 +2052,7 @@ it('returns an HTTP error when request translation throws instead of leaving the
     } finally {
       if (previousKeepAlive === undefined) delete process.env.CLODEX_STREAM_KEEPALIVE_INTERVAL_MS;
       else process.env.CLODEX_STREAM_KEEPALIVE_INTERVAL_MS = previousKeepAlive;
-      handle.close();
+      await handle.close();
       upstream.closeAllConnections();
       await new Promise<void>(resolve => upstream.close(() => resolve()));
       rmSync(dir, { recursive: true, force: true });
@@ -2113,7 +2113,7 @@ it('returns an HTTP error when request translation throws instead of leaving the
         phase: 'waiting_for_sdk',
       }));
     } finally {
-      handle.close();
+      await handle.close();
       await new Promise<void>(resolve => upstream.close(() => resolve()));
       rmSync(dir, { recursive: true, force: true });
     }
@@ -2153,7 +2153,7 @@ describe('anthropic passthrough debug logging', () => {
       stream: true,
     });
 
-    handle.close();
+    await handle.close();
     expect(res.status).toBe(429);
     const log = await readFlushedLog(getProxyDebugLogPath());
     expect(log).toContain('anthropic upstream 429');
@@ -2191,7 +2191,7 @@ describe('anthropic passthrough debug logging', () => {
       stream: true,
     });
 
-    handle.close();
+    await handle.close();
     const [, init] = asMocked(fetch).mock.calls[0]!;
     // SAFETY: The test fixture defines the asserted runtime shape.
     const headers = init?.headers as Record<string, string>;
@@ -2235,7 +2235,7 @@ describe('anthropic passthrough debug logging', () => {
       stream: false,
     });
 
-    handle.close();
+    await handle.close();
     const [, init] = asMocked(fetch).mock.calls[0]!;
     // SAFETY: The test fixture defines the asserted runtime shape.
     const body = JSON.parse(String(init?.body)) as { system?: Array<{ type: string; text: string }> };
@@ -2299,7 +2299,7 @@ describe('OAuth route credential resolution', () => {
         expect.any(Function),
       );
     } finally {
-      handle.close();
+      await handle.close();
     }
   });
 
@@ -2344,7 +2344,7 @@ describe('OAuth route credential resolution', () => {
         'Bearer fresh-oauth-token',
       );
     } finally {
-      handle.close();
+      await handle.close();
     }
   });
 
@@ -2415,7 +2415,7 @@ describe('OAuth route credential resolution', () => {
         ),
       ).toEqual(['Bearer rejected-oauth-token', 'Bearer fresh-oauth-token']);
     } finally {
-      handle.close();
+      await handle.close();
     }
   });
 
@@ -2460,7 +2460,7 @@ describe('OAuth route credential resolution', () => {
       expect(refreshToken).toHaveBeenCalledTimes(2);
       expect(route.apiKey).toBe('fresh-oauth-token');
     } finally {
-      handle.close();
+      await handle.close();
     }
   });
 
@@ -2503,7 +2503,7 @@ describe('OAuth route credential resolution', () => {
       expect(refreshToken).toHaveBeenCalledTimes(2);
       expect(route.apiKey).toBe('rejected-oauth-token');
     } finally {
-      handle.close();
+      await handle.close();
     }
   });
 });
