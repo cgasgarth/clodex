@@ -60,6 +60,14 @@ function hasNativeWebSearch(payload: JsonObject): boolean {
     ));
 }
 
+function hasParallelFunctionTools(payload: JsonObject): boolean {
+  return payload.parallel_tool_calls === true
+    && Array.isArray(payload.tools)
+    && payload.tools.some(tool => (
+      isJsonObject(tool) && tool.type === 'function'
+    ));
+}
+
 function deleteHeader(headers: HeaderRecord, name: string): void {
   const key = Object.keys(headers).find(candidate => candidate.toLowerCase() === name);
   if (key) delete headers[key];
@@ -80,21 +88,27 @@ export function prepareResponsesRequest(
   } catch {
     payload = {};
   }
-  const bypassResponsesLite = hasResponsesLiteHeader(headers) && hasNativeWebSearch(payload);
+  const hasLiteHeader = hasResponsesLiteHeader(headers);
+  const bypassForWebSearch = hasLiteHeader && hasNativeWebSearch(payload);
+  const bypassForParallelTools = hasLiteHeader && hasParallelFunctionTools(payload);
+  const bypassResponsesLite = bypassForWebSearch || bypassForParallelTools;
   if (bypassResponsesLite) {
-    // The ChatGPT Responses-Lite backend rejects hosted tools. The same model
-    // accepts native web_search on the full Responses protocol over the same
-    // WebSocket endpoint, so remove only the Lite negotiation headers for this
-    // request. Keep it in a separate socket partition because upgrade headers
-    // are connection-scoped.
+    // Responses Lite rejects hosted tools and parallel function calls. The same
+    // model can use both features on the full Responses protocol over this
+    // endpoint. Remove only the Lite negotiation headers and keep the request
+    // in a separate socket partition because upgrade headers are connection-scoped.
     deleteHeader(headers, 'x-openai-internal-codex-responses-lite');
     deleteHeader(headers, 'version');
-  } else if (hasResponsesLiteHeader(headers)) {
+  } else if (hasLiteHeader) {
     payload = applyResponsesLiteContract(payload);
   }
 
   const authorizationFingerprint = authorizationHeaderFingerprint(headers);
-  const partitionUrl = bypassResponsesLite ? `${wsUrl}#full-responses-web-search` : wsUrl;
+  const partitionUrl = bypassForWebSearch
+    ? `${wsUrl}#full-responses-web-search`
+    : bypassForParallelTools
+      ? `${wsUrl}#full-responses-parallel-tools`
+      : wsUrl;
   return {
     headers,
     payload,

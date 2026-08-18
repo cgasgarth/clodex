@@ -18,7 +18,6 @@ import {
 } from '../runtime/server-runtime.js';
 import {
   diagnosticRecord,
-  flushTraceLogs,
   getInferenceRequestLogPath,
   getSessionLogPath,
   subscribeInferenceTrace,
@@ -304,7 +303,6 @@ async function runDaemonProcess(): Promise<number> {
   });
 
   let endpoint: ProxyHandle | undefined;
-  let control: Awaited<ReturnType<typeof startIsolatedDaemonControlApi>> | undefined;
   let runtime: ReturnType<typeof createDaemonRuntimeState> | undefined;
   let restartRequested = false;
   const shouldRestart = () => restartRequested;
@@ -376,7 +374,7 @@ async function runDaemonProcess(): Promise<number> {
     });
 
     const readyRuntime = { ...runtime, ready: true };
-    control = await startIsolatedDaemonControlApi({
+    await startIsolatedDaemonControlApi({
       socketPath: runtime.controlSocketPath,
       runtime: readyRuntime,
       collector,
@@ -411,16 +409,8 @@ async function runDaemonProcess(): Promise<number> {
     secondwind.close();
     if (runtime) removeDaemonRuntimeState(runtime.instanceId);
     unregisterServerRuntimeState(process.pid);
-    await control?.close();
-    await endpoint?.close();
-    writeProxyLifecycleLog(inferenceLogPath, {
-      event: 'proxy_stopped',
-      pid: process.pid,
-      parentPid: process.ppid,
-      port: endpoint?.port,
-      reason: shouldRestart() ? 'daemon restart requested' : 'daemon shutdown',
-    });
-    await flushTraceLogs();
+    // Do not close servers or flush logs. The CLI exits with the return code,
+    // so stop and restart terminate every active connection immediately.
   }
   return shouldRestart() ? 75 : 0;
 }

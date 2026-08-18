@@ -290,7 +290,7 @@ beforeEach(() => {
     // Must be a `response.create` event with the Responses fields at top level.
     expect(sent.type).toBe('response.create');
     expect(sent.model).toBe('gpt-5.6-luna');
-    expect(sent.parallel_tool_calls).toBe(true);
+    expect(sent.parallel_tool_calls).toBe(false);
     expect(sent.store).toBe(false);
     expect(sent.reasoning).toEqual({ effort: 'high', context: 'all_turns' });
   });
@@ -335,6 +335,37 @@ beforeEach(() => {
       type: 'response.create',
       model: 'gpt-5.6-sol',
       tools: [{ type: 'web_search' }],
+      reasoning: { effort: 'high' },
+    });
+  });
+
+  it('uses the full Responses protocol for parallel function tools on a Lite model', async () => {
+    const wsFetch = createResponsesWebSocketFetch(WS_URL);
+    await wsFetch('https://x', {
+      method: 'POST',
+      headers: {
+        version: '0.144.1',
+        'x-openai-internal-codex-responses-lite': 'true',
+      },
+      body: JSON.stringify({
+        model: 'gpt-5.6-luna',
+        tools: [{ type: 'function', name: 'Read', parameters: { type: 'object' } }],
+        parallel_tool_calls: true,
+        reasoning: { effort: 'high' },
+      }),
+    });
+
+    const socket = lastSocket();
+    expect(socket.options.headers).not.toHaveProperty('version');
+    expect(socket.options.headers).not.toHaveProperty('x-openai-internal-codex-responses-lite');
+    socket.emit('open');
+    // SAFETY: The test fixture defines the asserted runtime shape.
+    const sent = JSON.parse(socket.send.mock.calls[0]![0] as string);
+    expect(sent).toEqual({
+      type: 'response.create',
+      model: 'gpt-5.6-luna',
+      tools: [{ type: 'function', name: 'Read', parameters: { type: 'object' } }],
+      parallel_tool_calls: true,
       reasoning: { effort: 'high' },
     });
   });

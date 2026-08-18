@@ -440,7 +440,7 @@ describe('translateRequest', () => {
     });
   });
 
-  it('enables OpenAI parallel tool calls unless the client disables them', () => {
+  it('enables OpenAI parallel tool calls for every request with tools', () => {
     const request = {
       model: 'gpt-5.6-sol',
       messages: [{ role: 'user' as const, content: 'inspect both files' }],
@@ -457,7 +457,7 @@ describe('translateRequest', () => {
     }, '@ai-sdk/openai');
 
     expect(enabled.providerOptions?.openai?.parallelToolCalls).toBe(true);
-    expect(disabled.providerOptions?.openai?.parallelToolCalls).toBe(false);
+    expect(disabled.providerOptions?.openai?.parallelToolCalls).toBe(true);
   });
 
   it('sends instructions via providerOptions and omits system/max_tokens for OpenAI OAuth', () => {
@@ -627,7 +627,7 @@ describe('translateRequest', () => {
       'gpt-5.6-sol',
     );
 
-    expect(requestBodies.map(body => body.parallel_tool_calls)).toEqual([true, false]);
+    expect(requestBodies.map(body => body.parallel_tool_calls)).toEqual([true, true]);
   });
 
   it('strips Claude Code Anthropic billing attribution from OpenAI OAuth instructions only', () => {
@@ -1530,6 +1530,7 @@ describe('writeAnthropicStream', () => {
       type: 'object',
       properties: {
         query: { type: 'string' },
+        language: { type: 'string' },
         allowed_domains: { type: 'array', items: { type: 'string' } },
         blocked_domains: { type: 'array', items: { type: 'string' } },
       },
@@ -1537,8 +1538,8 @@ describe('writeAnthropicStream', () => {
     },
   }]);
 
-  it('strips null and empty-array filler for optional params from streamed tool input', async () => {
-    const input = { query: 'who won', allowed_domains: ['fifa.com'], blocked_domains: [], max_uses: null };
+  it('strips null, empty-string, and empty-array filler for optional params from streamed tool input', async () => {
+    const input = { query: 'who won', language: '', allowed_domains: ['fifa.com'], blocked_domains: [], max_uses: null };
     const { events } = await collect([
       { type: 'start' },
       { type: 'tool-input-start', id: 'call_1', toolName: 'WebSearch' },
@@ -1554,7 +1555,7 @@ describe('writeAnthropicStream', () => {
   it('strips the same filler from a non-streamed tool call', async () => {
     const { events } = await collect([
       { type: 'start' },
-      { type: 'tool-call', toolCallId: 'call_1', toolName: 'WebSearch', input: { query: 'who won', blocked_domains: [], allowed_domains: null } },
+      { type: 'tool-call', toolCallId: 'call_1', toolName: 'WebSearch', input: { query: 'who won', language: '', blocked_domains: [], allowed_domains: null } },
       { type: 'finish', finishReason: 'tool-calls' },
     ], 'm', undefined, webSearchTools);
     expect(toolInputFromEvents(events)).toEqual({ query: 'who won' });
@@ -1579,6 +1580,23 @@ describe('writeAnthropicStream', () => {
       { type: 'finish', finishReason: 'tool-calls' },
     ], 'm', undefined, todoTools);
     expect(toolInputFromEvents(events)).toEqual({ todos: [] });
+  });
+
+  it('preserves an intentional empty string for a schema-required property', async () => {
+    const searchTools = translateTools([{
+      name: 'Search',
+      input_schema: {
+        type: 'object',
+        properties: { query: { type: 'string' } },
+        required: ['query'],
+      },
+    }]);
+    const { events } = await collect([
+      { type: 'start' },
+      { type: 'tool-call', toolCallId: 'call_1', toolName: 'Search', input: { query: '' } },
+      { type: 'finish', finishReason: 'tool-calls' },
+    ], 'm', undefined, searchTools);
+    expect(toolInputFromEvents(events)).toEqual({ query: '' });
   });
 
   it('emits the buffered raw tool input when the stream ends without a tool-call part', async () => {
