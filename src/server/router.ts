@@ -74,8 +74,8 @@ export interface ServerOptions {
   /**
    * Saved short alias names (clodex models --alias) accepted as request model
    * ids. Used only to preserve the response `model` echo: an aliased request
-   * must be echoed back with the exact id the client sent (see CLAUDE.md's
-   * auto-compaction/context-window echo invariant).
+   * must be echoed back with the exact id the client sent so Claude Code uses
+   * the matching context-window configuration.
    */
   aliasNames?: ReadonlySet<string>;
   /** When set, append structured debug lines to this file path. */
@@ -813,7 +813,7 @@ function getResponseModelId(bodyModel: unknown, model: ServerModelInfo, options:
   // Echo invariant: a saved short alias is echoed back verbatim even when
   // masking is on — Claude Code resolves context windows from the response
   // `model` field but preflights with the request alias, so rewriting it here
-  // would break auto-compaction (see CLAUDE.md).
+  // would break auto-compaction.
   if (typeof bodyModel === 'string' && options.aliasNames?.has(bodyModel)) return bodyModel;
   return options.gateway?.maskGatewayIds
     ? gatewayDisplayName(model, options.gateway)

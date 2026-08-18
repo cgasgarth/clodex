@@ -1,8 +1,9 @@
 // Maps an OpenCode provider's `npm` package (the field providers.ts already
 // reads) to a Vercel AI SDK LanguageModel instance. The SDK owns wire format,
 // endpoint selection, and provider quirks.
-import type { LanguageModel } from 'ai';
+import type { LanguageModel, ProviderMetadata } from 'ai';
 import { wrapLanguageModel, extractReasoningMiddleware } from 'ai';
+import type { FetchFunction } from '@ai-sdk/provider-utils';
 import { VERTEX_ANTHROPIC_NPM, CODEX_RESPONSES_LITE_VERSION, CODEX_RESPONSES_LITE_WS_URL } from './constants.js';
 import { extractOpenAiAccountId } from './oauth/openai.js';
 import {
@@ -35,7 +36,7 @@ type SdkProviderFactory = (options: {
   baseURL?: string;
   name?: string;
   headers?: Record<string, string>;
-  fetch?: typeof fetch;
+  fetch?: FetchFunction;
 }) => {
   (modelId: string): LanguageModel;
   chat: (modelId: string) => LanguageModel;
@@ -44,7 +45,7 @@ type SdkProviderFactory = (options: {
 
 const factoryCache = new Map<string, Promise<SdkProviderFactory>>();
 
-const fetchWithoutCredentialHeaders: typeof fetch = Object.assign(
+const fetchWithoutCredentialHeaders: FetchFunction = Object.assign(
   (input: URL | RequestInfo, init?: RequestInit): Promise<Response> => {
     const headers = new Headers(
       init?.headers ?? (input instanceof Request ? input.headers : undefined),
@@ -54,7 +55,7 @@ const fetchWithoutCredentialHeaders: typeof fetch = Object.assign(
     }
     return fetch(input, { ...init, headers });
   },
-  { preconnect: fetch.preconnect },
+  { preconnect: Reflect.get(fetch, 'preconnect') },
 );
 
 /**
@@ -531,7 +532,7 @@ function mapCodexEffortToDeepSeek(effort: string): 'high' | 'max' | 'off' | unde
 /** DeepSeek thinking toggle spreads via provider id keys on @ai-sdk/openai-compatible. */
 function deepSeekEffortProviderOptions(
   effort: string,
-): Record<string, Record<string, unknown>> | undefined {
+): ProviderMetadata | undefined {
   const mapped = mapCodexEffortToDeepSeek(effort);
   if (!mapped) return undefined;
   const thinking = { type: mapped === 'off' ? 'disabled' : 'enabled' };
@@ -848,7 +849,7 @@ export function effortProviderOptions(
   effort?: string,
   modelId?: string,
   metadata?: ReasoningMetadata,
-): Record<string, Record<string, unknown>> | undefined {
+): ProviderMetadata | undefined {
   if (!effort) return undefined;
 
   if (isOpenRouterRoute(npm, metadata)) {
@@ -949,14 +950,14 @@ export function effortProviderOptions(
 }
 
 export function deepMergeProviderOptions(
-  a?: Record<string, Record<string, unknown>>,
-  b?: Record<string, Record<string, unknown>>,
-): Record<string, Record<string, unknown>> | undefined {
+  a?: ProviderMetadata,
+  b?: ProviderMetadata,
+): ProviderMetadata | undefined {
   if (!a && !b) return undefined;
   if (!a) return b;
   if (!b) return a;
   const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
-  const out: Record<string, Record<string, unknown>> = {};
+  const out: ProviderMetadata = {};
   for (const key of keys) {
     out[key] = { ...(a[key] ?? {}), ...(b[key] ?? {}) };
   }
@@ -964,7 +965,7 @@ export function deepMergeProviderOptions(
 }
 
 /** Per-provider providerOptions to request reasoning/thinking output. */
-export function thinkingProviderOptions(npm: string): Record<string, Record<string, unknown>> | undefined {
+export function thinkingProviderOptions(npm: string): ProviderMetadata | undefined {
   if (npm === '@ai-sdk/google') {
     return { google: { thinkingConfig: { includeThoughts: true } } };
   }

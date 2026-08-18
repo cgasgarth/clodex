@@ -40,7 +40,7 @@ export function applyResponsesLiteShape(payload: JsonObject): JsonObject {
     ? { ...(payload.reasoning as JsonObject) }
     : {};
   reasoning.context = 'all_turns';
-  return { ...payload, reasoning, parallel_tool_calls: false, store: false };
+  return { ...payload, reasoning, store: false };
 }
 
 function canonicalize(value: unknown): unknown {

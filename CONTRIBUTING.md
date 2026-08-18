@@ -18,11 +18,6 @@ turned away for skipping it. It's to protect your time: clodex has invariants th
 arbitrary until you know the failure they came from, and it's much cheaper to sort that out
 in an issue than after you've written the code.
 
-**Read [`CLAUDE.md`](./CLAUDE.md).** Despite the name it's the architecture document for the
-whole repo, and it's the single best thing to read before changing anything. It explains
-what each module does and, more importantly, *why* several of them are shaped the way they
-are.
-
 ## Scoping your PR
 
 This is the guidance most worth following, because it's the one that's hard to see from
@@ -69,8 +64,8 @@ a lot of tests, make sure at least one of them actually pins the behavior you ch
 
 **Follow existing patterns rather than introducing parallel ones.** Where the codebase
 already solves a problem — file locking, credential resolution, stale-state detection —
-match the established approach. `CLAUDE.md` documents several of these explicitly. A new
-mechanism that's subtly weaker than the existing one is harder to spot than an obvious bug.
+match the established approach. A new mechanism that's subtly weaker than the existing one
+is harder to spot than an obvious bug.
 
 **Don't leave no-op edits behind.** A conditional whose branches are identical, an option
 that's parsed but never read, a helper that's implemented but never called — these read as
@@ -108,13 +103,12 @@ Before opening a PR, run:
 bun run typecheck && bun run test && bun run build
 ```
 
-CI runs exactly these three on every pull request.
+CI runs `bun run check:ci` on every pull request and every push to `main`.
 
 ## Commits
 
-This repo uses [Conventional Commits](https://www.conventionalcommits.org/) — releases and
-the changelog are generated from commit messages, so the format is enforced by commitlint
-both locally (a Husky `commit-msg` hook) and in CI.
+This repo uses [Conventional Commits](https://www.conventionalcommits.org/), enforced by
+commitlint both locally through a Husky `commit-msg` hook and in CI.
 
 | Prefix | Use for |
 | --- | --- |
@@ -151,16 +145,13 @@ real `~/.clodex`.
 ## A few hard rules
 
 - **Never commit `dist/`.** It's gitignored and rebuilt by CI.
-- **Never publish locally.** Releases are automated through CI and
-  approved by a maintainer.
+- **Never publish locally.** Publication is a maintainer action.
 - **Never hardcode a version string.** `package.json` is the single source of truth.
 - **Never add `claude -p` end-to-end tests to the automated suite.** They're manual only.
 - **Don't restructure `src/oauth/responses-websocket.ts`.** The OAuth WebSocket
   continuation logic took extensive real-world testing. Surgical changes only.
 - **Don't touch `~/.claude/settings.json`** from clodex code, and never mutate a legacy
   `~/.relay-ai` directory.
-
-More context for all of these is in `CLAUDE.md`.
 
 ## Review
 

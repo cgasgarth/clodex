@@ -1,8 +1,12 @@
 // Anthropic /v1/messages ↔ Vercel AI SDK. One turn per request; Claude Code owns the tool loop.
 import { createHash } from 'node:crypto';
 import { streamText, generateText, tool, jsonSchema } from 'ai';
-import type { LanguageModel, ModelMessage, ToolSet } from 'ai';
-import { openai } from '@ai-sdk/openai';
+import type { LanguageModel, ModelMessage, ProviderMetadata, ToolSet } from 'ai';
+import {
+  openai,
+  type OpenAIResponsesProviderOptions,
+  type OpenaiResponsesProviderMetadata,
+} from '@ai-sdk/openai';
 import {
   sseChunk,
   encodeToolUseId,
@@ -82,7 +86,11 @@ export interface AnthropicRequest {
   system?: string | Array<string | { text?: string; cache_control?: { type?: string; ttl?: string } }>;
   messages: AnthropicMsg[];
   tools?: AnthropicTool[];
-  tool_choice?: { type: 'auto' | 'any' | 'tool'; name?: string };
+  tool_choice?: {
+    type: 'auto' | 'any' | 'tool';
+    name?: string;
+    disable_parallel_tool_use?: boolean;
+  };
   max_tokens?: number;
   temperature?: number;
   stream?: boolean;
@@ -189,7 +197,7 @@ export interface SdkCallParams {
   toolChoice?: 'auto' | 'none' | 'required' | { type: 'tool'; toolName: string };
   maxOutputTokens?: number;
   temperature?: number;
-  providerOptions?: Record<string, Record<string, unknown>>;
+  providerOptions?: ProviderMetadata;
 }
 
 // ── system ───────────────────────────────────────────────────────────────────
@@ -559,13 +567,19 @@ function isAnthropicWebSearchTool(toolDefinition: AnthropicTool): boolean {
 }
 
 function translateOpenAiWebSearchTool(toolDefinition: AnthropicTool) {
-  if (toolDefinition.blocked_domains?.length) {
-    throw new Error('OpenAI native web search does not support blocked_domains');
-  }
   const location = toolDefinition.user_location;
   return openai.tools.webSearch({
-    ...(toolDefinition.allowed_domains?.length
-      ? { filters: { allowedDomains: toolDefinition.allowed_domains } }
+    ...(toolDefinition.allowed_domains?.length || toolDefinition.blocked_domains?.length
+      ? {
+          filters: {
+            ...(toolDefinition.allowed_domains?.length
+              ? { allowedDomains: toolDefinition.allowed_domains }
+              : {}),
+            ...(toolDefinition.blocked_domains?.length
+              ? { blockedDomains: toolDefinition.blocked_domains }
+              : {}),
+          },
+        }
       : {}),
     ...(location?.type === 'approximate'
       ? {
@@ -695,9 +709,7 @@ export function translateRequest(
     providerOptions = deepMergeProviderOptions(providerOptions, {
       openai: {
         instructions: systemText,
-        // The pinned AI SDK serializes the established `priority` value. OpenAI
-        // documents `fast` and `priority` as equivalent for supported models.
-        ...(options.processingMode === 'fast' ? { serviceTier: 'priority' } : {}),
+        ...(options.processingMode === 'fast' ? { serviceTier: 'fast' } : {}),
       },
     });
   }
@@ -715,15 +727,19 @@ export function translateRequest(
   // blocks, while retaining an automatic latest-message breakpoint as fallback.
   if (npm === '@ai-sdk/openai') {
     const claudeSessionId = extractClaudeSessionId(body, options?.claudeSessionId);
+    const openAiOptions = {
+      promptCacheKey: claudeSessionId
+        ? claudeSessionPromptCacheKey(claudeSessionId)
+        : openAiPromptCacheKey(baseSystem, upstreamTools),
+      ...(upstreamTools.length > 0
+        ? { parallelToolCalls: body.tool_choice?.disable_parallel_tool_use !== true }
+        : {}),
+      ...(supportsExplicitOpenAiCaching
+        ? { promptCacheOptions: { mode: 'implicit' as const, ttl: '30m' as const } }
+        : {}),
+    } satisfies OpenAIResponsesProviderOptions;
     providerOptions = deepMergeProviderOptions(providerOptions, {
-      openai: {
-        promptCacheKey: claudeSessionId
-          ? claudeSessionPromptCacheKey(claudeSessionId)
-          : openAiPromptCacheKey(baseSystem, upstreamTools),
-        ...(supportsExplicitOpenAiCaching
-          ? { promptCacheOptions: { mode: 'implicit', ttl: '30m' } }
-          : {}),
-      },
+      openai: openAiOptions,
     });
   }
 
@@ -764,17 +780,15 @@ interface AnthropicUsage {
   speed?: 'standard' | 'fast';
 }
 
-function openAiServiceTier(providerMetadata: unknown): string | undefined {
-  if (!providerMetadata || typeof providerMetadata !== 'object') return undefined;
-  const openai = (providerMetadata as Record<string, unknown>)['openai'];
-  if (!openai || typeof openai !== 'object') return undefined;
-  const serviceTier = (openai as Record<string, unknown>)['serviceTier'];
-  return typeof serviceTier === 'string' ? serviceTier : undefined;
+function openAiServiceTier(providerMetadata: ProviderMetadata | undefined): string | undefined {
+  const openAiMetadata = providerMetadata?.openai;
+  if (openAiMetadata === undefined) return undefined;
+  return (openAiMetadata as OpenaiResponsesProviderMetadata['openai']).serviceTier;
 }
 
 function applyOpenAiServiceTier(
   usage: AnthropicUsage,
-  providerMetadata: unknown,
+  providerMetadata: ProviderMetadata | undefined,
 ): AnthropicUsage {
   const serviceTier = openAiServiceTier(providerMetadata);
   if (!serviceTier) return usage;
@@ -1166,15 +1180,15 @@ export async function streamAnthropicResponse(
     () => idleAbort.abort(new Error(`provider stream exceeded ${Math.round(SDK_TOTAL_TIMEOUT_MS / 1000)}s`)),
     SDK_TOTAL_TIMEOUT_MS,
   );
-  // Do not combine streamText's total/chunk timeout signals here. In AI SDK
-  // 7.0.22 that composition retains completed StreamTextResult graphs. Relay
+  // Do not combine streamText's total/chunk timeout signals here. In AI SDK 7,
+  // that composition retains completed StreamTextResult graphs. Relay
   // owns the timers and explicitly settles its controller after consumption.
   const providerStream = (dependencies.streamText ?? streamText)({
     model,
     ...params,
     abortSignal,
     onError: () => {},
-  } as Parameters<typeof streamText>[0]).stream as AsyncIterable<FullStreamPart>;
+  }).stream as AsyncIterable<FullStreamPart>;
 
   const watchedStream = (async function* () {
     try {
@@ -1221,7 +1235,7 @@ export async function generateAnthropicResponse(
   let toolCalls: Array<{ toolCallId: string; toolName: string; input: unknown }>;
   let finishReason: string;
   let usage: SdkUsage | undefined;
-  let providerMetadata: unknown;
+  let providerMetadata: ProviderMetadata | undefined;
 
   if (options?.forceStream) {
     // Some upstreams (e.g. ChatGPT's Codex backend) reject non-streaming requests
@@ -1246,7 +1260,7 @@ export async function generateAnthropicResponse(
       ...params,
       abortSignal,
       onError: () => {},
-    } as Parameters<typeof streamText>[0]);
+    });
     const streamedText: string[] = [];
     const streamedToolCalls: Array<{ toolCallId: string; toolName: string; input: unknown }> = [];
     let streamedFinishReason = 'stop';
@@ -1301,12 +1315,13 @@ export async function generateAnthropicResponse(
       SDK_TOTAL_TIMEOUT_MS,
     );
     try {
-    const r = await (options?.generateText ?? generateText)({
+      const r = await (options?.generateText ?? generateText)({
         model,
         ...params,
         abortSignal: generateAbort.signal,
-      } as Parameters<typeof generateText>[0]);
-      ({ text, toolCalls, finishReason, usage, providerMetadata } = r);
+      });
+      ({ text, toolCalls, finishReason, usage } = r);
+      providerMetadata = r.finalStep.providerMetadata;
     } finally {
       stopForwardingAbort();
       clearTimeout(totalTimer);

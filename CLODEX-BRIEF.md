@@ -81,7 +81,7 @@ from those is kept as-is.
 - Model-id prefix: `relay:{provider}:{model}` → `clodex:{provider}:{model}` — must be
   renamed **globally and consistently** (proxy routes, http-proxy MITM matching, alias
   echo, patcher config, tests). The response-model echo behavior (respond with the exact
-  id the client sent) MUST be preserved — see CLAUDE.md "Key constraints".
+  id the client sent) MUST be preserved so context-window lookup stays correct.
 - User-visible strings: help text, banners, spinner text, trace-log filenames
   (`/tmp/clodex-debug.log` etc.), keychain service names → `clodex`.
 - **Migration:** on startup, if `~/.clodex/` does not exist and `~/.relay-ai/` does,
@@ -160,8 +160,7 @@ Replace README.md entirely:
   opencode, zen/go, subscription tiers).
 - Also trim `docs/` and CHANGELOG: delete docs pages for stripped features; CHANGELOG
   may be reset to a single `## [0.1.0]` entry describing the fork.
-- Update CLAUDE.md/AGENTS.md to describe the trimmed architecture (remove stripped
-  sections, keep the hard-won constraint documentation for kept subsystems).
+- Keep `AGENTS.md` limited to a short repository description.
 
 ## Testing rules
 
