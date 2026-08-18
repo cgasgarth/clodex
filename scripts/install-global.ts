@@ -7,6 +7,7 @@ import {
   rename,
   rm,
 } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -52,7 +53,6 @@ export async function installGlobalCheckout(
     process.env['CLODEX_HOME'] ?? join(homedir(), '.clodex'),
     'packages',
   );
-  const stableArchive = join(packageDirectory, 'clodex-local.tgz');
   try {
     await run([process.execPath, 'run', 'build'], repoRoot);
     await run([process.execPath, 'pm', 'pack', '--destination', packDirectory], repoRoot);
@@ -62,16 +62,21 @@ export async function installGlobalCheckout(
     }
 
     await mkdir(packageDirectory, { recursive: true, mode: 0o700 });
-    const nextArchive = `${stableArchive}.${process.pid}.next`;
     const archive = archives[0];
     if (!archive) throw new Error('bun pm pack did not produce an archive');
-    await copyFile(join(packDirectory, archive), nextArchive);
-    await rename(nextArchive, stableArchive);
+    const packedArchive = join(packDirectory, archive);
+    const digest = createHash('sha256')
+      .update(await readFile(packedArchive))
+      .digest('hex');
+    const installedArchive = join(packageDirectory, `clodex-local-${digest}.tgz`);
+    const nextArchive = `${installedArchive}.${process.pid}.next`;
+    await copyFile(packedArchive, nextArchive);
+    await rename(nextArchive, installedArchive);
     await run([
       process.execPath,
       'add',
       '--global',
-      stableArchive,
+      installedArchive,
     ], repoRoot);
     await verifyArtifacts(repoRoot, join(globalRoot, 'node_modules', '@bman654', 'clodex'));
     console.log('Installed the current Clodex checkout globally and verified runtime artifacts.');
