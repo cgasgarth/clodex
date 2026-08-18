@@ -118,14 +118,13 @@ export function formatModelCatalogLines(models: ServerModelInfo[], gateway?: Gat
     const hiddenDuplicates = groupModels.length - rows.length;
     const duplicateNote = hiddenDuplicates > 0 ? `, ${hiddenDuplicates} duplicate${hiddenDuplicates !== 1 ? 's' : ''} hidden` : '';
     const nameWidth = cappedWidth(rows.map(row => row.name), 'Model', 28);
-    const anthropicWidth = cappedWidth(rows.map(row => row.anthropicId), 'Anthropic ID', 46);
     const indexWidth = Math.max(String(rows.length).length, 1);
 
     lines.push(`  ${label} (${rows.length}${duplicateNote})`);
-    lines.push(`  ${'#'.padStart(indexWidth)}  ${'Model'.padEnd(nameWidth)}  ${'Anthropic ID'.padEnd(anthropicWidth)}  OpenAI ID`);
+    lines.push(`  ${'#'.padStart(indexWidth)}  ${'Model'.padEnd(nameWidth)}  Anthropic ID`);
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i]!;
-      lines.push(`  ${String(i + 1).padStart(indexWidth)}  ${row.name.padEnd(nameWidth)}  ${row.anthropicId.padEnd(anthropicWidth)}  ${row.openaiId}`);
+      lines.push(`  ${String(i + 1).padStart(indexWidth)}  ${row.name.padEnd(nameWidth)}  ${row.anthropicId}`);
     }
     lines.push('');
   }
@@ -140,7 +139,7 @@ function printModelCatalog(models: ServerModelInfo[], gateway?: GatewayModelOpti
       console.log(pc.bold(line));
     } else if (/^  [^#\d\s].+\(\d+/.test(line)) {
       console.log(pc.bold(line));
-    } else if (/^  \s*#\s+Model\s+Anthropic ID\s+OpenAI ID/.test(line)) {
+    } else if (/^  \s*#\s+Model\s+Anthropic ID/.test(line)) {
       console.log(pc.dim(line));
     } else {
       console.log(line);
@@ -505,7 +504,6 @@ export async function runServerCommand(options: ServerCommandOptions = {}): Prom
   console.log('');
   console.log(pc.bold(pc.green('clodex server running')));
   console.log(`  Anthropic:  http://127.0.0.1:${server.port}/anthropic`);
-  console.log(`  OpenAI:     http://127.0.0.1:${server.port}/openai/v1`);
   console.log(`  Request log: ${inferenceLogPath}`);
   if (webSocketDiagnosticsLogPath) {
     console.log(`  WebSocket diagnostics: ${webSocketDiagnosticsLogPath}`);
@@ -515,7 +513,6 @@ export async function runServerCommand(options: ServerCommandOptions = {}): Prom
     for (const { name, address } of getLocalIps()) {
       console.log(`  Network (${name}):`);
       console.log(`    Anthropic:  http://${address}:${server.port}/anthropic`);
-      console.log(`    OpenAI:     http://${address}:${server.port}/openai/v1`);
     }
     if (passwordWasSaved) {
       console.log('  API key:    saved, rotate with `clodex server --setup`');

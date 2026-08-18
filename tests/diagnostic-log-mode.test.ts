@@ -31,9 +31,6 @@ describe('diagnostic log modes', () => {
     expect(isErrorDiagnosticEvent({
       event: 'ws_compaction', outcome: 'failed', failureClass: 'timeout_or_transport',
     })).toBe(true);
-    expect(isErrorDiagnosticEvent({
-      event: 'ws_response_protocol_anomaly', anomaly: 'late_delta',
-    })).toBe(true);
     expect(shouldWriteDiagnosticEvent('error', {
       event: 'ws_head_decision', decision: 'continuation',
     })).toBe(false);

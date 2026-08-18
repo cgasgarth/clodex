@@ -144,16 +144,11 @@ export interface RequestContext {
   recoverContextOverflow?: (entry: ConnectionEntry, ctx: RequestContext) => Promise<void>;
   outputByIndex: Map<number, OutputAccumulator>;
   outputIndexByItemId: Map<string, number>;
-  reasoningPartsByItemId: Map<string, Map<number, ReasoningPartState>>;
-  recentUpstreamEventTypes: string[];
-  emittedProtocolAnomalies: Set<string>;
   emitDiagnostic?: (event: { event: string } & JsonObject) => void;
   entry?: ConnectionEntry;
   createReplacement: () => ConnectionEntry;
   abortCleanup?: () => void;
 }
-
-type ReasoningPartState = 'active' | 'can_conclude' | 'concluded';
 
 export interface ConnectionEntry {
   debugId: number;

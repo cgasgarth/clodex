@@ -1,22 +1,14 @@
-import { isFunction, isObject, isString } from '../runtime/type-guards.js';
+import { isFunction, isString } from '../runtime/type-guards.js';
 import { randomUUID } from 'node:crypto';
 import { isAuthorized } from './auth.js';
 import {
   formatGatewayAnthropicModels,
-  formatOpenAIModels,
   gatewayDisplayName,
-  supportsDirectOpenAIChatCompletions,
   type GatewayModelOptions,
   type ModelCatalog,
   type ServerModelInfo,
   upstreamModelId,
 } from './models.js';
-import {
-  translateOpenAiRequest,
-  generateOpenAiResponse,
-  streamOpenAiResponse,
-  type OpenAiRequest,
-} from '../providers/openai-adapter.js';
 import { decodeRequestBody, sendJson, type HttpResponseWriter } from '../transport/http-utils.js';
 import { relayAnthropicMessages, resolveOAuthRetryReplacement } from '../transport/upstream-forward.js';
 import {
@@ -103,10 +95,6 @@ function isAnthropicBody(body: JsonBody): body is JsonBody & AnthropicRequest {
   return isString(body.model) && Array.isArray(body.messages);
 }
 
-function isOpenAiBody(body: JsonBody): body is JsonBody & OpenAiRequest {
-  return isString(body.model) && Array.isArray(body.messages);
-}
-
 type PLog = (msg: string | (() => string)) => void;
 type LanguageModelCache = Map<string, { apiKey: string; languageModel: LanguageModel }>;
 
@@ -187,18 +175,6 @@ function auditSdkError(
   return result;
 }
 
-function openAiEffort(body: JsonBody): string | undefined {
-  if (isString(body.reasoning_effort) && body.reasoning_effort.trim()) {
-    return body.reasoning_effort.trim();
-  }
-  const reasoning = body.reasoning;
-  if (reasoning && isObject(reasoning) && !Array.isArray(reasoning)) {
-    const effort = reasoning.effort;
-    if (isString(effort) && effort.trim()) return effort.trim();
-  }
-  return undefined;
-}
-
 export async function startServer(options: ServerOptions): Promise<ServerHandle> {
   silenceSdkWarnings();
   const languageModelCache: LanguageModelCache = new Map();
@@ -273,18 +249,8 @@ async function routeRequest(req: Request, res: HttpResponseWriter, options: Serv
       return;
     }
 
-    if (req.method === 'GET' && pathname === '/openai/v1/models') {
-      sendJson(res, 200, formatOpenAIModels(options.catalog.list()));
-      return;
-    }
-
     if (req.method === 'POST' && pathname === '/anthropic/v1/messages') {
       await handleAnthropicMessages(req, res, options, modelCache, plog);
-      return;
-    }
-
-    if (req.method === 'POST' && pathname === '/openai/v1/chat/completions') {
-      await handleOpenAIChatCompletions(req, res, options, modelCache, plog);
       return;
     }
 
@@ -597,172 +563,6 @@ async function handleAnthropicMessages(
   sendJson(res, 400, { error: { message: `Unsupported model format: ${model.modelFormat}` } });
 }
 
-async function handleOpenAIChatCompletions(
-  req: Request,
-  res: HttpResponseWriter,
-  options: ServerOptions,
-  modelCache: LanguageModelCache,
-  plog: PLog,
-): Promise<void> {
-  const body = await readJson(req);
-  if (!body || !isOpenAiBody(body)) {
-    sendJson(res, 400, { error: { message: 'Invalid JSON body' } });
-    return;
-  }
-
-  const model = lookupModel(res, options.catalog, body.model);
-  if (!model) return;
-
-  if (supportsDirectOpenAIChatCompletions(model)) {
-    if (model.completionsUrl && !/^https?:\/\//i.test(model.completionsUrl)) {
-      sendJson(res, 400, { error: { message: `Invalid provider completionsUrl: must be http:// or https://` } });
-      return;
-    }
-    if (!model.completionsUrl) {
-      sendJson(res, 400, { error: { message: `Model ${model.id} has no completionsUrl configured` } });
-      return;
-    }
-    const completionsUrl = model.completionsUrl;
-    let apiKey: string;
-    try {
-      apiKey = await resolveModelApiKey(model, options.apiKey);
-    } catch (err) {
-      sendJson(res, 401, {
-        error: { message: err instanceof Error ? err.message : String(err) },
-      });
-      return;
-    }
-    // The client may have addressed the model via a gateway alias or saved
-    // short alias — the upstream API only knows its own wire id.
-    const forwardBody = body.model === upstreamModelId(model) ? body : { ...body, model: upstreamModelId(model) };
-    auditInference(options, {
-      modelId: body.model,
-      effort: openAiEffort(body),
-      provider: inferenceProvider(model),
-      route: 'passthrough',
-      requestPreview: getLatestMessagePreview(body.messages, body.system),
-    });
-    const isOAuth = model.authType === 'oauth';
-    const refreshToken = isOAuth && model.providerId && model.authRef
-      ? (rejectedAccessToken: string) => resolveModelApiKey(
-          model,
-          options.apiKey,
-          rejectedAccessToken,
-        )
-      : undefined;
-    await relayAnthropicMessages(res, completionsUrl, forwardBody, apiKey, Boolean(body.stream), {
-      authType: model.authType ?? 'api',
-      extraHeaders: model.headers,
-      refreshToken,
-      onTokenRefreshed: refreshed => { model.apiKey = refreshed; },
-      onUpstreamError: options.inferenceLogPath
-        ? (statusCode, errorContent) => writeInferenceResponseErrorLog(options.inferenceLogPath!, {
-            modelId: body.model,
-            provider: inferenceProvider(model),
-            route: 'passthrough',
-            statusCode,
-            errorContent,
-          })
-        : undefined,
-    });
-    return;
-  }
-
-  // SDK Translation Path
-  const npm = model.npm || (model.modelFormat === 'anthropic' ? '@ai-sdk/anthropic' : undefined);
-  if (!npm) {
-    sendJson(res, 400, { error: { message: `No SDK provider for model: ${model.id}` } });
-    return;
-  }
-
-  let apiKey: string;
-  try {
-    apiKey = await resolveModelApiKey(model, options.apiKey);
-  } catch (err) {
-    sendJson(res, 401, {
-      error: { message: err instanceof Error ? err.message : String(err) },
-    });
-    return;
-  }
-  auditInference(options, {
-    modelId: body.model,
-    effort: openAiEffort(body),
-    provider: inferenceProvider(model),
-    route: 'translated',
-    requestPreview: getLatestMessagePreview(body.messages, body.system),
-  });
-  const baseURL = model.modelFormat === 'anthropic' ? model.baseUrl : model.apiBaseUrl;
-  const openAiOAuth = npm === '@ai-sdk/openai' && model.authType === 'oauth';
-  const params = translateOpenAiRequest(body, { openAiOAuth });
-  const clientWantsStream = Boolean(body.stream);
-  const responseModelId = getResponseModelId(body.model, model, options);
-
-  plog(() => `sdk-openai npm=${npm} upstream=${upstreamModelId(model)} responseModel=${responseModelId} stream=${clientWantsStream}`);
-
-  let sdkAttempt = 0;
-  for (;;) {
-    try {
-      const languageModel = await getOrInitLanguageModel(
-        modelCache,
-        model,
-        npm,
-        baseURL,
-        apiKey,
-      );
-      if (clientWantsStream) {
-        const writeStreamChunk = (chunk: string) => {
-          if (!res.headersSent) {
-            res.writeHead(200, {
-              'Content-Type': 'text/event-stream',
-              'Cache-Control': 'no-cache',
-              'Connection': 'keep-alive',
-            });
-          }
-          res.write(chunk);
-        };
-        await streamOpenAiResponse(languageModel, params, responseModelId, writeStreamChunk);
-        if (!res.headersSent) writeStreamChunk('');
-        res.end();
-      } else {
-        // ChatGPT/Codex OAuth routes only ever answer as SSE (the WebSocket fetch
-        // returns text/event-stream unconditionally), so stream internally and
-        // collect the result instead of issuing a non-streaming SDK request.
-        const response = await generateOpenAiResponse(languageModel, params, responseModelId, { forceStream: openAiOAuth });
-        sendJson(res, 200, response);
-      }
-      break;
-    } catch (err) {
-      const message = formatUpstreamError(err);
-      const details = sdkUpstreamErrorDetails(err);
-      const candidateStatus = details?.statusCode ?? upstreamHttpStatus(err, message);
-      const replacement = await resolveOAuthRetryReplacement(
-        openAiOAuth,
-        candidateStatus,
-        sdkAttempt,
-        res.headersSent,
-        apiKey,
-        rejectedAccessToken => resolveModelApiKey(model, options.apiKey, rejectedAccessToken),
-      );
-      if (replacement) {
-        apiKey = replacement;
-        sdkAttempt += 1;
-        plog('sdk oauth credential replaced after 401; retrying once');
-        continue;
-      }
-      const { statusCode: status, retryAfterSeconds } = auditSdkError(options, body.model, model, err, message);
-      plog(`sdk error npm=${model.npm} upstream=${upstreamModelId(model)}: ${message}`);
-      if (!res.headersSent) {
-        if (retryAfterSeconds !== undefined) res.setHeader('retry-after', String(retryAfterSeconds));
-        sendJson(res, status === 500 ? 502 : status, { error: { message } });
-      } else {
-        res.write(`data: ${JSON.stringify({ error: { message, type: 'upstream_error', code: status } })}\n\n`);
-        res.end();
-      }
-      break;
-    }
-  }
-}
-
 function lookupModel(res: HttpResponseWriter, catalog: ModelCatalog, modelId: JsonValue): ServerModelInfo | null {
   if (!isString(modelId)) {
     sendJson(res, 400, { error: { message: 'Request body must include a model string' } });
@@ -805,7 +605,6 @@ async function getOrInitLanguageModel(
       oauthAccountId: model.oauthAccountId,
       headers: model.headers,
       useResponsesLite: model.useResponsesLite,
-      preferWebSockets: model.preferWebSockets,
       openAiCompactThreshold: model.authType === 'oauth'
         ? resolveOpenAiCompactionThreshold(model.contextWindow)
         : undefined,

@@ -9,7 +9,6 @@ import { createGatewayModelCatalog, type ServerModelInfo } from '../src/server/m
 import { startServer, type ServerHandle } from '../src/server/router.js';
 import { createLanguageModel } from '../src/provider-factory.js';
 import { generateAnthropicResponse, streamAnthropicResponse } from '../src/sdk-adapter.js';
-import { generateOpenAiResponse, streamOpenAiResponse } from '../src/providers/openai-adapter.js';
 import { resolveProviderCredential } from '../src/config/environment.js';
 import { withResponsesWebSocketDiagnosticContext } from '../src/oauth/responses-websocket.js';
 import { flushTraceLogs } from '../src/observability/trace-log.js';
@@ -78,25 +77,6 @@ vi.mock('../src/sdk-adapter.js', () => {
       content: [{ type: 'text', text: 'sdk ok' }],
       stop_reason: 'end_turn',
       usage: { input_tokens: 1, output_tokens: 1 },
-    })),
-  };
-});
-
-vi.mock('../src/providers/openai-adapter.js', () => {
-  const actual = importActual<typeof import('../src/providers/openai-adapter.js')>('../src/providers/openai-adapter.js', import.meta.url);
-  return {
-    ...actual,
-    streamOpenAiResponse: vi.fn(async () => {}),
-    generateOpenAiResponse: vi.fn(async (
-      _model: Parameters<typeof generateOpenAiResponse>[0],
-      _params: Parameters<typeof generateOpenAiResponse>[1],
-      modelId: string,
-    ) => ({
-      id: 'chatcmpl-test',
-      object: 'chat.completion',
-      model: modelId,
-      choices: [{ message: { content: 'openai sdk ok' }, finish_reason: 'stop' }],
-      usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
     })),
   };
 });
@@ -233,8 +213,6 @@ afterEach(async () => {
   asMocked(resolveProviderCredential).mockReset();
   asMocked(generateAnthropicResponse).mockClear();
   asMocked(streamAnthropicResponse).mockClear();
-  asMocked(generateOpenAiResponse).mockClear();
-  asMocked(streamOpenAiResponse).mockClear();
   asMocked(withResponsesWebSocketDiagnosticContext).mockClear();
   if (ORIGINAL_COMPACTION_FLAG === undefined) delete process.env.CLODEX_OPENAI_COMPACTION;
   else process.env.CLODEX_OPENAI_COMPACTION = ORIGINAL_COMPACTION_FLAG;
@@ -344,24 +322,29 @@ it('logs inference routing metadata without request content', async () => {
       ]),
     });
 
-    const openai = await fetch(`${server.url}/openai/v1/models`);
-    expect(openai.status).toBe(200);
-    expect(await openai.json()).toMatchObject({ object: 'list' });
+    const removedOpenAiEndpoint = await fetch(`${server.url}/openai/v1/models`);
+    expect(removedOpenAiEndpoint.status).toBe(404);
+    const removedOpenAiChatEndpoint = await fetch(`${server.url}/openai/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: 'openai-format', messages: [] }),
+    });
+    expect(removedOpenAiChatEndpoint.status).toBe(404);
   });
 
   it('returns 401 for protected endpoints when password is missing or wrong', async () => {
     const server = await startTestServer({ serverPassword: 'secret' });
 
-    const missing = await fetch(`${server.url}/openai/v1/models`);
+    const missing = await fetch(`${server.url}/anthropic/v1/models`);
     expect(missing.status).toBe(401);
     expect(await missing.json()).toMatchObject({ error: { message: 'Unauthorized' } });
 
-    const wrong = await fetch(`${server.url}/openai/v1/models`, {
+    const wrong = await fetch(`${server.url}/anthropic/v1/models`, {
       headers: { authorization: 'Bearer wrong' },
     });
     expect(wrong.status).toBe(401);
 
-    const right = await fetch(`${server.url}/openai/v1/models`, {
+    const right = await fetch(`${server.url}/anthropic/v1/models`, {
       headers: { 'x-api-key': 'secret' },
     });
     expect(right.status).toBe(200);
@@ -438,52 +421,6 @@ it('logs inference routing metadata without request content', async () => {
       url: '/v1/messages',
       authorization: undefined,
       xApiKey: undefined,
-    });
-  });
-
-  it('forwards anonymous OpenAI chat completions without authentication headers', async () => {
-    const upstream = await startUpstream({
-      id: 'chatcmpl-anonymous',
-      choices: [{ message: { content: 'anonymous ok' }, finish_reason: 'stop' }],
-    });
-    handles.push(upstream);
-    const server = await startTestServer({
-      catalog: createGatewayModelCatalog([{
-        id: 'anonymous-chat-model',
-        name: 'Anonymous Chat Model',
-        isFree: true,
-        brand: 'Other',
-        providerId: 'local',
-        sourceBackend: 'go',
-        modelFormat: 'openai',
-        completionsUrl: `${upstream.baseUrl}/v1/chat/completions`,
-        apiKey: '',
-        authType: 'none',
-        headers: {
-          Authorization: 'Bearer configured-value',
-          'X-Plan': 'free',
-        },
-      }]),
-    });
-
-    const response = await fetch(`${server.url}/openai/v1/chat/completions`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: 'anonymous-chat-model',
-        messages: [{ role: 'user', content: 'hi' }],
-      }),
-    });
-
-    expect(response.status).toBe(200);
-    expect(await response.json()).toMatchObject({ id: 'chatcmpl-anonymous' });
-    expect(upstream.requests).toHaveLength(1);
-    expect(upstream.requests[0]).toMatchObject({
-      method: 'POST',
-      url: '/v1/chat/completions',
-      authorization: undefined,
-      xApiKey: undefined,
-      xPlan: 'free',
     });
   });
 
@@ -725,7 +662,7 @@ it('logs inference routing metadata without request content', async () => {
     expect(body.request_id).toEqual(expect.any(String));
   });
 
-  it('sets a clamped retry-after header on translated 429s from both endpoints', async () => {
+  it('sets a clamped retry-after header on translated 429s', async () => {
     const sdkCatalog = createGatewayModelCatalog([{
       id: 'sdk-model',
       name: 'SDK Model',
@@ -739,7 +676,7 @@ it('logs inference routing metadata without request content', async () => {
     }]);
     const server = await startTestServer({ catalog: sdkCatalog });
 
-    // Anthropic-format endpoint: an oversized upstream hint comes out clamped.
+    // An oversized upstream hint comes out clamped.
     asMocked(generateAnthropicResponse).mockRejectedValueOnce(rateLimitApiError('3600'));
     const anthropicResponse = await fetch(`${server.url}/anthropic/v1/messages`, {
       method: 'POST',
@@ -751,16 +688,6 @@ it('logs inference routing metadata without request content', async () => {
     });
     expect(anthropicResponse.status).toBe(429);
     expect(anthropicResponse.headers.get('retry-after')).toBe('60');
-
-    // OpenAI-format endpoint: an in-range hint is forwarded as-is.
-    asMocked(generateOpenAiResponse).mockRejectedValueOnce(rateLimitApiError('7'));
-    const openAiResponse = await fetch(`${server.url}/openai/v1/chat/completions`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: 'sdk-model', messages: [{ role: 'user', content: 'hi' }] }),
-    });
-    expect(openAiResponse.status).toBe(429);
-    expect(openAiResponse.headers.get('retry-after')).toBe('7');
   });
 
   it('omits the retry-after header on non-429 upstream errors', async () => {
@@ -829,22 +756,6 @@ it('logs inference routing metadata without request content', async () => {
       expect.any(String),
       expect.objectContaining({ forceStream: true }),
     );
-
-    const chatResponse = await fetch(`${server.url}/openai/v1/chat/completions`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: 'gpt-oauth',
-        messages: [{ role: 'user', content: 'ping' }],
-      }),
-    });
-    expect(chatResponse.status).toBe(200);
-    expect(asMocked(generateOpenAiResponse)).toHaveBeenLastCalledWith(
-      expect.anything(),
-      expect.anything(),
-      expect.any(String),
-      expect.objectContaining({ forceStream: true }),
-    );
   });
 
   it('uses the exact OAuth reference and rebuilds the cached model when the token changes', async () => {
@@ -878,15 +789,15 @@ it('logs inference routing metadata without request content', async () => {
     });
     expect(messagesResponse.status).toBe(200);
 
-    const chatResponse = await fetch(`${server.url}/openai/v1/chat/completions`, {
+    const secondMessagesResponse = await fetch(`${server.url}/anthropic/v1/messages`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: 'oauth-refresh-route',
+        model: 'anthropic-oauth-provider__oauth-refresh-route',
         messages: [{ role: 'user', content: 'second' }],
       }),
     });
-    expect(chatResponse.status).toBe(200);
+    expect(secondMessagesResponse.status).toBe(200);
 
     expect(resolveProviderCredential).toHaveBeenNthCalledWith(
       1,
@@ -1071,97 +982,6 @@ it('logs inference routing metadata without request content', async () => {
     expect(resolveProviderCredential).toHaveBeenCalledTimes(1);
   });
 
-  it('refreshes once after a translated OpenAI-facing OAuth 401', async () => {
-    asMocked(generateOpenAiResponse).mockClear();
-    asMocked(generateOpenAiResponse).mockRejectedValueOnce(
-      Object.assign(new Error('rejected token'), { statusCode: 401 }),
-    );
-    asMocked(resolveProviderCredential)
-      .mockResolvedValueOnce('rejected-token')
-      .mockResolvedValueOnce('refreshed-token');
-    const oauthCatalog = createGatewayModelCatalog([
-      {
-        id: 'oauth-retry-openai',
-        name: 'OAuth Retry OpenAI',
-        isFree: false,
-        brand: 'Other',
-        providerId: 'oauth-provider',
-        sourceBackend: 'oauth-provider',
-        modelFormat: 'openai',
-        npm: '@ai-sdk/openai',
-        authType: 'oauth',
-        authRef: TEST_HELPER_REF,
-        apiKey: 'launch-token',
-      },
-    ]);
-    const server = await startTestServer({ catalog: oauthCatalog });
-
-    const response = await fetch(`${server.url}/openai/v1/chat/completions`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: 'oauth-retry-openai',
-        messages: [{ role: 'user', content: 'ping' }],
-      }),
-    });
-
-    expect(response.status).toBe(200);
-    expect(generateOpenAiResponse).toHaveBeenCalledTimes(2);
-    expect(resolveProviderCredential).toHaveBeenNthCalledWith(
-      1,
-      'oauth-provider',
-      TEST_HELPER_REF,
-    );
-    expect(resolveProviderCredential).toHaveBeenNthCalledWith(
-      2,
-      'oauth-provider',
-      TEST_HELPER_REF,
-      undefined,
-      { rejectedAccessToken: 'rejected-token' },
-    );
-    expect(
-      // SAFETY: The test fixture defines the asserted runtime shape.
-      asMocked(createLanguageModel).mock.calls.map(call => (call[0] as any).apiKey),
-    ).toEqual(['rejected-token', 'refreshed-token']);
-  });
-
-  it('surfaces a second translated OpenAI-facing OAuth 401 without another retry', async () => {
-    asMocked(generateOpenAiResponse).mockClear();
-    asMocked(generateOpenAiResponse)
-      .mockRejectedValueOnce(Object.assign(new Error('rejected token'), { statusCode: 401 }))
-      .mockRejectedValueOnce(Object.assign(new Error('rejected token'), { statusCode: 401 }));
-    asMocked(resolveProviderCredential)
-      .mockResolvedValueOnce('rejected-token')
-      .mockResolvedValueOnce('refreshed-token');
-    const oauthCatalog = createGatewayModelCatalog([{
-      id: 'oauth-second-401-openai',
-      name: 'OAuth Second 401 OpenAI',
-      isFree: false,
-      brand: 'Other',
-      providerId: 'oauth-provider',
-      sourceBackend: 'oauth-provider',
-      modelFormat: 'openai',
-      npm: '@ai-sdk/openai',
-      authType: 'oauth',
-      authRef: TEST_HELPER_REF,
-      apiKey: 'launch-token',
-    }]);
-    const server = await startTestServer({ catalog: oauthCatalog });
-
-    const response = await fetch(`${server.url}/openai/v1/chat/completions`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: 'oauth-second-401-openai',
-        messages: [{ role: 'user', content: 'ping' }],
-      }),
-    });
-
-    expect(response.status).toBe(401);
-    expect(generateOpenAiResponse).toHaveBeenCalledTimes(2);
-    expect(resolveProviderCredential).toHaveBeenCalledTimes(2);
-  });
-
   it('does not force streaming for non-streaming requests on API-key routes', async () => {
     const apiKeyCatalog = createGatewayModelCatalog([{
       id: 'gpt-api',
@@ -1192,51 +1012,6 @@ it('logs inference routing metadata without request content', async () => {
       expect.any(String),
       expect.objectContaining({ forceStream: false }),
     );
-
-    const chatResponse = await fetch(`${server.url}/openai/v1/chat/completions`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: 'gpt-api',
-        messages: [{ role: 'user', content: 'ping' }],
-      }),
-    });
-    expect(chatResponse.status).toBe(200);
-    expect(asMocked(generateOpenAiResponse)).toHaveBeenLastCalledWith(
-      expect.anything(),
-      expect.anything(),
-      expect.any(String),
-      expect.objectContaining({ forceStream: false }),
-    );
-  });
-
-  it('forwards OpenAI chat completions for OpenAI-format models unchanged', async () => {
-    const upstream = await startUpstream({
-      id: 'chatcmpl-test',
-      choices: [{ message: { content: 'openai ok' }, finish_reason: 'stop' }],
-    });
-    handles.push(upstream);
-    const server = await startTestServer({
-      catalog: createGatewayModelCatalog([
-        model('openai-format', 'openai', 'go', { completionsUrl: `${upstream.baseUrl}/v1/chat/completions` }),
-      ]),
-    });
-
-    const body = { model: 'openai-format', messages: [{ role: 'user', content: 'hi' }], temperature: 0.2 };
-    const response = await fetch(`${server.url}/openai/v1/chat/completions`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-
-    expect(response.status).toBe(200);
-    expect(await response.json()).toMatchObject({ id: 'chatcmpl-test' });
-    expect(upstream.requests[0]).toMatchObject({
-      method: 'POST',
-      url: '/v1/chat/completions',
-      authorization: 'Bearer real-opencode-key',
-      body,
-    });
   });
 
   it('caches SDK language models per provider-qualified route, not just raw model id', async () => {
@@ -1283,53 +1058,6 @@ it('logs inference routing metadata without request content', async () => {
       'openai',
       'openrouter',
     ]);
-  });
-
-  it('exposes SDK-only registry models through OpenAI chat completions', async () => {
-    const sdkOnlyCatalog = createGatewayModelCatalog([{
-      id: 'gpt-5',
-      name: 'GPT-5',
-      isFree: false,
-      brand: 'OpenAI',
-      providerId: 'openai',
-      providerLabel: 'OpenAI',
-      sourceBackend: 'openai',
-      modelFormat: 'openai',
-      npm: '@ai-sdk/openai',
-      apiBaseUrl: 'https://api.openai.com/v1',
-      apiKey: 'openai-key',
-    }]);
-    const server = await startTestServer({ catalog: sdkOnlyCatalog });
-
-    const models = await fetch(`${server.url}/openai/v1/models`);
-    expect(models.status).toBe(200);
-    expect(await models.json()).toEqual({
-      object: 'list',
-      data: [
-        expect.objectContaining({ id: 'gpt-5', owned_by: 'openai' }),
-      ],
-    });
-
-    const response = await fetch(`${server.url}/openai/v1/chat/completions`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: 'gpt-5', messages: [{ role: 'user', content: 'hi' }] }),
-    });
-    expect(response.status).toBe(200);
-    expect(await response.json()).toMatchObject({ id: 'chatcmpl-test', choices: [{ message: { content: 'openai sdk ok' } }] });
-  });
-
-  it('translates OpenAI requests for Anthropic-native models', async () => {
-    const server = await startTestServer();
-
-    const response = await fetch(`${server.url}/openai/v1/chat/completions`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: 'claude-native', messages: [] }),
-    });
-
-    expect(response.status).toBe(200);
-    expect(await response.json()).toMatchObject({ id: 'chatcmpl-test', choices: [{ message: { content: 'openai sdk ok' } }] });
   });
 
   it('rejects unsupported model formats', async () => {
@@ -1401,20 +1129,7 @@ it('logs inference routing metadata without request content', async () => {
       }
     });
 
-    it('resolves a saved alias on the OpenAI chat completions endpoint too', async () => {
-      const server = await startAliasServer();
-
-      const response = await fetch(`${server.url}/openai/v1/chat/completions`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model: 'luna', messages: [{ role: 'user', content: 'hi' }] }),
-      });
-
-      expect(response.status).toBe(200);
-      expect(await response.json()).toMatchObject({ id: 'chatcmpl-test', model: 'luna' });
-    });
-
-    it('rejects conflicting saved aliases on both request formats without selecting a provider', async () => {
+    it('rejects conflicting saved aliases without selecting a provider', async () => {
       const solModel: ServerModelInfo = {
         ...lunaModel,
         id: 'gpt-5.6-sol',
@@ -1438,31 +1153,23 @@ it('logs inference routing metadata without request content', async () => {
         expect(health.status).toBe(200);
       });
 
-      for (const path of [
-        '/anthropic/v1/messages',
-        '/openai/v1/chat/completions',
-      ]) {
-        expect(server.server.port, path).toBe(server.port);
-        const response = await fetch(`${server.url}${path}`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            model: 'orbit',
-            messages: [{ role: 'user', content: 'hi' }],
-          }),
-        });
+      const response = await fetch(`${server.url}/anthropic/v1/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: 'orbit',
+          messages: [{ role: 'user', content: 'hi' }],
+        }),
+      });
 
-        expect(response.status, path).toBe(400);
-        expect(await response.json()).toMatchObject({
-          error: { message: 'Unknown model: orbit' },
-        });
-      }
+      expect(response.status).toBe(400);
+      expect(await response.json()).toMatchObject({
+        error: { message: 'Unknown model: orbit' },
+      });
 
       expect(createLanguageModel).not.toHaveBeenCalled();
       expect(generateAnthropicResponse).not.toHaveBeenCalled();
       expect(streamAnthropicResponse).not.toHaveBeenCalled();
-      expect(generateOpenAiResponse).not.toHaveBeenCalled();
-      expect(streamOpenAiResponse).not.toHaveBeenCalled();
     });
 
     it('still rejects unknown model ids with 400', async () => {

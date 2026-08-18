@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import type { FetchFunction } from '@ai-sdk/provider-utils';
 import { outboundProxyUrlForTarget } from '../transport/outbound-proxy.js';
 import { loadBunNativeWebSocket } from '../transport/bun-websocket.js';
@@ -27,7 +27,6 @@ import type {
   JsonValue,
   RequestContext,
   ConnectionEntry,
-  CompactionCheckpoint,
   HydratedCompactionCheckpoint,
 } from './responses-websocket/types.js';
 import type {
@@ -55,19 +54,17 @@ import {
   inputArray,
 } from './responses-websocket/fingerprint.js';
 import {
-  continuationMatchRank,
   conversationItemKind,
   retainedUserMessages,
   compactionSummaryHash,
-  claudeCompactionEnvelopeOccurrenceCount,
   conversationItemHash,
-  continuationMismatchDetails,
-  continuationMismatchSummary,
-  historyContinuationMatch,
-  continuationMatch,
-  prepareConversationItems,
 } from './responses-websocket/continuation.js';
-import type { ContinuationMatch } from './responses-websocket/continuation.js';
+import {
+  finalizeResponsesSession,
+  planResponsesSessionHead,
+  responsesSessionDecisionMetadata,
+  type ResponsesSessionDecision,
+} from './responses-websocket/session-planner.js';
 import { boundedDiagnosticIdentifier, closeContext } from './responses-websocket/protocol.js';
 import {
   beginRecycledLineage,
@@ -136,72 +133,31 @@ export function createResponsesWebSocketFetch(
 
     const forceCompaction = diagnosticCorrelation?.forceCompaction === true;
     const candidates = partitionKey ? connectionEntries(partitionKey) : [];
-    const idleCandidates = candidates.filter(entry => !entry.inFlight);
-    const preparedConversation = prepareConversationItems(payload);
-    const matches = idleCandidates
-      .map(entry => ({
-        entry,
-        match: continuationMatch(entry, payload, preparedConversation),
-      }))
-      .filter((candidate): candidate is { entry: ConnectionEntry; match: ContinuationMatch } => candidate.match !== undefined)
-      // Prefer the longest matching history, which produces the smallest delta.
-        .toSorted((left, right) => left.match.delta.length - right.match.delta.length
-        || continuationMatchRank(left.match.mode) - continuationMatchRank(right.match.mode));
-    let selected: ConnectionEntry | undefined = matches[0]?.entry;
-    let selectedMatch = matches[0]?.match;
-    let selectedDelta = selectedMatch?.delta;
-    if (!selected && forceCompaction) {
-      const compactInstruction = inputArray(payload).at(-1);
-      const agentCandidates = idleCandidates.filter(
-        entry => entry.claudeAgentId === diagnosticCorrelation.claudeAgentId,
-      );
-      if (
-        agentCandidates.length === 1
-        && compactInstruction
-        && conversationItemKind(compactInstruction) === 'user'
-      ) {
-        selected = agentCandidates[0];
-        selectedMatch = {
-          delta: [compactInstruction],
-          mode: 'claude_compaction_request',
-        };
-        selectedDelta = selectedMatch.delta;
-      }
-    }
-    const checkpointMatches = checkpointKey
-      ? checkpointEntries(checkpointKey)
-        .map(checkpoint => ({
-          checkpoint,
-          match: historyContinuationMatch(checkpoint, payload, preparedConversation),
-        }))
-        .filter((candidate): candidate is {
-          checkpoint: CompactionCheckpoint;
-          match: ContinuationMatch;
-        } => candidate.match !== undefined)
-      .toSorted((left, right) => left.match.delta.length - right.match.delta.length
-          || continuationMatchRank(left.match.mode) - continuationMatchRank(right.match.mode)
-          || (left.checkpoint.lastInputTokens ?? Number.MAX_SAFE_INTEGER)
-            - (right.checkpoint.lastInputTokens ?? Number.MAX_SAFE_INTEGER))
-      : [];
-    const checkpointCandidate = selected ? undefined : checkpointMatches[0];
-    const selectedCheckpoint = checkpointCandidate
-      ? hydrateCompactionCheckpoint(checkpointCandidate.checkpoint, now)
-      : undefined;
-    const checkpointMatch = selectedCheckpoint ? checkpointCandidate?.match : undefined;
-    const compactionEnvelopeCount = claudeCompactionEnvelopeOccurrenceCount(payload);
-    const anchored = selectedMatch?.mode === 'claude_compaction_summary'
-      || checkpointMatch?.mode === 'claude_compaction_summary';
+    const checkpoints = checkpointKey ? checkpointEntries(checkpointKey) : [];
+    const headPlan = planResponsesSessionHead({
+      payload,
+      candidates,
+      checkpoints,
+      now,
+      forceCompaction,
+      claudeAgentId: diagnosticCorrelation?.claudeAgentId,
+      hydrateCheckpoint: hydrateCompactionCheckpoint,
+    });
+    const {
+      preparedConversation,
+      diagnosticEntry,
+      compactionEnvelopeCount,
+      anchored,
+    } = headPlan;
+    let {
+      selected,
+      selectedMatch,
+      selectedDelta,
+      selectedCheckpoint,
+      checkpointMatch,
+    } = headPlan;
     const hasCompacted = () => compacted;
-    if (
-      compactionEnvelopeCount > 0
-      && !anchored
-      && (
-        candidates.some(entry => entry.claudeCompactionSummaryHash)
-        || (checkpointKey
-          ? checkpointEntries(checkpointKey).some(checkpoint => checkpoint.claudeCompactionSummaryHash)
-          : false)
-      )
-    ) {
+    if (headPlan.missedCompactionAnchor) {
       emitDiagnostic(options, {
         event: 'ws_compaction',
         outcome: 'anchor_missed',
@@ -209,9 +165,6 @@ export function createResponsesWebSocketFetch(
         envelopeCount: compactionEnvelopeCount,
       }, diagnosticCorrelation);
     }
-    const diagnosticEntry = selected
-      ?? [...idleCandidates].toSorted((left, right) => right.lastUsedAt - left.lastUsedAt)[0]
-      ?? candidates[0];
     debug(
       `lookup key=${debugKey(partitionKey)} prompt=${debugKey(promptFingerprint)} hit=${candidates.length > 0} heads=${candidates.length} active_connections=${connectionCount()}`,
     );
@@ -227,20 +180,7 @@ export function createResponsesWebSocketFetch(
     let supersededEntry: ConnectionEntry | undefined;
     let continued = false;
     let persistent = Boolean(partitionKey);
-    let promotedConnectionId: number | undefined;
-    let decision:
-      | 'continuation'
-      | 'compaction_new_head'
-      | 'overflow_rebase_new_head'
-      | 'compaction_trigger_new_head'
-      | 'claude_compaction_checkpoint'
-      | 'compaction_checkpoint'
-      | 'parallel_new_head'
-      | 'parallel_isolated'
-      | 'history_mismatch_reused_head'
-      | 'history_mismatch_new_head'
-      | 'new_partition_head'
-      | 'unpartitioned_socket' = partitionKey
+    let decision: ResponsesSessionDecision = partitionKey
         ? 'new_partition_head'
         : 'unpartitioned_socket';
     const compactThreshold = options.compactThreshold;
@@ -810,116 +750,60 @@ export function createResponsesWebSocketFetch(
       });
     }
 
-    if (compacted) {
-      // Native compaction returned canonical input for a fresh response chain.
-      if (forceCompaction && compactedInputBase && checkpointKey) {
-        decision = 'claude_compaction_checkpoint';
-      }
-    } else if (selected && selectedDelta && selectedMatch) {
-      sendPayload = { ...payload, input: selectedDelta, previous_response_id: selected.responseId };
-      continued = true;
-      compactedInputBase = selected.compactedInput
-        ? [...selected.compactedInput, ...selectedDelta]
-        : undefined;
-      if (compactedInputBase) {
-        retryPayload = { ...payload, input: compactedInputBase };
-        delete retryPayload.previous_response_id;
-      }
-      if (selected.generation === 'nursery') {
-        evictions.push(...evictOldestIdleGeneration(
-          'established',
-          resolvedOptions.maxConnections,
-          'established_lru_cap',
-        ));
-        selected.generation = 'established';
-        promotedConnectionId = selected.debugId;
-      }
-      decision = 'continuation';
-      debug(
-        `continuing chain with ${selectedDelta.length} incremental input item(s)`
-        + (selectedMatch.mode === 'replayed_reasoning'
-          ? ' after accepting replayed opaque reasoning'
-          : selectedMatch.mode === 'omitted_reasoning'
-            ? ' after accepting omitted reasoning'
-          : selectedMatch.mode === 'claude_compaction_summary'
-            ? ' after re-anchoring Claude compacted history'
-            : ''),
-      );
-    } else if (selectedCheckpoint && checkpointMatch) {
-      const compactedInput = [...selectedCheckpoint.compactedInput, ...checkpointMatch.delta];
-      sendPayload = { ...payload, input: compactedInput };
-      delete sendPayload.previous_response_id;
-      retryPayload = sendPayload;
-      compactedInputBase = compactedInput;
-      decision = 'compaction_checkpoint';
-      selectedCheckpoint.lastUsedAt = now;
-      debug(
-        `restored compact checkpoint with ${checkpointMatch.delta.length} incremental input item(s)`,
-      );
-    } else if (candidates.some(entry => entry.inFlight)) {
-      // Claude workflow agents share the parent session id but carry divergent
-      // histories. Reuse a warm idle nursery head when a later workflow wave
-      // overlaps with an already-started sibling; otherwise give the branch a
-      // retained new head. Fall back to isolation only when every nursery slot
-      // is occupied by an active request.
-      const reusable = reusableCacheAffinityHead(
+    const nurseryConnectionCount = connectionCountByGeneration('nursery');
+    const dispatchPlan = finalizeResponsesSession({
+      payload,
+      partitionKey,
+      now,
+      maxNurseryConnections: resolvedOptions.maxNurseryConnections,
+      nurseryConnectionCount,
+      hasIdleNursery: connectionEntries()
+        .some(entry => !entry.inFlight && entry.generation === 'nursery'),
+      forceCompaction: forceCompaction && Boolean(checkpointKey),
+      compacted,
+      sendPayload,
+      compactedInputBase,
+      retryPayload,
+      initialDecision: decision,
+      initialPersistent: persistent,
+      headPlan: {
+        ...headPlan,
+        selected,
+        selectedMatch,
+        selectedDelta,
+        selectedCheckpoint,
+        checkpointMatch,
+      },
+      findReusableHead: () => reusableCacheAffinityHead(
         partitionKey,
         diagnosticCorrelation?.claudeAgentId,
         promptFieldHashes,
-      );
-      if (reusable) {
-        selected = reusable;
-        decision = 'history_mismatch_reused_head';
-        debug(
-          `parallel history mismatch reusing idle nursery connection=${reusable.debugId}`,
-        );
-      } else {
-        selected = undefined;
-        const nurseryAtCapacity = connectionCountByGeneration('nursery')
-          >= resolvedOptions.maxNurseryConnections;
-        const hasIdleNursery = connectionEntries()
-          .some(entry => !entry.inFlight && entry.generation === 'nursery');
-        persistent = !nurseryAtCapacity || hasIdleNursery;
-        decision = persistent ? 'parallel_new_head' : 'parallel_isolated';
-        debug(
-          persistent
-            ? 'parallel request starting a retained nursery head'
-            : 'parallel request using an isolated socket at nursery capacity',
-        );
-      }
-    } else if (diagnosticEntry) {
-      // Reuse an idle nursery socket once a partition already has two warm
-      // unproven heads, or a terminal head from a different Claude subagent
-      // with an identical prompt shape. Full-history requests do not use
-      // previous_response_id, but controlled probes show that keeping the
-      // physical socket restores OpenAI prompt-cache affinity.
-      const reusable = reusableCacheAffinityHead(
-        partitionKey,
-        diagnosticCorrelation?.claudeAgentId,
-        promptFieldHashes,
-      );
-      if (reusable) {
-        selected = reusable;
-        decision = 'history_mismatch_reused_head';
-        debug(
-          `history mismatch reusing idle nursery connection=${reusable.debugId}; `
-          + `retained ${candidates.length - 1} other head(s) `
-          + `(${continuationMismatchSummary(diagnosticEntry, payload)})`,
-        );
-      } else {
-        debug(
-          `history mismatch starting an additional chain; retained ${candidates.length} existing head(s) `
-          + `(${continuationMismatchSummary(diagnosticEntry, payload)})`,
-        );
-        decision = 'history_mismatch_new_head';
-      }
-    } else if (partitionKey) {
-      decision = 'new_partition_head';
-    } else {
-      decision = 'unpartitioned_socket';
+      ),
+    });
+    ({
+      selected,
+      selectedCheckpoint,
+      selectedMatch,
+      checkpointMatch,
+      sendPayload,
+      retryPayload,
+      compactedInputBase,
+      continued,
+      persistent,
+      decision,
+    } = dispatchPlan);
+    selectedDelta = selectedMatch?.delta;
+    if (dispatchPlan.promoteSelected && selected) {
+      evictions.push(...evictOldestIdleGeneration(
+        'established',
+        resolvedOptions.maxConnections,
+        'established_lru_cap',
+      ));
+      selected.generation = 'established';
     }
+    if (dispatchPlan.debugMessage) debug(dispatchPlan.debugMessage);
 
-    if (!selected && persistent) {
+    if (dispatchPlan.evictNurseryBeforeCreate) {
       evictions.push(...evictOldestIdleGeneration(
         'nursery',
         resolvedOptions.maxNurseryConnections,
@@ -928,73 +812,37 @@ export function createResponsesWebSocketFetch(
     }
 
     const requestInput = preparedConversation.items;
-    emitDiagnostic(options, {
-      event: 'ws_head_decision',
-      decision,
+    emitDiagnostic(options, responsesSessionDecisionMetadata({
+      wsUrl,
+      options,
+      payload,
       partitionKey,
-      keyTuple: {
-        wsUrl,
-        providerId: options.providerId ?? 'openai',
-        accountIdHash: options.accountId
-          ? createHash('sha256').update(options.accountId).digest('hex').slice(0, 16)
-          : '',
-        model: isString(payload.model) ? payload.model : undefined,
-        effort: isObject(payload.reasoning) && 'effort' in payload.reasoning
-          && isString(payload.reasoning.effort)
-          ? payload.reasoning.effort.trim().toLowerCase()
-          : '',
-        promptCacheKey: isString(payload.prompt_cache_key) ? payload.prompt_cache_key : undefined,
-      },
+      checkpointCount: checkpoints.length,
       promptFingerprint,
       promptFieldHashes,
       promptChanges,
-      input: {
-        count: requestInput.length,
-        kinds: requestInput.map(conversationItemKind),
-        hashes: preparedConversation.hashes,
-      },
-      candidateCount: candidates.length,
-      idleCandidateCount: idleCandidates.length,
-      matchingCandidateCount: matches.length,
-      checkpointCount: checkpointKey ? checkpointEntries(checkpointKey).length : 0,
-      matchingCheckpointCount: checkpointMatches.length,
-      selectedCheckpointConnectionId: decision === 'compaction_checkpoint'
-        ? selectedCheckpoint?.connectionId
-        : undefined,
+      now,
       compactThreshold,
       effectiveCompactThreshold,
-      postCompactionInputTokens: provisionalPostCompactionInputTokens,
-      nextCompactionInputTokens: persistedNextCompactionInputTokens,
+      provisionalPostCompactionInputTokens,
+      persistedNextCompactionInputTokens,
       contextWindow,
       activeConnectionCount: connectionCount(),
       nurseryConnectionCount: connectionCountByGeneration('nursery'),
       establishedConnectionCount: connectionCountByGeneration('established'),
       maxConnections: resolvedOptions.maxConnections,
       maxNurseryConnections: resolvedOptions.maxNurseryConnections,
-      selectedConnectionId: selected?.debugId,
-      selectedGeneration: selected?.generation,
-      continuationMatchMode: selectedMatch?.mode ?? checkpointMatch?.mode,
-      promotedConnectionId,
-      createdConnectionId: selected ? undefined : peekNextConnectionDebugId(),
-      createdGeneration: selected ? undefined : persistent ? 'nursery' : 'isolated',
-      incrementalInputItems: selectedDelta?.length,
-      heads: candidates.map(entry => ({
-        connectionId: entry.debugId,
-        generation: entry.generation,
-        inFlight: entry.inFlight,
-        ageMs: Math.max(0, now - entry.createdAt - entry.ttlPausedMs),
-        physicalAgeMs: Math.max(0, now - entry.createdAt),
-        ttlPausedMs: entry.ttlPausedMs,
-        idleMs: Math.max(0, now - entry.lastUsedAt),
-        promptChanges: changedPromptFields(entry.promptFieldHashes, promptFieldHashes),
-        mismatch: continuationMismatchDetails(entry, payload, preparedConversation),
-        claudeAgentIdHash: entry.claudeAgentId
-          ? createHash('sha256').update(entry.claudeAgentId).digest('hex').slice(0, 12)
-          : undefined,
-        recyclableAgentHead: entry.recyclableAgentHead,
-      })),
+      nextConnectionDebugId: peekNextConnectionDebugId(),
       evictions,
-    }, diagnosticCorrelation);
+      headPlan,
+      dispatchPlan: {
+        ...dispatchPlan,
+        selected,
+        selectedCheckpoint,
+        selectedMatch,
+        checkpointMatch,
+      },
+    }), diagnosticCorrelation);
 
     if (
       decision === 'claude_compaction_checkpoint'
@@ -1105,9 +953,6 @@ export function createResponsesWebSocketFetch(
             : undefined,
           outputByIndex: new Map(),
           outputIndexByItemId: new Map(),
-          reasoningPartsByItemId: new Map(),
-          recentUpstreamEventTypes: [],
-          emittedProtocolAnomalies: new Set(),
           emitDiagnostic: options.onDiagnostic
             ? event => emitDiagnostic(options, event, diagnosticCorrelation)
             : undefined,

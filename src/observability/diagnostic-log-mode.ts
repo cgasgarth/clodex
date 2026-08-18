@@ -40,7 +40,6 @@ export function isErrorDiagnosticEvent(event: DiagnosticEvent): boolean {
     || event.errorCode
     || name.includes('error')
     || name.includes('failed')
-    || name.includes('protocol_anomaly')
     || ERROR_OUTCOMES.has(outcome)
   );
 }

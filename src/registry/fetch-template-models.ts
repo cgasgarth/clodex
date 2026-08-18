@@ -31,7 +31,6 @@ interface ProviderModelListRow {
   isFree?: boolean;
   pricing?: Record<string, string | number | undefined>;
   use_responses_lite?: boolean;
-  prefer_websockets?: boolean;
 }
 
 interface ProviderRequestHeaders {
@@ -141,7 +140,6 @@ function parseModelList(body: OpenAiModelListResponse, npm: string): CachedModel
       npm,
       supportedParameters: Array.isArray(row.supported_parameters) ? row.supported_parameters : undefined,
       useResponsesLite: isBoolean(row.use_responses_lite) ? row.use_responses_lite : undefined,
-      preferWebSockets: isBoolean(row.prefer_websockets) ? row.prefer_websockets : undefined,
     });
   }
 

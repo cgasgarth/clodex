@@ -195,7 +195,7 @@ describe('registry/refresh-models', () => {
       expect(mockRegistry.providers[0]?.modelsCache?.models[0]?.id).toBe('gpt-5.6-sol');
     });
 
-    it('captures use_responses_lite / prefer_websockets flags from the live Codex endpoint', async () => {
+    it('captures the use_responses_lite flag from the live Codex endpoint', async () => {
       const mockRegistry: ProviderRegistry = {
         version: 1,
         providers: [{
@@ -215,7 +215,7 @@ describe('registry/refresh-models', () => {
         ok: true,
         json: async () => ({
           models: [
-            { slug: 'gpt-5.6-luna', title: 'GPT-5.6 Luna', context_window: 272_000, use_responses_lite: true, prefer_websockets: true },
+            { slug: 'gpt-5.6-luna', title: 'GPT-5.6 Luna', context_window: 272_000, use_responses_lite: true },
             { slug: 'gpt-5.6-sol', title: 'GPT-5.6 Sol', context_window: 272_000 },
             { slug: 'gpt-5.6-terra', title: 'GPT-5.6 Terra', context_window: 272_000 },
           ],
@@ -231,13 +231,11 @@ describe('registry/refresh-models', () => {
       const sol = models.find(m => m.id === 'gpt-5.6-sol');
       const terra = models.find(m => m.id === 'gpt-5.6-terra');
       expect(luna?.useResponsesLite).toBe(true);
-      expect(luna?.preferWebSockets).toBe(true);
       expect(luna?.contextWindow).toBe(1_000_000);
       expect(sol?.contextWindow).toBe(1_000_000);
       expect(terra?.contextWindow).toBe(1_000_000);
       // A model the backend does not flag stays on the HTTP path.
       expect(sol?.useResponsesLite).toBeUndefined();
-      expect(sol?.preferWebSockets).toBeUndefined();
     });
 
     it('Tier 3: static seed carries Luna capability flags so a discovery outage does not regress it', async () => {
@@ -266,7 +264,6 @@ describe('registry/refresh-models', () => {
       const luna = savedRegistry.providers[0]?.modelsCache?.models.find(m => m.id === 'gpt-5.6-luna');
       expect(luna?.contextWindow).toBe(1_000_000);
       expect(luna?.useResponsesLite).toBe(true);
-      expect(luna?.preferWebSockets).toBe(true);
     });
 
     it('returns error if OAuth token is missing', async () => {

@@ -382,8 +382,6 @@ export interface ProxyRoute {
   interleavedReasoningField?: string;
   /** Backend capability: model requires the Responses-Lite request shape (x-openai-internal-codex-responses-lite). */
   useResponsesLite?: boolean;
-  /** Backend capability: model must use the WebSocket Responses transport instead of HTTP. */
-  preferWebSockets?: boolean;
   /** Static headers sent on every upstream request (e.g. a plan/auth-tracking header a custom endpoint requires). */
   headers?: Record<string, string>;
 }
@@ -916,7 +914,6 @@ export async function startProxyCatalog(
             providerData: route.providerData,
             headers: route.headers,
             useResponsesLite: route.useResponsesLite,
-            preferWebSockets: route.preferWebSockets,
             openAiCompactThreshold: openAiOAuth
               ? resolveOpenAiCompactionThreshold(route.contextWindow)
               : undefined,
@@ -1210,7 +1207,6 @@ export function startProxy(
     reasoning?: boolean;
     interleavedReasoningField?: string;
     useResponsesLite?: boolean;
-    preferWebSockets?: boolean;
     processingMode?: ApiProcessingMode;
     headers?: Record<string, string>;
   },
@@ -1236,7 +1232,6 @@ export function startProxy(
     reasoning: sdk?.reasoning,
     interleavedReasoningField: sdk?.interleavedReasoningField,
     useResponsesLite: sdk?.useResponsesLite,
-    preferWebSockets: sdk?.preferWebSockets,
     processingMode: sdk?.processingMode,
     headers: sdk?.headers,
   }], clientModelId, debug);

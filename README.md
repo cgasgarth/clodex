@@ -79,7 +79,7 @@ updates, or restore the pristine Claude binary with `clodex patch --restore`.
 | Grok exact output-loop detection and same-turn recovery | Built in |
 | Multiple manually selected ChatGPT/Codex accounts | Up to five |
 
-Clodex can also expose local Anthropic- and OpenAI-compatible endpoints, but
+Clodex can also expose a local Anthropic-compatible endpoint, but
 the primary path is `clodex claude`: Claude Code remains the client and clodex
 routes only the selected configured models.
 
@@ -109,8 +109,7 @@ Standalone `clodex server` supports:
 
 - **`--proxy`** — selectively reroutes saved OpenAI and Grok models while Anthropic
   requests retain Claude Code's own login.
-- **`--endpoint`** — exposes local Anthropic- and OpenAI-format gateways plus a
-  `/v1/models` catalog.
+- **`--endpoint`** — exposes a local Anthropic-format gateway and model catalog.
 
 See [background agents](docs/background-agents.md) for wrapper and service
 details.
@@ -285,7 +284,7 @@ Notes:
 
 ### `clodex server [options]`
 
-Foreground gateway, same two bridge modes, no Claude Code launch — point any Anthropic-format (or OpenAI-format) client at it.
+Foreground gateway, same two bridge modes, no Claude Code launch — point any Anthropic-format client at it.
 
 Common options (both modes):
 
@@ -318,11 +317,10 @@ reject non-Anthropic model ids. Requests may still use the masked id, canonical
 `clodex:<provider>:<model>` id, or a saved alias. Use
 `--no-mask-gateway-ids` when readable discovery ids are preferred.
 
-Endpoint-mode endpoints (default port 17645):
+Endpoint-mode endpoint (default port 17645):
 
 ```
 ANTHROPIC_BASE_URL=http://127.0.0.1:17645/anthropic
-OPENAI_BASE_URL=http://127.0.0.1:17645/openai/v1
 ```
 
 Local endpoint mode accepts any API key; network mode requires its password.

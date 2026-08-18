@@ -4,7 +4,7 @@ import {
   type ReasoningCapabilities,
   type ReasoningMetadata,
 } from '../provider-factory.js';
-import type { ProviderMetadata } from 'ai';
+import type { ProviderOptions } from '@ai-sdk/provider-utils';
 
 export type {
   ReasoningCapabilities,
@@ -30,6 +30,6 @@ export function effortProviderOptions(
   effort?: string,
   modelId?: string,
   metadata?: ReasoningMetadata,
-): ProviderMetadata | undefined {
+): ProviderOptions | undefined {
   return providerEffortOptions(npm, effort, modelId, metadata);
 }

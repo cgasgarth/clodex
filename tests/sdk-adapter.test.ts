@@ -1,5 +1,10 @@
 import { describe, it, expect, vi } from 'bun:test';
 import { createOpenAI } from '@ai-sdk/openai';
+import type { LanguageModelUsage } from 'ai';
+import {
+  MODEL_STREAM_IDLE_TIMEOUT_MS,
+  MODEL_TOTAL_TIMEOUT_MS,
+} from '../src/config/timeouts.js';
 import {
   annotateToolNames,
   anthropicEffortFromRequest,
@@ -26,10 +31,29 @@ const OPENAI_STEERING_POLICY_FOR_TESTS = [
   'continue only the work that remains relevant.',
 ].join(' ');
 
+function sdkUsage(
+  inputTokens: number,
+  outputTokens: number,
+  inputTokenDetails: Partial<LanguageModelUsage['inputTokenDetails']> = {},
+): LanguageModelUsage {
+  return {
+    inputTokens,
+    inputTokenDetails: {
+      noCacheTokens: inputTokens,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+      ...inputTokenDetails,
+    },
+    outputTokens,
+    outputTokenDetails: { textTokens: outputTokens, reasoningTokens: 0 },
+    totalTokens: inputTokens + outputTokens,
+  };
+}
+
 async function* forceStreamParts() {
   yield { type: 'start' };
   yield { type: 'text-delta', text: 'hello' };
-  yield { type: 'finish', finishReason: 'stop', totalUsage: { inputTokens: 3, outputTokens: 4 } };
+  yield { type: 'finish', finishReason: 'stop', totalUsage: sdkUsage(3, 4) };
 }
 
 async function* idleStreamParts() {
@@ -986,6 +1010,7 @@ describe('translateRequest', () => {
 
 describe('generateAnthropicResponse', () => {
   it('encodes non-streaming tool-call provider signatures for Gemini round-trip', async () => {
+    const abort = new AbortController();
     const generateText = vi.fn(async () => ({
       text: '',
       toolCalls: [{
@@ -995,7 +1020,7 @@ describe('generateAnthropicResponse', () => {
         providerMetadata: { google: { thoughtSignature: 'SIG' } },
       }],
       finishReason: 'tool-calls',
-      usage: { inputTokens: 1, outputTokens: 2 },
+      usage: sdkUsage(1, 2),
       finalStep: { providerMetadata: undefined },
     }));
 
@@ -1005,13 +1030,16 @@ describe('generateAnthropicResponse', () => {
       { messages: [] },
       'gemini-2.5-pro',
       // SAFETY: The test fixture defines the asserted runtime shape.
-      { generateText: generateText as never },
+      { abortSignal: abort.signal, generateText: generateText as never },
     );
     // SAFETY: The test fixture defines the asserted runtime shape.
     const toolUse = (body.content as any[]).find(item => item.type === 'tool_use');
     expect(toolUse.id).toBe('call_1__ts__U0lH');
-    expect(generateText.mock.calls[0]![0]).not.toHaveProperty('timeout');
-    expect(generateText.mock.calls[0]![0].abortSignal.aborted).toBe(true);
+    expect(generateText.mock.calls[0]![0].timeout).toEqual({
+      totalMs: MODEL_TOTAL_TIMEOUT_MS,
+    });
+    expect(generateText.mock.calls[0]![0].abortSignal).toBe(abort.signal);
+    expect(abort.signal.aborted).toBe(false);
 
   });
 
@@ -1026,7 +1054,6 @@ describe('generateAnthropicResponse', () => {
     const streamText = vi.fn(() => result);
 
     const abort = new AbortController();
-    const abortSignalAny = vi.spyOn(AbortSignal, 'any');
     const onPart = vi.fn();
     const body = await generateAnthropicResponse(
       // SAFETY: The test fixture defines the asserted runtime shape.
@@ -1044,10 +1071,12 @@ describe('generateAnthropicResponse', () => {
 
     expect(generateText).not.toHaveBeenCalled();
     expect(streamText).toHaveBeenCalledOnce();
-    expect(streamText.mock.calls[0]![0].abortSignal).toBeInstanceOf(AbortSignal);
-    expect(streamText.mock.calls[0]![0]).not.toHaveProperty('timeout');
-    expect(abortSignalAny).not.toHaveBeenCalled();
-    expect(streamText.mock.calls[0]![0].abortSignal.aborted).toBe(true);
+    expect(streamText.mock.calls[0]![0].abortSignal).toBe(abort.signal);
+    expect(streamText.mock.calls[0]![0].timeout).toEqual({
+      totalMs: MODEL_TOTAL_TIMEOUT_MS,
+      firstChunkMs: MODEL_STREAM_IDLE_TIMEOUT_MS,
+      chunkMs: MODEL_STREAM_IDLE_TIMEOUT_MS,
+    });
     expect(abort.signal.aborted).toBe(false);
     expect(onPart.mock.calls).toEqual([['start'], ['text-delta'], ['finish']]);
     // SAFETY: The test fixture defines the asserted runtime shape.
@@ -1058,7 +1087,6 @@ describe('generateAnthropicResponse', () => {
       cache_creation_input_tokens: 0,
       cache_read_input_tokens: 0,
     });
-    abortSignalAny.mockRestore();
   });
 
   it('forceStream propagates an SDK error part with its upstream status', async () => {
@@ -1112,7 +1140,7 @@ describe('generateAnthropicResponse', () => {
   });
 });
 
-describe('streamAnthropicResponse idle timeout', () => {
+describe('streamAnthropicResponse SDK-owned timeouts', () => {
   it('consumes only the stream without touching lazy aggregate getters', async () => {
     const result = { stream: idleStreamParts() };
     for (const property of ['text', 'toolCalls', 'toolResults', 'finishReason', 'usage']) {
@@ -1134,23 +1162,33 @@ describe('streamAnthropicResponse idle timeout', () => {
       { streamText: streamText as never },
     );
     expect(streamText).toHaveBeenCalledOnce();
-    expect(streamText.mock.calls[0]![0]).not.toHaveProperty('timeout');
-    expect(streamText.mock.calls[0]![0].abortSignal.aborted).toBe(true);
+    expect(streamText.mock.calls[0]![0].timeout).toEqual({
+      totalMs: MODEL_TOTAL_TIMEOUT_MS,
+      firstChunkMs: MODEL_STREAM_IDLE_TIMEOUT_MS,
+      chunkMs: MODEL_STREAM_IDLE_TIMEOUT_MS,
+    });
+    expect(streamText.mock.calls[0]![0].abortSignal).toBeUndefined();
 
   });
 
-  it('aborts an upstream that never produces its first stream event', async () => {
+  it('uses the SDK first-chunk timeout when upstream produces no semantic output', async () => {
     const hangingModel = {
       specificationVersion: 'v3' as const,
       provider: 'test',
       modelId: 'test-model',
       supportedUrls: {},
       async doStream(options: { abortSignal?: AbortSignal }) {
-        return new Promise((_resolve, reject) => {
-          options.abortSignal?.addEventListener('abort', () => {
-            reject(options.abortSignal?.reason ?? new DOMException('Aborted', 'AbortError'));
-          });
-        });
+        return {
+          stream: new ReadableStream({
+            start(controller) {
+              options.abortSignal?.addEventListener('abort', () => {
+                controller.error(
+                  options.abortSignal?.reason ?? new DOMException('Aborted', 'AbortError'),
+                );
+              }, { once: true });
+            },
+          }),
+        };
       },
       async doGenerate(): Promise<never> {
         throw new Error('not used');
@@ -1166,7 +1204,7 @@ describe('streamAnthropicResponse idle timeout', () => {
       () => {},
       undefined,
       { idleTimeoutMs: 50 },
-    )).rejects.toThrow('no data received from provider');
+    )).rejects.toThrow('First chunk timeout of 50ms exceeded');
   }, 10_000);
 });
 
@@ -1196,7 +1234,7 @@ describe('writeAnthropicStream', () => {
       { type: 'text-delta', id: 't1', text: 'Hello' },
       { type: 'text-delta', id: 't1', text: ' world' },
       { type: 'text-end', id: 't1' },
-      { type: 'finish', finishReason: 'stop', totalUsage: { inputTokens: 5, outputTokens: 2 } },
+      { type: 'finish', finishReason: 'stop', totalUsage: sdkUsage(5, 2) },
     ], 'm', { initialInputTokens: 37 });
     const types = events.map(e => e.event);
     expect(types).toEqual([
@@ -1294,11 +1332,7 @@ describe('writeAnthropicStream', () => {
       {
         type: 'finish',
         finishReason: 'stop',
-        totalUsage: {
-          inputTokens: 173_000,
-          outputTokens: 100,
-          inputTokenDetails: { cacheReadTokens: 173_000 },
-        },
+        totalUsage: sdkUsage(173_000, 100, { cacheReadTokens: 173_000 }),
       },
     ], 'm', { initialInputTokens: 61_500 });
 
@@ -1327,7 +1361,7 @@ describe('writeAnthropicStream', () => {
       {
         type: 'finish',
         finishReason: 'stop',
-        totalUsage: { inputTokens: 0, outputTokens: 7 },
+        totalUsage: sdkUsage(0, 7),
       },
     ], 'm', { initialInputTokens: 37 });
 
@@ -1351,7 +1385,7 @@ describe('writeAnthropicStream', () => {
       {
         type: 'finish',
         finishReason: 'stop',
-        totalUsage: { inputTokens: 100, outputTokens: 7, inputTokenDetails: { cacheReadTokens: 80 } },
+        totalUsage: sdkUsage(100, 7, { cacheReadTokens: 80 }),
       },
     ]);
     expect(events.find(e => e.event === 'message_delta')!.data.usage).toEqual({
@@ -1368,11 +1402,7 @@ describe('writeAnthropicStream', () => {
       {
         type: 'finish',
         finishReason: 'stop',
-        totalUsage: {
-          inputTokens: 120,
-          outputTokens: 3,
-          inputTokenDetails: { cacheReadTokens: 20, cacheWriteTokens: 80 },
-        },
+        totalUsage: sdkUsage(120, 3, { cacheReadTokens: 20, cacheWriteTokens: 80 }),
       },
     ]);
     expect(events.find(e => e.event === 'message_delta')!.data.usage).toEqual({
@@ -1386,11 +1416,11 @@ describe('writeAnthropicStream', () => {
   it('reports the actual OpenAI Fast tier in Anthropic usage', async () => {
     const { events } = await collect([
       { type: 'start' },
+      { type: 'finish-step', providerMetadata: { openai: { serviceTier: 'priority' } } },
       {
         type: 'finish',
         finishReason: 'stop',
-        totalUsage: { inputTokens: 12, outputTokens: 3 },
-        providerMetadata: { openai: { serviceTier: 'priority' } },
+        totalUsage: sdkUsage(12, 3),
       },
     ]);
 
@@ -1407,11 +1437,11 @@ describe('writeAnthropicStream', () => {
   it('reports an upstream Fast downgrade as Standard', async () => {
     const { events } = await collect([
       { type: 'start' },
+      { type: 'finish-step', providerMetadata: { openai: { serviceTier: 'default' } } },
       {
         type: 'finish',
         finishReason: 'stop',
-        totalUsage: { inputTokens: 12, outputTokens: 3 },
-        providerMetadata: { openai: { serviceTier: 'default' } },
+        totalUsage: sdkUsage(12, 3),
       },
     ]);
 

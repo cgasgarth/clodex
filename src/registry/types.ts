@@ -31,8 +31,6 @@ export interface CachedModel {
   interleavedReasoningField?: string;
   /** Backend capability: model requires the Responses-Lite request shape (x-openai-internal-codex-responses-lite). */
   useResponsesLite?: boolean;
-  /** Backend capability: model must use the WebSocket Responses transport instead of HTTP. */
-  preferWebSockets?: boolean;
 }
 
 export interface RegistryProvider {

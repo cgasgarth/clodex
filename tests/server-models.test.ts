@@ -4,7 +4,6 @@ import {
   createModelCatalog,
   formatAnthropicModels,
   formatGatewayAnthropicModels,
-  formatOpenAIModels,
   gatewayAliasId,
   upstreamModelId,
   type ServerModelInfo,
@@ -161,32 +160,6 @@ describe('server model catalog', () => {
     ]);
 
     expect(catalog.get('gpt-5')).toMatchObject({ id: 'gpt-5', providerId: 'openai' });
-  });
-
-  it('formats OpenAI model list responses', () => {
-    expect(formatOpenAIModels(models)).toEqual({
-      object: 'list',
-      data: [
-        {
-          id: 'claude-sonnet-test',
-          object: 'model',
-          created: 1735689600,
-          owned_by: 'zen',
-        },
-        {
-          id: 'deepseek-test',
-          object: 'model',
-          created: 1735689600,
-          owned_by: 'go',
-        },
-        {
-          id: 'gpt-5',
-          object: 'model',
-          created: 1735689600,
-          owned_by: 'openai',
-        },
-      ],
-    });
   });
 
   it('strips [1m] suffix for upstream Vertex model ids', () => {

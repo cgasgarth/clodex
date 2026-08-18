@@ -1,10 +1,25 @@
 // Anthropic /v1/messages ↔ Vercel AI SDK. One turn per request; Claude Code owns the tool loop.
 import { createHash } from 'node:crypto';
 import { streamText, generateText, tool, jsonSchema } from 'ai';
-import type { LanguageModel, ModelMessage, ProviderMetadata, ToolSet } from 'ai';
+import type {
+  AssistantContent,
+  FilePart,
+  LanguageModel,
+  LanguageModelUsage,
+  ModelMessage,
+  ProviderMetadata,
+  TextPart,
+  TextStreamPart,
+  ToolCallPart,
+  ToolResultPart,
+  ToolSet,
+  TypedToolCall,
+  UserContent,
+} from 'ai';
+import type { ProviderOptions, ReasoningPart } from '@ai-sdk/provider-utils';
 import {
   openai,
-  type OpenAIResponsesProviderOptions,
+  type OpenAILanguageModelResponsesOptions,
   type OpenaiResponsesProviderMetadata,
 } from '@ai-sdk/openai';
 import {
@@ -13,7 +28,6 @@ import {
   splitToolUseId,
   serializeToolResultContent,
   silenceSdkWarnings,
-  type FullStreamPart,
   grabRoundTripSignature,
 } from './proxy/shared.js';
 import {
@@ -34,21 +48,6 @@ import { isObject, isString } from './runtime/type-guards.js';
 import type { ProviderDataValue } from './types.js';
 
 export { silenceSdkWarnings };
-
-function asModelMessage<Value>(value: Value): ModelMessage {
-  // SAFETY: Translation helpers construct only AI SDK ModelMessage variants.
-  return value as ModelMessage;
-}
-
-function asFullStreamPart<Value>(value: Value): FullStreamPart {
-  // SAFETY: Tool-call fields are the corresponding AI SDK full-stream subset.
-  return value as FullStreamPart;
-}
-
-function asFullStream<Value>(value: Value): AsyncIterable<FullStreamPart> {
-  // SAFETY: AI SDK stream results expose FullStreamPart values through `stream`.
-  return value as AsyncIterable<FullStreamPart>;
-}
 
 function asAnthropicRequestMessages<Value>(value: Value): AnthropicRequestMessage[] {
   // SAFETY: The local request message contract mirrors the shared proxy contract.
@@ -95,40 +94,8 @@ interface ToolInput {
   [key: string]: ProviderDataValue;
 }
 
-interface ProviderOptionBag {
-  [key: string]: ProviderDataValue;
-}
-
-interface SdkTextPart {
-  type: 'text';
-  text: string;
-  providerOptions?: ProviderOptionBag;
-}
-
-interface SdkFilePart {
-  type: 'file';
-  data: { type: 'data'; data: Uint8Array } | { type: 'url'; url: URL };
-  mediaType: string;
-  providerOptions?: ProviderOptionBag;
-}
-
-type SdkUserPart = SdkFilePart | SdkTextPart;
-
-interface SdkReasoningPart {
-  type: 'reasoning';
-  text: string;
-  providerOptions?: ProviderOptionBag;
-}
-
-interface SdkToolCallPart {
-  type: 'tool-call';
-  toolCallId: string;
-  toolName?: string;
-  input: ToolInput;
-  providerOptions?: ProviderOptionBag;
-}
-
-type SdkAssistantPart = SdkReasoningPart | SdkTextPart | SdkToolCallPart;
+type SdkUserPart = Exclude<UserContent, string>[number];
+type SdkAssistantPart = Exclude<AssistantContent, string>[number];
 
 interface StreamErrorData {
   data?: ProviderDataValue;
@@ -299,7 +266,7 @@ export interface SdkCallParams {
   toolChoice?: 'auto' | 'none' | 'required' | { type: 'tool'; toolName: string };
   maxOutputTokens?: number;
   temperature?: number;
-  providerOptions?: ProviderMetadata;
+  providerOptions?: ProviderOptions;
 }
 
 // ── system ───────────────────────────────────────────────────────────────────
@@ -352,7 +319,7 @@ const OPENAI_OAUTH_STEERING_POLICY = [
   'continue only the work that remains relevant.',
 ].join(' ');
 
-function openAiCacheBreakpoint(block: AnthropicBlock, enabled: boolean): ProviderOptionBag | undefined {
+function openAiCacheBreakpoint(block: AnthropicBlock, enabled: boolean): ProviderOptions | undefined {
   if (!enabled || !block.cache_control) return undefined;
   return { openai: { promptCacheBreakpoint: { mode: 'explicit' } } };
 }
@@ -368,21 +335,21 @@ function translateTopLevelSystemForOpenAi(
     const text = isString(block) ? block : block.text ?? '';
     if (!text.trim()) return [];
     const cacheControl = isString(block) ? undefined : block.cache_control;
-    return [asModelMessage({
+    return [{
       role: 'system',
       content: text,
       ...(cacheControl && {
         providerOptions: { openai: { promptCacheBreakpoint: { mode: 'explicit' } } },
       }),
-    })];
+    }];
   });
 }
 
 // ── images ───────────────────────────────────────────────────────────────────
 function imagePart(block: AnthropicBlock): {
-  type: 'file';
-  data: { type: 'data'; data: Uint8Array } | { type: 'url'; url: URL };
-  mediaType: string;
+  type: FilePart['type'];
+  data: FilePart['data'];
+  mediaType: FilePart['mediaType'];
 } | null {
   const src = block.source;
   if (!src) return null;
@@ -461,11 +428,11 @@ function resolvedToolName(block: AnthropicBlock): string | undefined {
 function thinkingToSdkPart(
   block: AnthropicBlock,
   npm: string,
-): SdkReasoningPart | null {
+): ReasoningPart | null {
   const text = block.thinking ?? '';
   if (npm === '@ai-sdk/openai' && !block.signature && !text.trim()) return null;
 
-  const part: SdkReasoningPart = { type: 'reasoning', text };
+  const part: ReasoningPart = { type: 'reasoning', text };
   if (block.signature) {
     if (npm === '@ai-sdk/google') {
       part.providerOptions = { google: { thoughtSignature: block.signature } };
@@ -479,7 +446,7 @@ function thinkingToSdkPart(
 function cacheBreakpointOptions(
   block: AnthropicBlock,
   enabled: boolean,
-): { providerOptions?: ProviderOptionBag } {
+): { providerOptions?: ProviderOptions } {
   const providerOptions = openAiCacheBreakpoint(block, enabled);
   return providerOptions ? { providerOptions } : {};
 }
@@ -490,11 +457,11 @@ function translateSystemBlocks(
 ): ModelMessage[] {
   return blocks.flatMap(block => {
     if (block.type !== 'text' || !block.text?.trim()) return [];
-    return [asModelMessage({
+    return [{
       role: 'system',
       content: block.text,
       ...cacheBreakpointOptions(block, openAiPromptCacheBreakpoints),
-    })];
+    }];
   });
 }
 
@@ -536,15 +503,18 @@ function translateUserBlocks(
   const toolResults = blocks.filter(block => block.type === 'tool_result');
   const messages: ModelMessage[] = [];
   if (toolResults.length > 0) {
-    messages.push(asModelMessage({
+    messages.push({
       role: 'tool',
-      content: toolResults.map(result => Object.assign({
-        type: 'tool-result',
-        toolCallId: splitToolUseId(result.tool_use_id ?? '').rawId,
-        toolName: resolvedToolName(result) ?? 'unknown',
-        output: { type: 'text', value: serializeToolResultForModel(result, imageParts) },
-      }, cacheBreakpointOptions(result, openAiPromptCacheBreakpoints))),
-    }));
+      content: toolResults.map((result): ToolResultPart => Object.assign(
+        {
+          type: 'tool-result' as const,
+          toolCallId: splitToolUseId(result.tool_use_id ?? '').rawId,
+          toolName: resolvedToolName(result) ?? 'unknown',
+          output: { type: 'text' as const, value: serializeToolResultForModel(result, imageParts) },
+        },
+        cacheBreakpointOptions(result, openAiPromptCacheBreakpoints),
+      )),
+    });
   }
 
   const parts: SdkUserPart[] = [];
@@ -555,7 +525,7 @@ function translateUserBlocks(
       const midTurnInstruction = normalizeMidTurnSteering
         ? normalizeClaudeMidTurnInstruction(text)
         : undefined;
-      const part: SdkTextPart = {
+      const part: TextPart = {
         type: 'text',
         text: midTurnInstruction ?? text,
         ...cacheBreakpointOptions(block, openAiPromptCacheBreakpoints),
@@ -574,7 +544,7 @@ function translateUserBlocks(
   }
   const userParts = [...imageParts, ...parts, ...steeringParts];
   if (userParts.length > 0) {
-    messages.push(asModelMessage({ role: 'user', content: userParts }));
+    messages.push({ role: 'user', content: userParts });
   }
   return messages;
 }
@@ -592,10 +562,10 @@ function translateAssistantBlocks(
     }
     if (block.type !== 'tool_use' || !block.id) return [];
     const { rawId, thoughtSignature } = splitToolUseId(block.id);
-    const toolCall: SdkToolCallPart = {
+    const toolCall: ToolCallPart = {
       type: 'tool-call',
       toolCallId: rawId,
-      toolName: block.name,
+      toolName: block.name ?? 'unknown',
       input: block.input ?? {},
     };
     if (thoughtSignature && isGoogle) {
@@ -604,7 +574,7 @@ function translateAssistantBlocks(
     return [toolCall];
   });
   return parts.length > 0
-    ? [asModelMessage({ role: 'assistant', content: parts })]
+    ? [{ role: 'assistant', content: parts }]
     : [];
 }
 
@@ -816,7 +786,7 @@ export function translateRequest(
   // ChatGPT Codex OAuth backend requires `instructions` in providerOptions and
   // rejects the standard `system` field. It also manages its own output limit.
   if (options?.openAiOAuth && systemText) {
-    const openAiOptions: OpenAIResponsesProviderOptions = { instructions: systemText };
+    const openAiOptions: OpenAILanguageModelResponsesOptions = { instructions: systemText };
     if (options.processingMode === 'fast') openAiOptions.serviceTier = 'fast';
     providerOptions = deepMergeProviderOptions(providerOptions, {
       openai: openAiOptions,
@@ -836,7 +806,7 @@ export function translateRequest(
   // blocks, while retaining an automatic latest-message breakpoint as fallback.
   if (npm === '@ai-sdk/openai') {
     const claudeSessionId = extractClaudeSessionId(body, options?.claudeSessionId);
-    const openAiOptions: OpenAIResponsesProviderOptions = {
+    const openAiOptions: OpenAILanguageModelResponsesOptions = {
       promptCacheKey: claudeSessionId
         ? claudeSessionPromptCacheKey(claudeSessionId)
         : openAiPromptCacheKey(baseSystem, upstreamTools),
@@ -873,13 +843,6 @@ export function translateRequest(
 }
 
 // ── usage: SDK → Anthropic ────────────────────────────────────────────────────
-interface SdkUsage {
-  inputTokens?: number;
-  outputTokens?: number;
-  inputTokenDetails?: { cacheReadTokens?: number; cacheWriteTokens?: number };
-  /** AI SDK 6 compatibility for older third-party LanguageModel implementations. */
-  cachedInputTokens?: number;
-}
 interface AnthropicUsage {
   input_tokens: number;
   output_tokens: number;
@@ -940,10 +903,10 @@ function applyOpenAiServiceTier(
  * from input_tokens to avoid double-counting. GPT-5.6+ reports cache writes;
  * older models generally report reads only.
  */
-function toAnthropicUsage(u?: SdkUsage): AnthropicUsage {
+function toAnthropicUsage(u?: LanguageModelUsage): AnthropicUsage {
   const total = u?.inputTokens ?? 0;
-  const cacheRead = u?.inputTokenDetails?.cacheReadTokens ?? u?.cachedInputTokens ?? 0;
-  const cacheWrite = u?.inputTokenDetails?.cacheWriteTokens ?? 0;
+  const cacheRead = u?.inputTokenDetails.cacheReadTokens ?? 0;
+  const cacheWrite = u?.inputTokenDetails.cacheWriteTokens ?? 0;
   return {
     input_tokens: Math.max(0, total - cacheRead - cacheWrite),
     output_tokens: u?.outputTokens ?? 0,
@@ -965,42 +928,27 @@ export interface AnthropicStreamObserver {
   /** Local fallback used when the provider omits usage at stream completion. */
   initialInputTokens?: number;
   abortSignal?: AbortSignal;
-  /** Abort if the provider produces no stream event for this long. */
+  /** Abort if the provider produces no semantic stream output for this long. */
   idleTimeoutMs?: number;
 }
 
 const SDK_STREAM_IDLE_TIMEOUT_MS = MODEL_STREAM_IDLE_TIMEOUT_MS;
 const SDK_TOTAL_TIMEOUT_MS = MODEL_TOTAL_TIMEOUT_MS;
 
-function streamAbortError(signal?: AbortSignal): Error {
+function streamAbortError(signal?: AbortSignal, fallbackReason?: string): Error {
   if (signal?.reason instanceof Error) return signal.reason;
   const reason = signal?.reason;
   const error = new Error(
-    isString(reason) ? reason : 'SDK stream aborted',
+    isString(reason) ? reason : fallbackReason ?? 'SDK stream aborted',
   );
   error.name = 'AbortError';
   return error;
 }
 
-/**
- * Forward caller cancellation into a Relay-owned controller without creating
- * an AbortSignal.any() composite. Some runtimes retain source-aborted
- * composites while listeners remain.
- */
-function forwardAbortSignal(source: AbortSignal | undefined, target: AbortController): () => void {
-  if (!source) return () => {};
-  const forward = () => {
-    if (!target.signal.aborted) target.abort(source.reason);
-  };
-  if (source.aborted) {
-    forward();
-    return () => {};
-  }
-  source.addEventListener('abort', forward, { once: true });
-  return () => source.removeEventListener('abort', forward);
-}
-
-function isProviderWebSearch(part: FullStreamPart): boolean {
+function isProviderWebSearch(part: TextStreamPart<ToolSet>): boolean {
+  if (part.type !== 'tool-input-start'
+    && part.type !== 'tool-call'
+    && part.type !== 'tool-result') return false;
   return part.toolName === 'web_search' && part.providerExecuted === true;
 }
 
@@ -1009,7 +957,7 @@ function serverToolUseId(id: string): string {
 }
 
 export async function writeAnthropicStream(
-  stream: AsyncIterable<FullStreamPart>,
+  stream: AsyncIterable<TextStreamPart<ToolSet>>,
   modelId: string,
   write: WriteFn,
   log?: LogFn,
@@ -1093,8 +1041,11 @@ export async function writeAnthropicStream(
   // iterations; TypeScript's local narrowing cannot model that mutation.
   const currentOpenType = () => openType;
   const providerWebSearchIds = new Set<string>();
-  const handleWebSearchResult = (part: FullStreamPart): void => {
-    const toolCallId = part.toolCallId ?? '';
+  let finalProviderMetadata: ProviderMetadata | undefined;
+  const handleWebSearchResult = (
+    part: Extract<TextStreamPart<ToolSet>, { type: 'tool-result' }>,
+  ): void => {
+    const toolCallId = part.toolCallId;
     const output = asWebSearchOutput(part.output);
     const action = output?.action;
     const query = action?.query
@@ -1126,9 +1077,11 @@ export async function writeAnthropicStream(
     });
     closeOpen();
   };
-  const handleToolCall = (part: FullStreamPart): void => {
-    const id = part.toolCallId ?? '';
-    const required = requiredProps.get(part.toolName ?? '');
+  const handleToolCall = (
+    part: Extract<TextStreamPart<ToolSet>, { type: 'tool-call' }>,
+  ): void => {
+    const id = part.toolCallId;
+    const required = requiredProps.get(part.toolName);
     if (idToBlock.has(id)) {
       if (flushedTools.has(id)) return;
       const json = part.input !== undefined && part.input !== null
@@ -1145,7 +1098,7 @@ export async function writeAnthropicStream(
       return;
     }
     if (currentOpenType() === 'tool') return;
-    const sig = grabRoundTripSignature(part);
+    const sig = grabRoundTripSignature(part.providerMetadata);
     openBlock('tool', {
       type: 'tool_use',
       id: encodeToolUseId(id, sig),
@@ -1179,7 +1132,7 @@ export async function writeAnthropicStream(
       // message_start/message_delta/message_stop after the client disconnected.
       // Throw so the HTTP layer follows its cancellation path and emits nothing.
       case 'abort':
-        throw streamAbortError(observer?.abortSignal);
+        throw streamAbortError(observer?.abortSignal, part.reason);
 
       case 'reasoning-start':
         openBlock('thinking', { type: 'thinking', thinking: '', signature: '' });
@@ -1188,11 +1141,11 @@ export async function writeAnthropicStream(
         ensureOpenBlock('thinking', { type: 'thinking', thinking: '', signature: '' });
         emit('content_block_delta', {
           type: 'content_block_delta', index: blockIndex,
-          delta: { type: 'thinking_delta', thinking: part.text ?? '' },
+          delta: { type: 'thinking_delta', thinking: part.text },
         });
         break;
       case 'reasoning-end': {
-        const sig = grabRoundTripSignature(part);
+        const sig = grabRoundTripSignature(part.providerMetadata);
         if (sig) pendingThinkingSig = sig;
         break;
       }
@@ -1204,35 +1157,35 @@ export async function writeAnthropicStream(
         ensureOpenBlock('text', { type: 'text', text: '' });
         emit('content_block_delta', {
           type: 'content_block_delta', index: blockIndex,
-          delta: { type: 'text_delta', text: part.text ?? '' },
+          delta: { type: 'text_delta', text: part.text },
         });
         break;
       case 'text-end': break;
 
       case 'tool-input-start': {
         if (isProviderWebSearch(part)) {
-          providerWebSearchIds.add(part.id ?? '');
+          providerWebSearchIds.add(part.id);
           break;
         }
-        const sig = grabRoundTripSignature(part);
+        const sig = grabRoundTripSignature(part.providerMetadata);
         openBlock('tool', {
-          type: 'tool_use', id: encodeToolUseId(part.id ?? '', sig), name: part.toolName, input: {},
+          type: 'tool_use', id: encodeToolUseId(part.id, sig), name: part.toolName, input: {},
         });
-        idToBlock.set(part.id ?? '', blockIndex);
-        openToolId = part.id ?? '';
+        idToBlock.set(part.id, blockIndex);
+        openToolId = part.id;
         break;
       }
       case 'tool-input-delta': {
-        const id = part.id ?? '';
+        const id = part.id;
         if (providerWebSearchIds.has(id)) break;
-        toolJsonBuffer.set(id, (toolJsonBuffer.get(id) ?? '') + (part.delta ?? part.text ?? ''));
+        toolJsonBuffer.set(id, (toolJsonBuffer.get(id) ?? '') + part.delta);
         break;
       }
       case 'tool-input-end': break;
 
       case 'tool-call': {
         if (isProviderWebSearch(part)) {
-          providerWebSearchIds.add(part.toolCallId ?? '');
+          providerWebSearchIds.add(part.toolCallId);
           break;
         }
         finishReason = 'tool_use';
@@ -1244,21 +1197,24 @@ export async function writeAnthropicStream(
         if (isProviderWebSearch(part)) handleWebSearchResult(part);
         break;
 
-      case 'finish':
-        if (part.totalUsage) {
-          const finalUsage = toAnthropicUsage(part.totalUsage);
-          const hasFinalInputUsage = finalUsage.input_tokens
-            + finalUsage.cache_creation_input_tokens
-            + finalUsage.cache_read_input_tokens > 0;
-          usage = hasFinalInputUsage
-            ? finalUsage
-            : { ...usage, output_tokens: finalUsage.output_tokens };
-        }
-        usage = applyOpenAiServiceTier(usage, part.providerMetadata);
+      case 'finish-step':
+        finalProviderMetadata = part.providerMetadata;
+        break;
+
+      case 'finish': {
+        const finalUsage = toAnthropicUsage(part.totalUsage);
+        const hasFinalInputUsage = finalUsage.input_tokens
+          + finalUsage.cache_creation_input_tokens
+          + finalUsage.cache_read_input_tokens > 0;
+        usage = hasFinalInputUsage
+          ? finalUsage
+          : { ...usage, output_tokens: finalUsage.output_tokens };
+        usage = applyOpenAiServiceTier(usage, finalProviderMetadata);
         if (part.finishReason === 'tool-calls') finishReason = 'tool_use';
         else if (part.finishReason === 'length') finishReason = 'max_tokens';
         else if (part.finishReason === 'stop' && finishReason !== 'tool_use') finishReason = 'end_turn';
         break;
+      }
 
       case 'error': {
         const e = asStreamError(part.error);
@@ -1297,53 +1253,18 @@ export async function streamAnthropicResponse(
   dependencies: { streamText?: typeof streamText } = {},
 ): Promise<void> {
   const idleTimeoutMs = observer?.idleTimeoutMs ?? SDK_STREAM_IDLE_TIMEOUT_MS;
-  const idleAbort = new AbortController();
-  const stopForwardingAbort = forwardAbortSignal(observer?.abortSignal, idleAbort);
-  const abortSignal = idleAbort.signal;
-  let idleTimer = setTimeout(
-    () => idleAbort.abort(new Error(`no data received from provider for ${Math.round(idleTimeoutMs / 1000)}s`)),
-    idleTimeoutMs,
-  );
-  const totalTimer = setTimeout(
-    () => idleAbort.abort(new Error(`provider stream exceeded ${Math.round(SDK_TOTAL_TIMEOUT_MS / 1000)}s`)),
-    SDK_TOTAL_TIMEOUT_MS,
-  );
-  // Do not combine streamText's total/chunk timeout signals here. In AI SDK 7,
-  // that composition retains completed StreamTextResult graphs. Relay
-  // owns the timers and explicitly settles its controller after consumption.
-  const providerStream = asFullStream((dependencies.streamText ?? streamText)({
+  const providerStream = (dependencies.streamText ?? streamText)({
     model,
     ...params,
-    abortSignal,
+    abortSignal: observer?.abortSignal,
+    timeout: {
+      totalMs: SDK_TOTAL_TIMEOUT_MS,
+      firstChunkMs: idleTimeoutMs,
+      chunkMs: idleTimeoutMs,
+    },
     onError: () => {},
-  }).stream);
-
-  const watchedStream = (async function* () {
-    try {
-      for await (const part of providerStream) {
-        clearTimeout(idleTimer);
-        idleTimer = setTimeout(
-          () => idleAbort.abort(new Error(`no data received from provider for ${Math.round(idleTimeoutMs / 1000)}s`)),
-          idleTimeoutMs,
-        );
-        yield part;
-      }
-    } finally {
-      clearTimeout(idleTimer);
-    }
-  })();
-
-  try {
-    await writeAnthropicStream(watchedStream, modelId, write, log, { ...observer, abortSignal }, params.tools);
-  } finally {
-    stopForwardingAbort();
-    clearTimeout(idleTimer);
-    clearTimeout(totalTimer);
-    // Settle the direct Relay-owned signal only after stream consumption. Do not
-    // replace this with AbortSignal.any(): source-driven abort can retain the
-    // dependent composite after the request has completed.
-    if (!idleAbort.signal.aborted) idleAbort.abort();
-  }
+  }).stream;
+  await writeAnthropicStream(providerStream, modelId, write, log, observer, params.tools);
 }
 
 export async function generateAnthropicResponse(
@@ -1360,101 +1281,68 @@ export async function generateAnthropicResponse(
   },
 ): Promise<AnthropicResponse> {
   let text: string;
-  let toolCalls: Array<{ toolCallId: string; toolName: string; input: unknown }>;
+  let toolCalls: TypedToolCall<ToolSet>[];
   let finishReason: string;
-  let usage: SdkUsage | undefined;
+  let usage: LanguageModelUsage | undefined;
   let providerMetadata: ProviderMetadata | undefined;
 
   if (options?.forceStream) {
     // Some upstreams (e.g. ChatGPT's Codex backend) reject non-streaming requests
     // outright. Request a real stream from the SDK and collect it into one
     // response instead of forwarding the client's non-streaming request upstream.
-    const forceAbort = new AbortController();
-    const stopForwardingAbort = forwardAbortSignal(options.abortSignal, forceAbort);
-    const abortSignal = forceAbort.signal;
     const idleTimeoutMs = options.idleTimeoutMs ?? SDK_STREAM_IDLE_TIMEOUT_MS;
-    let idleTimer = setTimeout(
-      () => forceAbort.abort(new Error(`no data received from provider for ${Math.round(idleTimeoutMs / 1000)}s`)),
-      idleTimeoutMs,
-    );
-    const totalTimer = setTimeout(
-      () => forceAbort.abort(new Error(`provider stream exceeded ${Math.round(SDK_TOTAL_TIMEOUT_MS / 1000)}s`)),
-      SDK_TOTAL_TIMEOUT_MS,
-    );
-    // See the streaming path above: Relay owns these timers and explicitly
-    // settles its controller when the stream has been fully reduced.
     const r = (options.streamText ?? streamText)({
       model,
       ...params,
-      abortSignal,
+      abortSignal: options.abortSignal,
+      timeout: {
+        totalMs: SDK_TOTAL_TIMEOUT_MS,
+        firstChunkMs: idleTimeoutMs,
+        chunkMs: idleTimeoutMs,
+      },
       onError: () => {},
     });
     const streamedText: string[] = [];
-    const streamedToolCalls: Array<{ toolCallId: string; toolName: string; input: unknown }> = [];
+    const streamedToolCalls: TypedToolCall<ToolSet>[] = [];
     let streamedFinishReason = 'stop';
-    let streamedUsage: SdkUsage | undefined;
-    try {
-      for await (const part of asFullStream(r.stream)) {
-        clearTimeout(idleTimer);
-        idleTimer = setTimeout(
-          () => forceAbort.abort(new Error(`no data received from provider for ${Math.round(idleTimeoutMs / 1000)}s`)),
-          idleTimeoutMs,
+    let streamedUsage: LanguageModelUsage | undefined;
+    for await (const part of r.stream) {
+      options.onPart?.(part.type);
+      if (options.abortSignal?.aborted || part.type === 'abort') {
+        throw streamAbortError(
+          options.abortSignal,
+          part.type === 'abort' ? part.reason : undefined,
         );
-        options.onPart?.(part.type);
-        if (abortSignal.aborted || part.type === 'abort') {
-          throw streamAbortError(abortSignal);
-        }
-        if (part.type === 'error') {
-          throw part.error instanceof Error || (part.error && isObject(part.error))
-            ? part.error
-            : new Error(isString(part.error) ? part.error : 'Upstream stream failed');
-        }
-        if (part.type === 'text-delta') streamedText.push(part.text ?? '');
-        else if (part.type === 'tool-call') {
-          streamedToolCalls.push({
-            toolCallId: part.toolCallId ?? '',
-            toolName: part.toolName ?? '',
-            input: asToolInput(part.input),
-          });
-        } else if (part.type === 'finish') {
-          streamedFinishReason = part.finishReason ?? streamedFinishReason;
-          streamedUsage = part.totalUsage;
-          providerMetadata = part.providerMetadata;
-        }
       }
-      if (abortSignal.aborted) throw streamAbortError(abortSignal);
-    } finally {
-      stopForwardingAbort();
-      clearTimeout(idleTimer);
-      clearTimeout(totalTimer);
-      // See the streaming path above: settle the Relay-owned signal after the
-      // result is fully reduced so Node can release AI SDK's listener graph.
-      if (!forceAbort.signal.aborted) forceAbort.abort();
+      if (part.type === 'error') {
+        throw part.error instanceof Error || (part.error && isObject(part.error))
+          ? part.error
+          : new Error(isString(part.error) ? part.error : 'Upstream stream failed');
+      }
+      if (part.type === 'text-delta') streamedText.push(part.text);
+      else if (part.type === 'tool-call') {
+        streamedToolCalls.push(part);
+      } else if (part.type === 'finish-step') {
+        providerMetadata = part.providerMetadata;
+      } else if (part.type === 'finish') {
+        streamedFinishReason = part.finishReason;
+        streamedUsage = part.totalUsage;
+      }
     }
+    if (options.abortSignal?.aborted) throw streamAbortError(options.abortSignal);
     text = streamedText.join('');
     toolCalls = streamedToolCalls;
     finishReason = streamedFinishReason;
     usage = streamedUsage;
   } else {
-    const generateAbort = new AbortController();
-    const stopForwardingAbort = forwardAbortSignal(options?.abortSignal, generateAbort);
-    const totalTimer = setTimeout(
-      () => generateAbort.abort(new Error(`provider request exceeded ${Math.round(SDK_TOTAL_TIMEOUT_MS / 1000)}s`)),
-      SDK_TOTAL_TIMEOUT_MS,
-    );
-    try {
-      const r = await (options?.generateText ?? generateText)({
-        model,
-        ...params,
-        abortSignal: generateAbort.signal,
-      });
-      ({ text, toolCalls, finishReason, usage } = r);
-      providerMetadata = r.finalStep.providerMetadata;
-    } finally {
-      stopForwardingAbort();
-      clearTimeout(totalTimer);
-      if (!generateAbort.signal.aborted) generateAbort.abort();
-    }
+    const r = await (options?.generateText ?? generateText)({
+      model,
+      ...params,
+      abortSignal: options?.abortSignal,
+      timeout: { totalMs: SDK_TOTAL_TIMEOUT_MS },
+    });
+    ({ text, toolCalls, finishReason, usage } = r);
+    providerMetadata = r.finalStep.providerMetadata;
   }
 
   const requiredProps = toolRequiredProps(params.tools);
@@ -1465,7 +1353,7 @@ export async function generateAnthropicResponse(
       type: 'tool_use',
       id: encodeToolUseId(
         toolCall.toolCallId,
-        grabRoundTripSignature(asFullStreamPart(toolCall)),
+        grabRoundTripSignature(toolCall.providerMetadata),
       ),
       name: toolCall.toolName,
       input: sanitizeToolInput(

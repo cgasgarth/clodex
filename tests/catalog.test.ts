@@ -246,7 +246,7 @@ describe('localModelToRoute', () => {
     resolveSpy.mockRestore();
   });
 
-  it('propagates Responses-Lite / WebSocket capability flags onto the route', () => {
+  it('propagates the Responses-Lite capability flag onto the route', () => {
     const provider: LocalProvider = {
       id: 'openai-oauth',
       name: 'OpenAI OAuth (ChatGPT)',
@@ -261,11 +261,10 @@ describe('localModelToRoute', () => {
         upstreamModelId: 'gpt-5.6-luna',
         npm: '@ai-sdk/openai',
         useResponsesLite: true,
-        preferWebSockets: true,
       }],
     };
     const route = localModelToRoute(provider, provider.models[0]!);
-    expect(route).toMatchObject({ useResponsesLite: true, preferWebSockets: true });
+    expect(route).toMatchObject({ useResponsesLite: true });
   });
 
   it('passes through custom endpoint headers for catalog routes', () => {

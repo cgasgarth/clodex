@@ -140,11 +140,11 @@ in Clodex, so base64 payload size is not mistaken for text tokens.
 in-band trigger fails. Its returned array is canonical and is forwarded as-is;
 Clodex does not prune or reinterpret it.
 
-The in-band trigger and standalone call each have a 60-second budget and run
-sequentially inside one fetch. Together they can consume the full 120-second
-Claude Code no-data watchdog before the ordinary fallback starts. A failed
-compact attempt preserves the ordinary request path only while that request is
-below the model's hard context window.
+Each compact call has a 10-minute budget. Progressive overflow recovery can
+make up to eight compact calls within one 30-minute recovery deadline while it
+folds dependency-closed prefixes. It reserves five minutes for the final model
+request. A failed compact attempt preserves the ordinary request path only
+while that request is below the model's hard context window.
 
 ### One-turn context jumps
 
