@@ -6,11 +6,13 @@ import {
   readFile,
   rename,
   rm,
+  writeFile,
 } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isObject, isString } from '../src/runtime/type-guards.ts';
 
 const RUNTIME_ARTIFACTS = [
   'cli.js',
@@ -19,6 +21,10 @@ const RUNTIME_ARTIFACTS = [
   'secondwind-worker.js',
 ];
 const PACKAGE_NAME = '@bman654/clodex';
+
+interface GlobalManifest {
+  dependencies?: unknown;
+}
 
 async function run(command: string[], cwd: string): Promise<void> {
   const child = Bun.spawn({
@@ -42,6 +48,33 @@ async function verifyArtifacts(repoRoot: string, installedRoot: string): Promise
       throw new Error(`installed ${artifact} does not match the current checkout`);
     }
   }
+}
+
+async function setGlobalPackageArchive(globalRoot: string, archive: string): Promise<void> {
+  const manifestPath = join(globalRoot, 'package.json');
+  if (!(await Bun.file(manifestPath).exists())) return;
+
+  const parsed: unknown = JSON.parse(await readFile(manifestPath, 'utf8'));
+  if (!isObject(parsed) || Array.isArray(parsed)) {
+    throw new Error('global Bun package manifest must be an object');
+  }
+  const manifest: GlobalManifest = Object.assign({}, parsed);
+  const dependencies = manifest.dependencies;
+  if (
+    dependencies !== undefined
+    && (!isObject(dependencies)
+      || Array.isArray(dependencies)
+      || Object.values(dependencies).some(value => !isString(value)))
+  ) {
+    throw new Error('global Bun package manifest dependencies must contain strings');
+  }
+  manifest.dependencies = {
+    ...dependencies,
+    [PACKAGE_NAME]: archive,
+  };
+  const nextManifest = `${manifestPath}.${process.pid}.next`;
+  await writeFile(nextManifest, `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 });
+  await rename(nextManifest, manifestPath);
 }
 
 export async function installGlobalCheckout(
@@ -73,18 +106,7 @@ export async function installGlobalCheckout(
     const nextArchive = `${installedArchive}.${process.pid}.next`;
     await copyFile(packedArchive, nextArchive);
     await rename(nextArchive, installedArchive);
-    const globalManifest = join(globalRoot, 'package.json');
-    if (await Bun.file(globalManifest).exists()) {
-      await run([
-        process.execPath,
-        'pm',
-        'pkg',
-        'set',
-        `dependencies.${PACKAGE_NAME}=${installedArchive}`,
-        '--cwd',
-        globalRoot,
-      ], repoRoot);
-    }
+    await setGlobalPackageArchive(globalRoot, installedArchive);
     await run([
       process.execPath,
       'add',
