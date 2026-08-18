@@ -11,7 +11,6 @@ import { homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const PACKAGE_NAME = '@bman654/clodex';
 const RUNTIME_ARTIFACTS = [
   'cli.js',
   'claude-wrapper.js',
@@ -29,18 +28,6 @@ async function run(command: string[], cwd: string): Promise<void> {
   });
   const exitCode = await child.exited;
   if (exitCode !== 0) throw new Error(`${command.join(' ')} exited ${exitCode}`);
-}
-
-async function installedGlobally(globalManifestPath: string): Promise<boolean> {
-  try {
-    // SAFETY: This local package manifest is used only for an optional dependency lookup.
-    const manifest = JSON.parse(await readFile(globalManifestPath, 'utf8')) as {
-      dependencies?: Record<string, string>;
-    };
-    return Object.hasOwn(manifest.dependencies ?? {}, PACKAGE_NAME);
-  } catch {
-    return false;
-  }
 }
 
 async function verifyArtifacts(repoRoot: string, installedRoot: string): Promise<void> {
@@ -74,12 +61,6 @@ export async function installGlobalCheckout(
       throw new Error(`expected one packed archive, found ${archives.length}`);
     }
 
-    // Bun 1.3 can report a dependency loop when replacing a global package
-    // whose source is an older local tarball. Remove that manifest entry first;
-    // the freshly packed archive is already durable before the short swap.
-    if (await installedGlobally(join(globalRoot, 'package.json'))) {
-      await run([process.execPath, 'remove', '--global', PACKAGE_NAME], repoRoot);
-    }
     await mkdir(packageDirectory, { recursive: true, mode: 0o700 });
     const nextArchive = `${stableArchive}.${process.pid}.next`;
     const archive = archives[0];
