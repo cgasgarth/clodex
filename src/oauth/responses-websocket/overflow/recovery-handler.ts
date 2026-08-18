@@ -1,7 +1,4 @@
-import {
-  ResponsesCompactionError,
-  type ResponsesCompactionUsage,
-} from '../../responses-compaction.js';
+import { ResponsesCompactionError } from '../../responses-compaction.js';
 import type { ConnectionEntry, JsonObject, RequestContext } from '../types.js';
 import {
   boundedDiagnosticIdentifier,
@@ -17,7 +14,6 @@ import {
 interface OverflowRetryState {
   retryPayload?: JsonObject;
   compactedInputBase?: unknown[];
-  usageOffset?: ResponsesCompactionUsage;
   attemptCount: number;
 }
 
@@ -89,7 +85,9 @@ export function createOverflowRecoveryHandler(
 
     ctx.retryPayload = state.retryPayload;
     ctx.compactedInputBase = state.compactedInputBase;
-    ctx.usageOffset = state.usageOffset;
+    ctx.establishCompactionRearm = true;
+    ctx.postCompactionInputTokens = undefined;
+    ctx.nextCompactionInputTokens = undefined;
     ctx.overflowRecoveryPending = false;
     ctx.overflowRetried = true;
     ctx.retried = true;

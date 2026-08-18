@@ -2,8 +2,10 @@ import { describe, expect, it, vi } from 'bun:test';
 import {
   compactRequestPayload,
   compactResponsesWindow,
-  OPENAI_COMPACTION_DEFAULT_RATIO,
+  OPENAI_COMPACTION_DEFAULT_THRESHOLD,
+  OPENAI_COMPACTION_MAX_CONTEXT_RATIO,
   RESPONSES_COMPACT_TIMEOUT_MS,
+  resolveOpenAiCompactionRearmThreshold,
   resolveOpenAiCompactionThreshold,
   ResponsesCompactionError,
   responsesCompactUrl,
@@ -14,7 +16,7 @@ describe('Responses standalone compaction', () => {
     expect(RESPONSES_COMPACT_TIMEOUT_MS).toBe(10 * 60_000);
   });
 
-  it('is opt-in and defaults enabled sessions to Codex-compatible 90% utilization', () => {
+  it('is opt-in and defaults enabled GPT sessions to 350K within the safe model window', () => {
     expect(resolveOpenAiCompactionThreshold(272_000, {})).toBeUndefined();
     expect(resolveOpenAiCompactionThreshold(272_000, {
       CLODEX_OPENAI_COMPACTION: '0',
@@ -38,18 +40,32 @@ describe('Responses standalone compaction', () => {
     expect(resolveOpenAiCompactionThreshold(272_000, {
       CLODEX_OPENAI_COMPACTION: 'true',
       CLODEX_OPENAI_COMPACT_THRESHOLD: 'not-a-token-count',
-    })).toBe(244_800);
+    })).toBe(Math.floor(272_000 * OPENAI_COMPACTION_MAX_CONTEXT_RATIO));
     expect(resolveOpenAiCompactionThreshold(272_000, {
       CLODEX_OPENAI_COMPACTION: 'true',
       CLODEX_OPENAI_COMPACT_THRESHOLD: '-1',
-    })).toBe(Math.floor(272_000 * OPENAI_COMPACTION_DEFAULT_RATIO));
+    })).toBe(Math.floor(272_000 * OPENAI_COMPACTION_MAX_CONTEXT_RATIO));
     expect(resolveOpenAiCompactionThreshold(272_000, {
       CLODEX_OPENAI_COMPACTION: 'true',
       CLODEX_OPENAI_COMPACT_THRESHOLD: '1.5',
-    })).toBe(Math.floor(272_000 * OPENAI_COMPACTION_DEFAULT_RATIO));
+    })).toBe(Math.floor(272_000 * OPENAI_COMPACTION_MAX_CONTEXT_RATIO));
+    expect(resolveOpenAiCompactionThreshold(1_000_000, {
+      CLODEX_OPENAI_COMPACTION: 'true',
+    })).toBe(OPENAI_COMPACTION_DEFAULT_THRESHOLD);
     expect(resolveOpenAiCompactionThreshold(undefined, {
       CLODEX_OPENAI_COMPACTION: 'true',
     })).toBeUndefined();
+  });
+
+  it('rearms above an opaque post-compaction floor without crossing the hard window', () => {
+    expect(resolveOpenAiCompactionRearmThreshold(350_000, 266_000, 1_000_000))
+      .toBe(350_000);
+    expect(resolveOpenAiCompactionRearmThreshold(350_000, 360_000, 1_000_000))
+      .toBe(410_000);
+    expect(resolveOpenAiCompactionRearmThreshold(100_000, 95_000, undefined))
+      .toBe(111_000);
+    expect(resolveOpenAiCompactionRearmThreshold(350_000, 990_000, 1_000_000))
+      .toBe(999_999);
   });
 
   it('targets /responses/compact for both canonical and provider-prefixed URLs', () => {

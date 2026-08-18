@@ -1,5 +1,10 @@
 import { createHash, randomUUID } from 'node:crypto';
 import {
+  createOpenAI,
+  type OpenAILanguageModelResponsesOptions,
+} from '@ai-sdk/openai';
+import { streamText } from 'ai';
+import {
   CODEX_RESPONSES_LITE_VERSION,
   CODEX_RESPONSES_LITE_WS_URL,
 } from '../src/constants.js';
@@ -15,6 +20,7 @@ interface ProbeResult {
   attempt: number;
   ok: boolean;
   outputItemTypes?: string[];
+  sdkCompactionItems?: number;
   inputTokens?: number;
   cachedTokens?: number;
   cacheWriteTokens?: number;
@@ -240,17 +246,6 @@ async function probeContextManagement(
   provider: LocalProvider,
   model: LocalProviderModel,
 ): Promise<ProbeResult> {
-  const payload = {
-    model: model.upstreamModelId,
-    input: syntheticInput(),
-    instructions: 'Use native context management, then reply with the word OK.',
-    tools: [],
-    parallel_tool_calls: false,
-    reasoning: { effort: 'medium', ...(model.useResponsesLite ? { context: 'all_turns' } : {}) },
-    prompt_cache_key: `clodex-context-management-probe-${randomUUID()}`,
-    context_management: [{ type: 'compaction', compact_threshold: 1 }],
-    store: false,
-  };
   const wsFetch = createResponsesWebSocketFetch(
     CODEX_RESPONSES_LITE_WS_URL,
     process.env.CLODEX_LIVE_COMPACTION_DEBUG === '1'
@@ -265,34 +260,58 @@ async function probeContextManagement(
   // unrefs idle sockets, so this standalone probe needs its own bounded handle.
   const keepAlive = setInterval(() => {}, 1_000);
   try {
-    const response = await wsFetch('https://chatgpt.com/backend-api/codex/responses', {
-      method: 'POST',
-      headers: probeHeaders(provider, model),
-      body: JSON.stringify(payload),
+    const headers = probeHeaders(provider, model);
+    delete headers.Authorization;
+    const openai = createOpenAI({
+      apiKey: provider.apiKey,
+      baseURL: 'https://chatgpt.com/backend-api/codex',
+      headers,
+      fetch: wsFetch,
     });
-    const wire = await response.text();
-    const summary = summarizeWire(wire);
-    const usage = summary.usage;
-    const inputTokens = usage?.input_tokens;
-    const cachedTokens = usage?.input_tokens_details?.cached_tokens ?? 0;
+    const synthetic = syntheticInput()[0] as {
+      content: Array<{ text: string }>;
+    };
+    const generated = streamText({
+      model: openai.responses(model.upstreamModelId),
+      system: 'Use native context management, then reply with the word OK.',
+      prompt: synthetic.content[0]!.text,
+      maxRetries: 0,
+      providerOptions: {
+        openai: {
+          store: false,
+          promptCacheKey: `clodex-context-management-probe-${randomUUID()}`,
+          reasoningEffort: 'medium',
+          ...(model.useResponsesLite ? { reasoningContext: 'all_turns' as const } : {}),
+          contextManagement: [{ type: 'compaction', compactThreshold: 1 }],
+        } satisfies OpenAILanguageModelResponsesOptions,
+      },
+    });
+    const [content, usage, finishReason] = await Promise.all([
+      generated.content,
+      generated.usage,
+      generated.finishReason,
+    ]);
+    const compactionItems = content.filter(part => (
+      part.type === 'custom' && part.kind === 'openai.compaction'
+    ));
+    const inputTokens = usage.inputTokens;
+    const cachedTokens = usage.inputTokenDetails.cacheReadTokens ?? 0;
     return {
       mode: 'context_management',
       model: model.upstreamModelId,
       attempt: 1,
-      ok: summary.completed,
-      outputItemTypes: summary.outputItemTypes,
+      ok: finishReason !== 'error' && compactionItems.length > 0,
+      outputItemTypes: content.map(part => (
+        part.type === 'custom' ? part.kind : part.type
+      )),
+      sdkCompactionItems: compactionItems.length,
       inputTokens,
       cachedTokens,
-      cacheWriteTokens: usage?.input_tokens_details?.cache_write_tokens ?? 0,
-      outputTokens: usage?.output_tokens,
+      cacheWriteTokens: usage.inputTokenDetails.cacheWriteTokens ?? 0,
+      outputTokens: usage.outputTokens,
       cacheReadRatio: inputTokens
         ? Number((cachedTokens / inputTokens).toFixed(4))
         : undefined,
-      responseWireBytes: summary.wireBytes,
-      eventTypes: summary.eventTypes,
-      upstreamErrorCode: summary.upstreamErrorCode,
-      upstreamErrorCategory: summary.upstreamErrorCategory,
-      upstreamErrorMessageHash: summary.upstreamErrorMessageHash,
     };
   } catch (error) {
     return {

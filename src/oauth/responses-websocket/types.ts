@@ -120,8 +120,12 @@ export interface RequestContext {
   responseUsage?: ResponseUsage;
   /** Usage from the visible model response only; drives the next context threshold. */
   modelResponseUsage?: ResponseUsage;
-  /** Hidden native-compaction usage added to the downstream visible response. */
-  usageOffset?: ResponseUsage;
+  /** Establish a new anti-loop threshold from this response's measured input. */
+  establishCompactionRearm?: boolean;
+  compactThreshold?: number;
+  contextWindow?: number;
+  postCompactionInputTokens?: number;
+  nextCompactionInputTokens?: number;
   pendingEvents: unknown[];
   emittedModelData: boolean;
   transportRetryPending: boolean;
@@ -171,6 +175,8 @@ export interface ConnectionEntry {
   expectedAssistantKinds?: string[];
   compactedInput?: unknown[];
   lastInputTokens?: number;
+  postCompactionInputTokens?: number;
+  nextCompactionInputTokens?: number;
   claudeCompactionSummaryHash?: string;
   claudeAgentId?: string;
   recyclableAgentHead?: boolean;
@@ -191,6 +197,8 @@ export interface CompactionCheckpoint {
   expectedAssistantKinds: string[];
   compactedInput?: unknown[];
   lastInputTokens?: number;
+  postCompactionInputTokens?: number;
+  nextCompactionInputTokens?: number;
   claudeCompactionSummaryHash?: string;
   promptFieldHashes?: Record<string, string>;
   instructionsSnapshot?: string;

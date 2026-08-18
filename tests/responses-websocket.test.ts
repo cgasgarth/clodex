@@ -1698,6 +1698,7 @@ describe('createResponsesWebSocketFetch', () => {
       providerId: 'openai',
       accountId: 'acct-native-compact',
       compactThreshold: 900,
+      contextWindow: 1_000_000,
       compactFetch: compactFetch as typeof fetch,
       onDiagnostic: event => diagnostics.push(event),
     });
@@ -1747,8 +1748,10 @@ describe('createResponsesWebSocketFetch', () => {
     expect(compactedHead.previous_response_id).toBeUndefined();
     expect(compactedHead.input).toEqual([firstUser, secondUser, ...canonical]);
     emitTextResponse(compactedSocket, 'resp_compacted', 'second answer', {
-      input_tokens: 120,
-      input_tokens_details: { cached_tokens: 75 },
+      // A compacted opaque item can retain more than the configured threshold.
+      // This must establish a rearm point instead of compacting every turn.
+      input_tokens: 950,
+      input_tokens_details: { cached_tokens: 900 },
       output_tokens: 20,
     });
     await readAll(second);
@@ -1812,6 +1815,21 @@ describe('createResponsesWebSocketFetch', () => {
       event: 'ws_head_decision',
       decision: 'compaction_trigger_new_head',
       compactThreshold: 900,
+    }));
+    expect(diagnostics).toContainEqual(expect.objectContaining({
+      event: 'ws_compaction',
+      outcome: 'rearmed',
+      configuredThreshold: 900,
+      postCompactionInputTokens: 950,
+      nextCompactionInputTokens: 50_950,
+    }));
+    expect(diagnostics).toContainEqual(expect.objectContaining({
+      event: 'ws_head_decision',
+      decision: 'continuation',
+      compactThreshold: 900,
+      effectiveCompactThreshold: 50_950,
+      postCompactionInputTokens: 950,
+      nextCompactionInputTokens: 50_950,
     }));
   });
 
@@ -2626,7 +2644,7 @@ describe('createResponsesWebSocketFetch', () => {
   });
 
   it.each(['response.failed', 'response.incomplete'] as const)(
-    'uses standalone compact output and retains usage when a live trigger ends with %s',
+    'uses standalone compact output and keeps visible usage when a live trigger ends with %s',
     async terminalType => {
     const diagnostics: ResponsesWebSocketDiagnosticEvent[] = [];
     const canonical = [
@@ -2709,12 +2727,11 @@ describe('createResponsesWebSocketFetch', () => {
       .map(frame => JSON.parse(frame.replace(/^data: /, '')));
     const completed = events.find(event => event.type === 'response.completed');
     expect(completed.response.usage).toMatchObject({
-      input_tokens: 330,
-      output_tokens: 45,
-      total_tokens: 375,
+      input_tokens: 50,
+      output_tokens: 10,
       input_tokens_details: {
-        cached_tokens: 110,
-        cache_write_tokens: 5,
+        cached_tokens: 40,
+        cache_write_tokens: 3,
       },
     });
     expect(originalSocket.close).toHaveBeenCalledOnce();
@@ -2748,6 +2765,7 @@ describe('createResponsesWebSocketFetch', () => {
     const wsFetch = createResponsesWebSocketFetch(WS_URL, undefined, {
       accountId: 'acct-recompact-http-fallback',
       compactThreshold: 100,
+      contextWindow: 40_000,
       compactFetch: compactFetch as typeof fetch,
     });
     const firstUser = { role: 'user', content: [{ type: 'input_text', text: 'first' }] };
@@ -2781,7 +2799,7 @@ describe('createResponsesWebSocketFetch', () => {
       content: [{ type: 'output_text', text: 'second answer' }],
     };
     emitTextResponse(compactedSocket, 'resp_recompact_first_head', 'second answer', {
-      input_tokens: 150,
+      input_tokens: 39_999,
       output_tokens: 10,
     });
     await readAll(second);
@@ -3141,7 +3159,7 @@ describe('createResponsesWebSocketFetch', () => {
     await readAll(resumed);
   });
 
-  it('adds hidden native-compaction usage to the visible response totals', async () => {
+  it('keeps hidden native-compaction work out of visible context usage', async () => {
     const user = {
       role: 'user',
       content: [{ type: 'input_text', text: 'compact and report every token' }],
@@ -3183,17 +3201,16 @@ describe('createResponsesWebSocketFetch', () => {
       .map(frame => JSON.parse(frame.replace(/^data: /, '')));
     const completed = events.find(event => event.type === 'response.completed');
     expect(completed.response.usage).toMatchObject({
-      input_tokens: 260,
-      output_tokens: 29,
-      total_tokens: 289,
+      input_tokens: 50,
+      output_tokens: 11,
       input_tokens_details: {
-        cached_tokens: 220,
-        cache_write_tokens: 15,
+        cached_tokens: 40,
+        cache_write_tokens: 3,
       },
     });
   });
 
-  it('surfaces aggregated compaction usage through the real OpenAI AI SDK', async () => {
+  it('surfaces visible context usage through the real OpenAI AI SDK', async () => {
     const compactFetch = vi.fn(async () => new Response(JSON.stringify({
       output: [{ type: 'compaction', encrypted_content: 'sdk-usage-summary' }],
       usage: {
@@ -3235,12 +3252,12 @@ describe('createResponsesWebSocketFetch', () => {
     });
 
     expect(await usagePromise).toMatchObject({
-      inputTokens: 260,
-      outputTokens: 29,
-      totalTokens: 289,
+      inputTokens: 50,
+      outputTokens: 11,
+      totalTokens: 61,
       inputTokenDetails: {
-        cacheReadTokens: 220,
-        cacheWriteTokens: 15,
+        cacheReadTokens: 40,
+        cacheWriteTokens: 3,
       },
     });
   });
@@ -3312,11 +3329,11 @@ describe('createResponsesWebSocketFetch', () => {
         .map(frame => JSON.parse(frame.replace(/^data: /, '')));
       expect(firstEvents.find(event => event.type === 'response.completed').response.usage)
         .toMatchObject({
-          input_tokens: 260,
-          output_tokens: 29,
+          input_tokens: 50,
+          output_tokens: 11,
           input_tokens_details: {
-            cached_tokens: 220,
-            cache_write_tokens: 15,
+            cached_tokens: 40,
+            cache_write_tokens: 3,
           },
         });
 
@@ -3529,9 +3546,9 @@ describe('createResponsesWebSocketFetch', () => {
       .map(frame => JSON.parse(frame.replace(/^data: /, '')))
       .find(event => event.type === 'response.completed');
     expect(firstCompleted.response.usage).toMatchObject({
-      input_tokens: 250,
-      output_tokens: 15,
-      input_tokens_details: { cached_tokens: 220 },
+      input_tokens: 50,
+      output_tokens: 5,
+      input_tokens_details: { cached_tokens: 40 },
     });
 
     const echoedCall = {
@@ -3636,9 +3653,9 @@ describe('createResponsesWebSocketFetch', () => {
         .map(frame => JSON.parse(frame.replace(/^data: /, '')))
         .find(event => event.type === 'response.completed');
       expect(completed.response.usage).toMatchObject({
-        input_tokens: 40_210,
-        output_tokens: 268,
-        input_tokens_details: { cached_tokens: 35_180 },
+        input_tokens: 40_000,
+        output_tokens: 250,
+        input_tokens_details: { cached_tokens: 35_000 },
       });
     }
     expect(compactFetch).toHaveBeenCalledTimes(roots.length);
@@ -3834,6 +3851,8 @@ describe('createResponsesWebSocketFetch', () => {
       expectedAssistantKinds: expectedAssistant.map(item => String(item.type)),
       compactedInput,
       lastInputTokens: 260_000,
+      postCompactionInputTokens: 200_000,
+      nextCompactionInputTokens: 250_000,
       lastUsedAt: Date.now(),
     }, 16, 64)).toBe(true);
 
@@ -5568,9 +5587,9 @@ describe('createResponsesWebSocketFetch', () => {
       .map(frame => JSON.parse(frame.replace(/^data: /, '')));
     expect(events.find(event => event.type === 'response.completed')?.response.usage)
       .toMatchObject({
-        input_tokens: 108_090,
-        output_tokens: 15,
-        input_tokens_details: { cached_tokens: 100, cache_write_tokens: 5 },
+        input_tokens: 108_000,
+        output_tokens: 5,
+        input_tokens_details: { cached_tokens: 20, cache_write_tokens: 3 },
       });
     expect(diagnostics).toContainEqual(expect.objectContaining({
       event: 'ws_overflow_recovery',
@@ -5933,12 +5952,12 @@ describe('createResponsesWebSocketFetch', () => {
       .filter(Boolean)
       .map(frame => JSON.parse(frame.replace(/^data: /, '')));
     const completedUsage = events.find(event => event.type === 'response.completed')?.response.usage;
-    const compactStages = compactBodies.length - 1;
     expect(completedUsage).toMatchObject({
-      input_tokens: 60_000 + compactStages * 60_000,
-      output_tokens: 10 + compactStages * 1_000,
-      input_tokens_details: { cached_tokens: 55_000 + compactStages * 55_000 },
+      input_tokens: 60_000,
+      output_tokens: 10,
+      input_tokens_details: { cached_tokens: 55_000 },
     });
+    const compactStages = compactBodies.length - 1;
     const completedStages = diagnostics.filter(event => (
       event.event === 'ws_overflow_recovery'
       && event.outcome === 'stage_accepted'

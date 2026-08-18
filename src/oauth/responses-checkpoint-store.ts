@@ -40,6 +40,8 @@ export interface StoredResponsesCheckpoint {
   expectedAssistantKinds: string[];
   compactedInput: unknown[];
   lastInputTokens?: number;
+  postCompactionInputTokens?: number;
+  nextCompactionInputTokens?: number;
   claudeCompactionSummaryHash?: string;
   promptFieldHashes?: Record<string, string>;
   lastUsedAt: number;
@@ -64,6 +66,14 @@ function isStoredCheckpoint(value: unknown): value is StoredResponsesCheckpoint 
     && isStringArray(record.expectedAssistantKinds)
     && record.expectedAssistantHashes.length === record.expectedAssistantKinds.length
     && Array.isArray(record.compactedInput)
+    && (record.postCompactionInputTokens === undefined
+      || (typeof record.postCompactionInputTokens === 'number'
+        && Number.isSafeInteger(record.postCompactionInputTokens)
+        && record.postCompactionInputTokens >= 0))
+    && (record.nextCompactionInputTokens === undefined
+      || (typeof record.nextCompactionInputTokens === 'number'
+        && Number.isSafeInteger(record.nextCompactionInputTokens)
+        && record.nextCompactionInputTokens > 0))
     && typeof record.lastUsedAt === 'number';
 }
 

@@ -17,17 +17,39 @@ Set the opt-in flag in the environment that launches Clodex:
 CLODEX_OPENAI_COMPACTION=1 clodex claude
 ```
 
-The default trigger is 90% of the model's advertised context window. A positive
-integer override can be used in production or tests:
+The default trigger is 350,000 input tokens, capped at 90% of a smaller model's
+advertised context window. A positive integer override can be used in
+production or tests:
 
 ```sh
 CLODEX_OPENAI_COMPACTION=1 \
-CLODEX_OPENAI_COMPACT_THRESHOLD=220000 \
+CLODEX_OPENAI_COMPACT_THRESHOLD=350000 \
 clodex claude
 ```
 
 `CLODEX_OPENAI_COMPACT_THRESHOLD` does not enable the feature by itself.
 Invalid, fractional, zero, and negative thresholds are ignored.
+
+After compaction, Clodex records the first real model-input count as the opaque
+compaction floor. It rearms automatic compaction only after the context grows by
+at least 5% of the model window or 16,000 tokens. This rearm state is stored in
+the durable checkpoint. Manual compaction and hard context-overflow recovery do
+not wait for the rearm threshold.
+
+Compaction-call usage is recorded in structured diagnostics. It is not added to
+the visible response usage because Claude uses that value as its context meter.
+
+## AI SDK server-side compaction support
+
+The installed `@ai-sdk/openai` package can serialize `contextManagement` to
+OpenAI's `context_management` request field and can parse and replay encrypted
+compaction output items. The guarded `scripts/probe-openai-compaction.ts`
+context-management mode uses this package path end to end.
+
+Clodex does not enable that field in production until the ChatGPT/Codex OAuth
+backend accepts it in the live capability probe. The explicit in-band trigger
+and standalone endpoint remain the production paths because they also give
+Clodex the canonical state needed for durable checkpoint recovery.
 
 ## Clodex-owned context lifecycle
 

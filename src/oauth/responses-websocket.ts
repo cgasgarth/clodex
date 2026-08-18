@@ -4,6 +4,7 @@ import { outboundProxyUrlForTarget } from '../outbound-proxy.js';
 import { loadBunNativeWebSocket } from '../bun-websocket.js';
 import {
   compactResponsesWindow,
+  resolveOpenAiCompactionRearmThreshold,
   ResponsesCompactionError,
   type ResponsesCompactionUsage,
 } from './responses-compaction.js';
@@ -228,13 +229,36 @@ export function createResponsesWebSocketFetch(
         ? 'new_partition_head'
         : 'unpartitioned_socket';
     const compactThreshold = options.compactThreshold;
+    const contextWindow = options.contextWindow;
     const measuredInputTokens = selected?.lastInputTokens ?? selectedCheckpoint?.lastInputTokens;
     const estimatedInputTokens = diagnosticCorrelation?.estimatedInputTokens;
+    const rearmSource = selected?.compactedInput ? selected : selectedCheckpoint;
+    const persistedPostCompactionInputTokens = rearmSource?.postCompactionInputTokens;
+    const persistedNextCompactionInputTokens = rearmSource?.nextCompactionInputTokens;
+    // Older checkpoints have no rearm metadata. Treat their latest measured
+    // compacted input as a provisional floor so an upgrade cannot immediately
+    // re-enter the loop this guard fixes. The next successful response records
+    // an exact post-compaction baseline.
+    const provisionalPostCompactionInputTokens = persistedPostCompactionInputTokens
+      ?? (persistedNextCompactionInputTokens === undefined ? rearmSource?.lastInputTokens : undefined);
+    const effectiveCompactThreshold = compactThreshold === undefined
+      ? undefined
+      : Math.max(
+          compactThreshold,
+          persistedNextCompactionInputTokens
+            ?? (provisionalPostCompactionInputTokens === undefined
+              ? compactThreshold
+              : resolveOpenAiCompactionRearmThreshold(
+                  compactThreshold,
+                  provisionalPostCompactionInputTokens,
+                  contextWindow,
+                )),
+        );
     const compactionReason = forceCompaction
       ? 'claude_compaction_request'
-      : compactThreshold !== undefined
+      : effectiveCompactThreshold !== undefined
         && measuredInputTokens !== undefined
-        && measuredInputTokens >= compactThreshold
+        && measuredInputTokens >= effectiveCompactThreshold
         ? 'measured_threshold'
         : compactThreshold !== undefined
           && !selected?.compactedInput
@@ -249,7 +273,6 @@ export function createResponsesWebSocketFetch(
     let terminalOverflowReason: string | undefined;
     let terminalRecoveryFailure: ResponsesCompactionError | undefined;
     let overflowRebasedEstimate: number | undefined;
-    const contextWindow = options.contextWindow;
     const overflowSources = (): OverflowRecoverySource[] => {
       const sources: OverflowRecoverySource[] = [];
       if (
@@ -440,7 +463,8 @@ export function createResponsesWebSocketFetch(
       && anchored
       && matchedCanonicalInput
       && matchedCanonicalEstimatedTokens !== undefined
-      && matchedCanonicalEstimatedTokens >= compactThreshold
+      && effectiveCompactThreshold !== undefined
+      && matchedCanonicalEstimatedTokens >= effectiveCompactThreshold
     ) {
       try {
         const recovered = await runOverflowRecovery('known_oversized', true);
@@ -502,7 +526,9 @@ export function createResponsesWebSocketFetch(
             outcome: 'started',
             transport: 'previous_response_compaction_trigger',
             reason: compactionReason,
-            threshold: compactThreshold,
+            threshold: effectiveCompactThreshold,
+            configuredThreshold: compactThreshold,
+            postCompactionInputTokens: provisionalPostCompactionInputTokens,
             measuredInputTokens,
             estimatedInputTokens,
             canonicalEstimatedInputTokens: matchedCanonicalEstimatedTokens,
@@ -561,7 +587,9 @@ export function createResponsesWebSocketFetch(
             transport: 'previous_response_compaction_trigger',
             reason: compactionReason,
             durationMs: Math.max(0, resolvedOptions.now() - triggerStartedAt),
-            threshold: compactThreshold,
+            threshold: effectiveCompactThreshold,
+            configuredThreshold: compactThreshold,
+            postCompactionInputTokens: provisionalPostCompactionInputTokens,
             measuredInputTokens,
             estimatedInputTokens,
             liveContinuationEstimatedTokens,
@@ -587,7 +615,9 @@ export function createResponsesWebSocketFetch(
             durationMs: triggerStartedAt === undefined
               ? undefined
               : Math.max(0, resolvedOptions.now() - triggerStartedAt),
-            threshold: compactThreshold,
+            threshold: effectiveCompactThreshold,
+            configuredThreshold: compactThreshold,
+            postCompactionInputTokens: provisionalPostCompactionInputTokens,
             measuredInputTokens,
             estimatedInputTokens,
             errorType: boundedDiagnosticIdentifier(
@@ -630,7 +660,9 @@ export function createResponsesWebSocketFetch(
             transport: 'responses_compact_endpoint',
             mode: 'routine',
             reason: compactionReason,
-            threshold: compactThreshold,
+            threshold: effectiveCompactThreshold,
+            configuredThreshold: compactThreshold,
+            postCompactionInputTokens: provisionalPostCompactionInputTokens,
             contextWindow,
             measuredInputTokens,
             estimatedInputTokens,
@@ -672,7 +704,9 @@ export function createResponsesWebSocketFetch(
             transport: 'responses_compact_endpoint',
             reason: compactionReason,
             durationMs: Math.max(0, resolvedOptions.now() - standaloneStartedAt),
-            threshold: compactThreshold,
+            threshold: effectiveCompactThreshold,
+            configuredThreshold: compactThreshold,
+            postCompactionInputTokens: provisionalPostCompactionInputTokens,
             measuredInputTokens,
             estimatedInputTokens,
             sourceItems: inputArray(compactPayload).length,
@@ -695,7 +729,9 @@ export function createResponsesWebSocketFetch(
             durationMs: standaloneStartedAt === undefined
               ? undefined
               : Math.max(0, resolvedOptions.now() - standaloneStartedAt),
-            threshold: compactThreshold,
+            threshold: effectiveCompactThreshold,
+            configuredThreshold: compactThreshold,
+            postCompactionInputTokens: provisionalPostCompactionInputTokens,
             contextWindow,
             measuredInputTokens,
             estimatedInputTokens,
@@ -911,6 +947,9 @@ export function createResponsesWebSocketFetch(
         ? selectedCheckpoint?.connectionId
         : undefined,
       compactThreshold,
+      effectiveCompactThreshold,
+      postCompactionInputTokens: provisionalPostCompactionInputTokens,
+      nextCompactionInputTokens: persistedNextCompactionInputTokens,
       contextWindow,
       activeConnectionCount: connectionCount(),
       nurseryConnectionCount: connectionCountByGeneration('nursery'),
@@ -1003,7 +1042,6 @@ export function createResponsesWebSocketFetch(
       retryState: () => ({
         retryPayload,
         compactedInputBase,
-        usageOffset: compactionUsage,
         attemptCount: overflowRecovery?.attemptCount ?? 0,
       }),
     });
@@ -1018,7 +1056,16 @@ export function createResponsesWebSocketFetch(
           sendPayload,
           retryPayload,
           compactedInputBase,
-          usageOffset: compactionUsage,
+          establishCompactionRearm: compacted
+            || Boolean(compactedInputBase && persistedNextCompactionInputTokens === undefined),
+          compactThreshold,
+          contextWindow,
+          postCompactionInputTokens: compacted
+            ? undefined
+            : persistedPostCompactionInputTokens,
+          nextCompactionInputTokens: compacted
+            ? undefined
+            : persistedNextCompactionInputTokens,
           supersededEntry,
           claudeCompactionRequest: forceCompaction,
           claudeCompactionSummaryHash: selectedMatch?.mode === 'claude_compaction_summary'

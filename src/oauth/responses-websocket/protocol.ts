@@ -319,57 +319,6 @@ export function responseUsage(event: unknown): ResponseUsage | undefined {
   };
 }
 
-function addResponseUsage(left: ResponseUsage, right: ResponseUsage): ResponseUsage {
-  return {
-    inputTokens: left.inputTokens + right.inputTokens,
-    cachedTokens: left.cachedTokens + right.cachedTokens,
-    cacheWriteTokens: left.cacheWriteTokens + right.cacheWriteTokens,
-    outputTokens: left.outputTokens + right.outputTokens,
-    ...(right.serviceTier ?? left.serviceTier
-      ? { serviceTier: right.serviceTier ?? left.serviceTier }
-      : {}),
-  };
-}
-
-export function withUsageOffset(event: unknown, offset: ResponseUsage): unknown {
-  if (!event || typeof event !== 'object') return event;
-  const root = event as JsonObject;
-  const response = root.response && typeof root.response === 'object'
-    ? root.response as JsonObject
-    : undefined;
-  if (!response) return event;
-  const visible = responseUsage(event) ?? {
-    inputTokens: 0,
-    cachedTokens: 0,
-    cacheWriteTokens: 0,
-    outputTokens: 0,
-  };
-  const combined = addResponseUsage(visible, offset);
-  const usage = response.usage && typeof response.usage === 'object'
-    ? response.usage as JsonObject
-    : {};
-  const details = usage.input_tokens_details && typeof usage.input_tokens_details === 'object'
-    ? usage.input_tokens_details as JsonObject
-    : {};
-  return {
-    ...root,
-    response: {
-      ...response,
-      usage: {
-        ...usage,
-        input_tokens: combined.inputTokens,
-        output_tokens: combined.outputTokens,
-        total_tokens: combined.inputTokens + combined.outputTokens,
-        input_tokens_details: {
-          ...details,
-          cached_tokens: combined.cachedTokens,
-          cache_write_tokens: combined.cacheWriteTokens,
-        },
-      },
-    },
-  };
-}
-
 export function responseUsageDebug(usage: ResponseUsage): string {
   return `usage input_tokens=${usage.inputTokens} `
     + `cached_tokens=${usage.cachedTokens} `
