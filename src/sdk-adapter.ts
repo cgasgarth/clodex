@@ -787,7 +787,7 @@ export function translateRequest(
   // rejects the standard `system` field. It also manages its own output limit.
   if (options?.openAiOAuth && systemText) {
     const openAiOptions: OpenAILanguageModelResponsesOptions = { instructions: systemText };
-    if (options.processingMode === 'fast') openAiOptions.serviceTier = 'fast';
+    if (options.processingMode === 'fast') openAiOptions.serviceTier = 'priority';
     providerOptions = deepMergeProviderOptions(providerOptions, {
       openai: openAiOptions,
     });

@@ -495,7 +495,7 @@ describe('translateRequest', () => {
       processingMode: 'fast',
     });
 
-    expect(fast.providerOptions?.openai?.serviceTier).toBe('fast');
+    expect(fast.providerOptions?.openai?.serviceTier).toBe('priority');
     expect(standard.providerOptions?.openai?.serviceTier).toBeUndefined();
     expect(apiKey.providerOptions?.openai?.serviceTier).toBeUndefined();
     expect(otherProvider.providerOptions?.openai?.serviceTier).toBeUndefined();
@@ -535,7 +535,7 @@ describe('translateRequest', () => {
       'gpt-5.6-sol',
     );
 
-    expect(requestBody?.service_tier).toBe('fast');
+    expect(requestBody?.service_tier).toBe('priority');
   });
 
   it('serializes OpenAI web-search domain filters on the wire request', async () => {
