@@ -1,6 +1,6 @@
 // src/types.ts
 
-import type { FreeStatus } from './free-models.js';
+import type { FreeStatus } from './models/free-models.js';
 
 type StarterCommand =
   | 'root'
@@ -20,6 +20,10 @@ export interface ModelCost {
   cache_read?: number;
   cache_write?: number;
 }
+
+export type ProviderDataValue = string | number | boolean | null
+  | ProviderDataValue[]
+  | { [key: string]: ProviderDataValue };
 
 
 export interface LocalProviderModel {
@@ -59,7 +63,7 @@ export interface LocalProvider {
   authRef?: string;
   authType?: 'api' | 'oauth' | 'none';
   oauthAccountId?: string;
-  providerData?: Record<string, unknown>;
+  providerData?: Record<string, ProviderDataValue>;
   /** Static headers sent on every upstream request (e.g. a plan/auth-tracking header a custom endpoint requires). */
   headers?: Record<string, string>;
   models: LocalProviderModel[];

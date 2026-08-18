@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import { isCredentialBearingHeader } from '../src/credential-headers.js';
+import { isCredentialBearingHeader } from '../src/credentials/headers.js';
 
 describe('isCredentialBearingHeader', () => {
   it.each([

@@ -18,7 +18,7 @@ import {
   writeProxyLifecycleLog,
   writeSecureLogLine,
   writeWebSocketDiagnosticRequestLog,
-} from '../src/trace-log.js';
+} from '../src/observability/trace-log.js';
 
 async function readLog(path: string): Promise<string> {
   await flushTraceLogs(path);
@@ -50,8 +50,8 @@ describe('trace log redaction', () => {
   });
 
   it('redacts sk- prefixed keys', () => {
-    const keyShapedPlaceholder = ['sk', 'example-value'].join('-');
-    expect(redactTraceLine(`key=${keyShapedPlaceholder}`)).toBe('key=sk-[REDACTED]');
+    const secretKeyPlaceholder = ['sk', 'example-value'].join('-');
+    expect(redactTraceLine(`key=${secretKeyPlaceholder}`)).toBe('key=sk-[REDACTED]');
   });
 
   it('redacts full log content', () => {
@@ -210,7 +210,7 @@ describe('inference request log', () => {
         route: 'translated',
       });
       expect(entry.timestamp).toEqual(expect.any(String));
-      expect(Object.keys(entry).sort()).toEqual([
+      expect(Object.keys(entry).toSorted()).toEqual([
         'claudeSessionId', 'effort', 'modelId', 'provider', 'route', 'timestamp',
       ]);
     } finally {

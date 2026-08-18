@@ -19,12 +19,14 @@ import {
 } from 'node:fs';
 import { dirname, join } from 'node:path';
 import bundledPricing from '../data/pricing-cache.json';
-import { getAppHome } from '../paths.js';
+import { getAppHome } from '../config/paths.js';
 import type { CachedModel } from './types.js';
 import { loadRegistryStrict, saveRegistry } from './io.js';
 import { withRegistryWriteLock } from './lock.js';
-import { classifyFreeStatus, isFreeStatus } from '../free-models.js';
-import { PROVIDER_METADATA_TIMEOUT_MS } from '../timeouts.js';
+import { classifyFreeStatus, isFreeStatus } from '../models/free-models.js';
+import { PROVIDER_METADATA_TIMEOUT_MS } from '../config/timeouts.js';
+import { diagnosticRecord } from '../observability/trace-log.js';
+import { isObject, isString } from '../runtime/type-guards.js';
 
 const PRICING_API_URL = 'https://ai-model-pricing.com/api/v1/pricing.json';
 const FETCH_TIMEOUT_MS = PROVIDER_METADATA_TIMEOUT_MS;
@@ -52,8 +54,12 @@ export interface PricingCacheFile {
   models?: PricingModelEntry[];
 }
 
+interface TemplatePricingPlatformMap {
+  [templateId: string]: string;
+}
+
 /** Registry template id → ai-model-pricing platform slug */
-const TEMPLATE_TO_PRICING_PLATFORM: Record<string, string> = {
+const TEMPLATE_TO_PRICING_PLATFORM: TemplatePricingPlatformMap = {
   groq: 'groq',
   mistral: 'mistral',
   togetherai: 'together',
@@ -72,13 +78,14 @@ const TEMPLATE_TO_PRICING_PLATFORM: Record<string, string> = {
 };
 
 export function loadBundledPricingCache(): PricingCacheFile {
-  return bundledPricing as unknown as PricingCacheFile;
+  return JSON.parse(JSON.stringify(bundledPricing));
 }
 
 function readPricingFile(path: string): PricingCacheFile | null {
   if (!existsSync(path)) return null;
   try {
-    return JSON.parse(readFileSync(path, 'utf8')) as PricingCacheFile;
+    const cache: PricingCacheFile = JSON.parse(readFileSync(path, 'utf8'));
+    return cache;
   } catch {
     return null;
   }
@@ -119,8 +126,20 @@ async function fetchPricingCache(): Promise<PricingCacheFile | null> {
       headers: { Accept: 'application/json' },
     });
     if (!response.ok) return null;
-    const data = (await response.json()) as PricingCacheFile;
-    if (!Array.isArray(data.models)) return null;
+    const raw = await response.json();
+    if (!raw || !isObject(raw) || Array.isArray(raw)) return null;
+    const fields = diagnosticRecord(raw);
+    if (!Array.isArray(fields.models)) return null;
+    const models: PricingModelEntry[] = [];
+    for (const value of fields.models) {
+      if (!value || !isObject(value) || Array.isArray(value)) continue;
+      const model: PricingModelEntry = {};
+      Object.assign(model, value);
+      models.push(model);
+    }
+    const data: PricingCacheFile = { models };
+    if (isString(fields.schema_version)) data.schema_version = fields.schema_version;
+    if (isString(fields.generated_at)) data.generated_at = fields.generated_at;
     writePricingCache(getUserPricingCachePath(), data);
     return data;
   } catch {

@@ -53,7 +53,8 @@ real commands (including `claude -p`) but NEVER add them to the automated test s
 
 ## C. Preserved functionality
 
-- C1. `bun run typecheck`, `bun run test`, and `bun run build` all pass cleanly (Bun 1.3.14+).
+- C1. `bun run typecheck`, `bun run test`, and `bun run build` all pass cleanly
+  with the Bun 1.4 canary recorded in `packageManager`.
 - C2. `clodex claude --dry-run` completes a simulated launch (endpoint mode) without
   writing state.
 - C3. Endpoint mode: `clodex server` starts; `GET /v1/models` (or `/models`) lists the
@@ -137,8 +138,7 @@ real commands (including `claude -p`) but NEVER add them to the automated test s
   (dist, README, LICENSE, package.json — no stripped assets/ui files).
 - E7. `.github/workflows/ci.yml` runs `bun run check:ci` on pull requests and pushes
   to `main`.
-- E8. Exact-pinned commitlint conventional config and a Husky v9 `commit-msg` hook
-  reject invalid local commits; gated CI checks every pushed/PR commit range.
+- E8. Husky v9 runs the full repository checks before local commits.
 - E9. Release-please and tag-triggered publish workflows are absent.
 
 ## G. Server discovery & `clodex-claude` wrapper
@@ -186,4 +186,4 @@ real commands (including `claude -p`) but NEVER add them to the automated test s
   diffs (B8) found no gratuitous rewrites.
 - F3. All work is committed on `worktree-clodex` with a clean `git status`. `dist/`
   is NOT tracked (gitignored); it is rebuilt by `prepublishOnly`.
-- F4. CI and commitlint workflow YAML files parse successfully.
+- F4. CI workflow YAML files parse successfully.

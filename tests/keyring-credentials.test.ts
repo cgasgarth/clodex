@@ -11,33 +11,43 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'bun:test';
+import { afterEach, beforeEach, expect, it, vi } from 'bun:test';
 
 const keyring = createHoisted(() => ({
   values: new Map<string, string>(),
+  // SAFETY: The test fixture defines the asserted runtime shape.
   failSetSuffix: '' as string,
+  // SAFETY: The test fixture defines the asserted runtime shape.
   failSetKey: '' as string,
+  // SAFETY: The test fixture defines the asserted runtime shape.
   failDeleteSuffix: '' as string,
+  // SAFETY: The test fixture defines the asserted runtime shape.
   failDeleteKey: '' as string,
+  // SAFETY: The test fixture defines the asserted runtime shape.
   failFindService: '' as string,
   failFindCount: 0,
+  // SAFETY: The test fixture defines the asserted runtime shape.
   omitFindKey: '' as string,
+  // SAFETY: The test fixture defines the asserted runtime shape.
   omitFindOnceKey: '' as string,
+  // SAFETY: The test fixture defines the asserted runtime shape.
   omitFindAccount: '' as string,
   getCount: 0,
   findCount: 0,
+  // SAFETY: The test fixture defines the asserted runtime shape.
   onGet: null as ((key: string) => void) | null,
+  // SAFETY: The test fixture defines the asserted runtime shape.
   operations: [] as Array<{
     type: 'set' | 'delete';
     key: string;
     value?: string;
   }>,
+  // SAFETY: The test fixture defines the asserted runtime shape.
   lockHome: '' as string,
 }));
 
 vi.mock('node:os', () => {
-  const importOriginal = <T>() => importActual<T>('node:os', import.meta.url);
-  const actual = importOriginal<typeof import('node:os')>();
+  const actual = importActual<typeof import('node:os')>('node:os', import.meta.url);
   return {
     ...actual,
     userInfo: () => ({
@@ -130,7 +140,7 @@ import {
   provisionProviderCredential,
   resolveProviderCredential,
   saveProviderCredential as replaceProviderCredential,
-} from '../src/env.js';
+} from '../src/config/environment.js';
 import { createHoisted } from './test-helpers.js';
 
 const credentialInstance = `v1:${'1'.repeat(32)}`;
@@ -193,12 +203,10 @@ function clearMockKeyringState(): void {
 function expectUnverifiableTombstone(blockLegacy = false): string {
   const raw = keyring.values.get(journalKey);
   expect(raw?.startsWith(journalPrefix)).toBe(true);
-  expect(JSON.parse(raw!.slice(journalPrefix.length))).toEqual({
-    mode: 'delete',
-    generations: [],
-    ...(blockLegacy ? { blockLegacy: true } : {}),
-    unverifiable: true,
-  });
+  const expected = blockLegacy
+    ? { mode: 'delete', generations: [], blockLegacy: true, unverifiable: true }
+    : { mode: 'delete', generations: [], unverifiable: true };
+  expect(JSON.parse(raw!.slice(journalPrefix.length))).toEqual(expected);
   return raw!;
 }
 
@@ -217,11 +225,13 @@ function expectDeletionGuard(): void {
   expect(keyring.values.get(deletedKey)).toBe('v1:deleted');
 }
 
-function publishedMarker(): {
+interface PublishedMarker {
   count: number;
   generation?: string;
   digest?: string;
-} {
+}
+
+function publishedMarker(): PublishedMarker {
   const raw = keyring.values.get(mainKey);
   expect(raw?.startsWith('__relay_chunked__:')).toBe(true);
   const encoded = raw!.slice('__relay_chunked__:'.length);
@@ -229,10 +239,22 @@ function publishedMarker(): {
   const versioned = /^v2:([^:]+):(\d+)$/.exec(encoded);
   const legacy = /^(\d+)$/.exec(encoded);
   const count = Number(current?.[2] ?? versioned?.[2] ?? legacy?.[1]);
+  const marker: PublishedMarker = { count };
+  const generation = current?.[1] ?? versioned?.[1];
+  if (generation) marker.generation = generation;
+  if (current?.[3]) marker.digest = current[3];
+  return marker;
+}
+
+function journalMarkerFor(generation: string) {
+  const value = `secret-${generation}`;
   return {
-    count,
-    ...(current?.[1] || versioned?.[1] ? { generation: current?.[1] ?? versioned?.[1] } : {}),
-    ...(current?.[3] ? { digest: current[3] } : {}),
+    marker: {
+      count: 1,
+      generation,
+      digest: createHash('sha256').update(value).digest('hex'),
+    },
+    value,
   };
 }
 
@@ -257,8 +279,7 @@ function expectActiveShort(value: string): void {
   });
 }
 
-describe('keyring credential chunks', () => {
-  beforeEach(() => {
+beforeEach(() => {
     tempDir = mkdtempSync(join(tmpdir(), 'clodex-keyring-'));
     process.env.CLODEX_HOME = tempDir;
     process.env.CLODEX_CREDENTIAL_HOME = tempDir;
@@ -545,13 +566,13 @@ describe('keyring credential chunks', () => {
       await expect(saveProviderCredential(authRef, currentSecret)).resolves.toBe(true);
       const originalManagedState = readFileSync(managedStatePath(), 'utf8');
       const originalPublishedValue = keyring.values.get(mainKey);
-      const originalChunks = currentChunkKeys().sort();
+      const originalChunks = currentChunkKeys().toSorted();
       keyring.values.set(managedStateKey, unsupportedKey);
 
       await expect(resolveProviderCredential('test', authRef)).resolves.toBeNull();
       await expect(provisionProviderCredential(authRef, 'replacement-secret')).resolves.toBe(false);
       expect(keyring.values.get(mainKey)).toBe(originalPublishedValue);
-      expect(currentChunkKeys().sort()).toEqual(originalChunks);
+      expect(currentChunkKeys().toSorted()).toEqual(originalChunks);
       expect(keyring.values.get(managedStateKey)).toBe(unsupportedKey);
       expect(readFileSync(managedStatePath(), 'utf8')).toBe(originalManagedState);
 
@@ -569,14 +590,14 @@ describe('keyring credential chunks', () => {
     await expect(saveProviderCredential(authRef, currentSecret)).resolves.toBe(true);
     const originalManagedState = readFileSync(managedStatePath(), 'utf8');
     const originalMarker = keyring.values.get(mainKey);
-    const originalChunks = currentChunkKeys().sort();
+    const originalChunks = currentChunkKeys().toSorted();
     keyring.values.set(managedStateKey, futureKey);
     keyring.values.delete(journalKey);
 
     await expect(resolveProviderCredential('test', authRef)).resolves.toBeNull();
     await expect(provisionProviderCredential(authRef, 'replacement-secret')).resolves.toBe(false);
     expect(keyring.values.get(mainKey)).toBe(originalMarker);
-    expect(currentChunkKeys().sort()).toEqual(originalChunks);
+    expect(currentChunkKeys().toSorted()).toEqual(originalChunks);
     expect(keyring.values.get(managedStateKey)).toBe(futureKey);
     expect(readFileSync(managedStatePath(), 'utf8')).toBe(originalManagedState);
 
@@ -630,7 +651,7 @@ describe('keyring credential chunks', () => {
     expect(keyring.values.has(journalKey)).toBe(true);
     keyring.failSetSuffix = '';
     await expect(resolveProviderCredential('test', authRef)).resolves.toBe(first);
-    expect(currentChunkKeys().sort()).toEqual(firstChunks.sort());
+    expect(currentChunkKeys().toSorted()).toEqual(firstChunks.toSorted());
     expectActiveInventory();
   });
 
@@ -647,7 +668,7 @@ describe('keyring credential chunks', () => {
     expect(keyring.values.has(journalKey)).toBe(true);
     keyring.failSetKey = '';
     await expect(resolveProviderCredential('test', authRef)).resolves.toBe(first);
-    expect(currentChunkKeys().sort()).toEqual(firstChunks.sort());
+    expect(currentChunkKeys().toSorted()).toEqual(firstChunks.toSorted());
     expectActiveInventory();
   });
 
@@ -694,7 +715,7 @@ describe('keyring credential chunks', () => {
     keyring.onGet = null;
     keyring.failSetKey = '';
     await expect(resolveProviderCredential('test', authRef)).resolves.toBe(first);
-    expect(currentChunkKeys().sort()).toEqual(chunks.sort());
+    expect(currentChunkKeys().toSorted()).toEqual(chunks.toSorted());
     expectActiveInventory(marker);
   });
 
@@ -723,7 +744,7 @@ describe('keyring credential chunks', () => {
 
     keyring.failSetKey = '';
     await expect(resolveProviderCredential('test', authRef)).resolves.toBe(first);
-    expect(currentChunkKeys().sort()).toEqual(chunks.sort());
+    expect(currentChunkKeys().toSorted()).toEqual(chunks.toSorted());
     expectActiveInventory(marker);
   });
 
@@ -1068,6 +1089,7 @@ describe('keyring credential chunks', () => {
 
     await expect(deleteProviderCredential(authRef)).resolves.toBe(false);
 
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const pending = JSON.parse(keyring.values.get(journalKey)!.slice(journalPrefix.length)) as {
       generations: Array<{ count: number }>;
     };
@@ -1249,7 +1271,7 @@ describe('keyring credential chunks', () => {
   it('fails closed when the published generation is absent from the write journal', async () => {
     const publishedGeneration = '11111111-1111-4111-8111-111111111111';
     const recoveryGeneration = '22222222-2222-4222-8222-222222222222';
-    const publishedMarker = `__relay_chunked__:v2:${publishedGeneration}:1`;
+    const encodedPublishedMarker = `__relay_chunked__:v2:${publishedGeneration}:1`;
     const publishedChunk = `clodex:${account}::chunk::${publishedGeneration}::0`;
     const recoveryChunk = `clodex:${account}::chunk::${recoveryGeneration}::0`;
     const journal = `${journalPrefix}${JSON.stringify({
@@ -1257,7 +1279,7 @@ describe('keyring credential chunks', () => {
       generations: [{ count: 1, generation: recoveryGeneration }],
     })}`;
     const diagnostics: string[] = [];
-    keyring.values.set(mainKey, publishedMarker);
+    keyring.values.set(mainKey, encodedPublishedMarker);
     keyring.values.set(publishedChunk, 'published-secret');
     keyring.values.set(recoveryChunk, 'recovery-secret');
     keyring.values.set(journalKey, journal);
@@ -1271,7 +1293,7 @@ describe('keyring credential chunks', () => {
     expect(diagnostics.join('\n')).toContain(
       'published credential generation is not represented by cleanup journal',
     );
-    expect(keyring.values.get(mainKey)).toBe(publishedMarker);
+    expect(keyring.values.get(mainKey)).toBe(encodedPublishedMarker);
     expect(keyring.values.get(publishedChunk)).toBe('published-secret');
     expect(keyring.values.get(recoveryChunk)).toBe('recovery-secret');
     expect(keyring.values.get(journalKey)).toBe(journal);
@@ -1571,7 +1593,7 @@ describe('keyring credential chunks', () => {
     await expect(saveProviderCredential(authRef, currentSecret)).resolves.toBe(true);
     const originalJournal = keyring.values.get(journalKey);
     const originalMarker = keyring.values.get(mainKey);
-    const originalChunks = currentChunkKeys().sort();
+    const originalChunks = currentChunkKeys().toSorted();
     writeFileSync(managedStatePath(), 'v1:managed\n', 'utf8');
     keyring.omitFindKey = journalKey;
     keyring.onGet = key => {
@@ -1581,7 +1603,7 @@ describe('keyring credential chunks', () => {
     await expect(provisionProviderCredential(authRef, 'replacement-secret')).resolves.toBe(false);
     expect(keyring.values.get(journalKey)).toBe(originalJournal);
     expect(keyring.values.get(mainKey)).toBe(originalMarker);
-    expect(currentChunkKeys().sort()).toEqual(originalChunks);
+    expect(currentChunkKeys().toSorted()).toEqual(originalChunks);
     expect(existsSync(managedStatePath())).toBe(true);
 
     await expect(deleteProviderCredential(authRef)).resolves.toBe(false);
@@ -1600,7 +1622,7 @@ describe('keyring credential chunks', () => {
     await expect(saveProviderCredential(authRef, currentSecret)).resolves.toBe(true);
     const originalJournal = keyring.values.get(journalKey);
     const originalMarker = keyring.values.get(mainKey);
-    const originalChunks = currentChunkKeys().sort();
+    const originalChunks = currentChunkKeys().toSorted();
     writeFileSync(managedStatePath(), 'v1:managed\n', 'utf8');
     keyring.omitFindKey = journalKey;
     keyring.omitFindAccount = account;
@@ -1612,7 +1634,7 @@ describe('keyring credential chunks', () => {
 
     expect(keyring.values.get(journalKey)).toBe(originalJournal);
     expect(keyring.values.get(mainKey)).toBe(originalMarker);
-    expect(currentChunkKeys().sort()).toEqual(originalChunks);
+    expect(currentChunkKeys().toSorted()).toEqual(originalChunks);
     expect(keyring.values.has(deletedKey)).toBe(false);
     expect(existsSync(managedStatePath())).toBe(true);
 
@@ -1627,7 +1649,7 @@ describe('keyring credential chunks', () => {
   it('deletes a journal-less long credential with a confirmed missing chunk', async () => {
     const currentSecret = 'a'.repeat(2_500);
     await expect(saveProviderCredential(authRef, currentSecret)).resolves.toBe(true);
-    const chunkKeys = currentChunkKeys().sort();
+    const chunkKeys = currentChunkKeys().toSorted();
     expect(chunkKeys.length).toBeGreaterThan(1);
     writeFileSync(managedStatePath(), 'v1:managed\n', 'utf8');
     keyring.values.delete(journalKey);
@@ -1761,7 +1783,7 @@ describe('keyring credential chunks', () => {
   it('does not trust an incomplete chunk inventory when the main entry is absent', async () => {
     const currentSecret = 'a'.repeat(2_500);
     await expect(saveProviderCredential(authRef, currentSecret)).resolves.toBe(true);
-    const orphanedChunks = currentChunkKeys().sort();
+    const orphanedChunks = currentChunkKeys().toSorted();
     writeFileSync(managedStatePath(), 'v1:managed\n', 'utf8');
     keyring.values.delete(journalKey);
     keyring.values.delete(mainKey);
@@ -1769,7 +1791,7 @@ describe('keyring credential chunks', () => {
 
     await expect(deleteProviderCredential(authRef)).resolves.toBe(false);
 
-    expect(currentChunkKeys().sort()).toEqual(orphanedChunks);
+    expect(currentChunkKeys().toSorted()).toEqual(orphanedChunks);
     expect(keyring.values.has(deletedKey)).toBe(false);
 
     keyring.omitFindAccount = '';
@@ -2015,6 +2037,7 @@ describe('keyring credential chunks', () => {
 
     const expandedJournal = keyring.values.get(journalKey)!;
     expect(expandedJournal.startsWith(journalPrefix)).toBe(true);
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const expanded = JSON.parse(expandedJournal.slice(journalPrefix.length)) as {
       generations: unknown[];
     };
@@ -2038,19 +2061,8 @@ describe('keyring credential chunks', () => {
       '66666666-6666-4666-8666-666666666666',
     ];
     const currentPublished = '88888888-8888-4888-8888-888888888888';
-    const markerFor = (generation: string) => {
-      const value = `secret-${generation}`;
-      return {
-        marker: {
-          count: 1,
-          generation,
-          digest: createHash('sha256').update(value).digest('hex'),
-        },
-        value,
-      };
-    };
-    const currentMarkers = currentGenerations.map(markerFor);
-    const current = markerFor(currentPublished);
+    const currentMarkers = currentGenerations.map(journalMarkerFor);
+    const current = journalMarkerFor(currentPublished);
     for (const { marker, value } of [...currentMarkers, current]) {
       keyring.values.set(`clodex-chunks:${account}::chunk::${marker.generation}::0`, value);
     }
@@ -2069,6 +2081,7 @@ describe('keyring credential chunks', () => {
     await expect(deleteProviderCredential(authRef)).resolves.toBe(false);
 
     const compactedJournal = keyring.values.get(journalKey)!;
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const compacted = JSON.parse(compactedJournal.slice(journalPrefix.length)) as {
       generations: unknown[];
     };
@@ -2392,4 +2405,3 @@ describe('keyring credential chunks', () => {
     keyring.values.set(mainKey, '{"type":"oauth","access":');
     await expect(resolveProviderCredential('test', authRef)).resolves.toBeNull();
   });
-});

@@ -1,5 +1,6 @@
 // src/registry/models-dev.ts — models.dev capability cache (bundled + optional user refresh)
 
+import { isNumber, isObject, isString } from '../runtime/type-guards.js';
 import {
   chmodSync,
   existsSync,
@@ -10,9 +11,10 @@ import {
 } from 'node:fs';
 import { dirname, join } from 'node:path';
 import bundledCache from '../data/models-dev-cache.json';
-import { getAppHome } from '../paths.js';
-import { PROVIDER_METADATA_TIMEOUT_MS } from '../timeouts.js';
+import { getAppHome } from '../config/paths.js';
+import { PROVIDER_METADATA_TIMEOUT_MS } from '../config/timeouts.js';
 import { normalizeModelIdCandidates } from './pricing.js';
+import { diagnosticRecord } from '../observability/trace-log.js';
 
 const MODELS_DEV_API_URL = 'https://models.dev/api.json';
 const FETCH_TIMEOUT_MS = PROVIDER_METADATA_TIMEOUT_MS;
@@ -40,7 +42,17 @@ interface ModelsDevProvider {
   models?: Record<string, ModelsDevModel>;
 }
 
-export type ModelsDevCacheFile = Record<string, ModelsDevProvider>;
+export interface ModelsDevCacheFile {
+  [providerId: string]: ModelsDevProvider | ModelsDevCacheMeta;
+}
+
+interface ModelsDevProviderCache {
+  [providerId: string]: ModelsDevProvider;
+}
+
+interface ModelsDevPayload {
+  value: object;
+}
 
 export interface ModelsDevCacheMeta {
   schema_version?: string;
@@ -51,12 +63,16 @@ export interface ModelsDevCacheMeta {
 
 const META_KEY = '_relay_meta';
 
+interface RegistryModelsDevMap {
+  [providerId: string]: string;
+}
+
 let memoryCache: ModelsDevCacheFile | null = null;
 let memoryCachePath: string | null = null;
 let memoryCacheMtime = 0;
 
 /** Registry / OpenCode provider id → models.dev top-level key */
-const REGISTRY_TO_MODELS_DEV: Record<string, string> = {
+const REGISTRY_TO_MODELS_DEV: RegistryModelsDevMap = {
   google: 'google',
   openai: 'openai',
   groq: 'groq',
@@ -77,18 +93,41 @@ const REGISTRY_TO_MODELS_DEV: Record<string, string> = {
 export function readModelsDevCacheMeta(
   cache: ModelsDevCacheFile,
 ): ModelsDevCacheMeta | null {
-  const raw = cache[META_KEY] as unknown as ModelsDevCacheMeta | undefined;
-  if (!raw || typeof raw !== 'object') return null;
-  return raw;
+  const raw = cache[META_KEY];
+  if (!raw || !isObject(raw)) return null;
+  const fields = diagnosticRecord(raw);
+  const meta: ModelsDevCacheMeta = {};
+  if (isString(fields.schema_version)) meta.schema_version = fields.schema_version;
+  if (isString(fields.fetched_at)) meta.fetched_at = fields.fetched_at;
+  if (isString(fields.source)) meta.source = fields.source;
+  if (isNumber(fields.provider_count)) meta.provider_count = fields.provider_count;
+  return meta;
 }
 
-export function stripModelsDevCacheMeta(cache: ModelsDevCacheFile): ModelsDevCacheFile {
-  const { [META_KEY]: _meta, ...providers } = cache;
+export function stripModelsDevCacheMeta(cache: ModelsDevCacheFile): ModelsDevProviderCache {
+  const providers: ModelsDevProviderCache = {};
+  for (const [key, value] of Object.entries(cache)) {
+    if (key === META_KEY) continue;
+    const provider: ModelsDevProvider = {};
+    Object.assign(provider, value);
+    providers[key] = provider;
+  }
   return providers;
 }
 
+function modelsDevProviderCache(value: ModelsDevPayload['value']): ModelsDevProviderCache {
+  const cache: ModelsDevProviderCache = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (!entry || !isObject(entry) || Array.isArray(entry)) continue;
+    const provider: ModelsDevProvider = {};
+    Object.assign(provider, entry);
+    cache[key] = provider;
+  }
+  return cache;
+}
+
 export function loadBundledModelsDevCache(): ModelsDevCacheFile {
-  return bundledCache as unknown as ModelsDevCacheFile;
+  return modelsDevProviderCache(bundledCache);
 }
 
 function invalidateModelsDevCache(): void {
@@ -100,7 +139,8 @@ function invalidateModelsDevCache(): void {
 function readModelsDevFile(path: string): ModelsDevCacheFile | null {
   if (!existsSync(path)) return null;
   try {
-    return JSON.parse(readFileSync(path, 'utf8')) as ModelsDevCacheFile;
+    const cache: ModelsDevCacheFile = JSON.parse(readFileSync(path, 'utf8'));
+    return cache;
   } catch {
     return null;
   }
@@ -115,18 +155,18 @@ function mkdirSafe(dir: string): void {
 }
 
 function attachModelsDevCacheMeta(
-  providers: Record<string, ModelsDevProvider>,
+  providers: ModelsDevProviderCache,
 ): ModelsDevCacheFile {
   const providerCount = Object.keys(providers).filter(k => !k.startsWith('_')).length;
-  return {
-    [META_KEY]: {
+  return Object.fromEntries([
+    [META_KEY, {
       schema_version: '1',
       fetched_at: new Date().toISOString(),
       source: MODELS_DEV_API_URL,
       provider_count: providerCount,
-    },
-    ...providers,
-  } as ModelsDevCacheFile;
+    }],
+    ...Object.entries(providers),
+  ]);
 }
 
 function writeModelsDevCache(path: string, data: ModelsDevCacheFile): void {
@@ -183,7 +223,9 @@ async function fetchModelsDevCache(): Promise<ModelsDevCacheFile | null> {
       headers: { Accept: 'application/json' },
     });
     if (!response.ok) return null;
-    const data = (await response.json()) as Record<string, ModelsDevProvider>;
+    const raw = await response.json();
+    if (!raw || !isObject(raw) || Array.isArray(raw)) return null;
+    const data = modelsDevProviderCache(raw);
     const withMeta = attachModelsDevCacheMeta(data);
     writeModelsDevCache(getUserModelsDevCachePath(), withMeta);
     return withMeta;

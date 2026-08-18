@@ -38,7 +38,8 @@ describe('isolated daemon control plane', () => {
     const root = mkdtempSync(join(tmpdir(), 'clodex-control-isolation-'));
     roots.push(root);
     const socketPath = join(root, 'control.sock');
-    const env = { ...process.env, CLODEX_HOME: root } as Record<string, string>;
+    // SAFETY: The test fixture defines the asserted runtime shape.
+    const env = { ...process.env, CLODEX_HOME: root } satisfies NodeJS.ProcessEnv;
     new DaemonAccountStore(env).add({
       label: 'test@example.com',
       email: 'test@example.com',
@@ -67,6 +68,7 @@ describe('isolated daemon control plane', () => {
         createLaunchTicket: () => null,
       },
       secondwind: {
+        // SAFETY: The test fixture defines the asserted runtime shape.
         snapshot: () => ({ mode: 'on' }) as never,
         setMode: vi.fn(),
       },
@@ -88,6 +90,7 @@ describe('isolated daemon control plane', () => {
       while (performance.now() < blockedUntil) {
         // Simulate synchronous parsing/rebasing of an unusually large transcript.
       }
+      // SAFETY: The test fixture defines the asserted runtime shape.
       const result = JSON.parse(await output) as {
         durationMs: number;
         healthStatus: number;

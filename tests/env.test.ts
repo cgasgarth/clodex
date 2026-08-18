@@ -9,7 +9,7 @@ import {
   providerKeyringAccount,
   clodexKeyEnvVar,
   resolveProviderCredential,
-} from '../src/env.js';
+} from '../src/config/environment.js';
 
 const TEST_HELPER_ID = 'a'.repeat(64);
 import { CONFLICTING_ENV_VARS } from '../src/constants.js';

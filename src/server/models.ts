@@ -1,11 +1,11 @@
 // src/server/models.ts
-import { resolveContextWindow } from '../context-window.js';
-import { aliasModelId } from '../proxy.js';
+import { resolveContextWindow } from '../models/context-window.js';
+import { aliasModelId } from '../proxy/index.js';
 import { httpProxyModelId } from '../http-proxy/routes.js';
-import { normalizeModelAliases } from '../model-aliases.js';
+import { normalizeModelAliases } from '../models/aliases.js';
 import { maskGatewayModelId } from './vendor-mask.js';
-import type { FreeStatus } from '../free-models.js';
-import type { ModelAlias } from '../types.js';
+import type { FreeStatus } from '../models/free-models.js';
+import type { ModelAlias, ProviderDataValue } from '../types.js';
 
 export interface GatewayModelOptions {
   maskGatewayIds?: boolean;
@@ -56,7 +56,7 @@ export interface ServerModelInfo {
   /** Static headers sent on every upstream request (e.g. a plan/auth-tracking header a custom endpoint requires). */
   headers?: Record<string, string>;
   /** OAuth provider identity data (e.g. Claude Code's cliUserID/accountUUID) needed to fingerprint requests. */
-  providerData?: Record<string, unknown>;
+  providerData?: Record<string, ProviderDataValue>;
 }
 
 export interface ModelCatalog {
@@ -212,7 +212,7 @@ export interface ModelCatalogRow {
 export function buildDedupedModelRows(models: ServerModelInfo[], opts?: GatewayModelOptions): ModelCatalogRow[] {
   const seen = new Set<string>();
   const rows: ModelCatalogRow[] = [];
-  for (const model of [...models].sort((a, b) => a.name.localeCompare(b.name))) {
+  for (const model of [...models].toSorted((a, b) => a.name.localeCompare(b.name))) {
     const row: ModelCatalogRow = {
       name: model.name,
       anthropicId: exposedGatewayAliasId(model, opts),

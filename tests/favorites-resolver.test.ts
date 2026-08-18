@@ -4,9 +4,9 @@ import {
   buildFavoritesList,
   resolveFirstAvailableFavorite,
   type ResolveContext,
-} from '../src/favorites-resolver.js';
-import { shouldHideModel } from '../src/model-compatibility.js';
-import type { FavoriteModel, LocalProvider, ModelInfo } from '../src/types.js';
+} from '../src/models/favorites-resolver.js';
+import { shouldHideModel } from '../src/models/compatibility.js';
+import type { FavoriteModel, LocalProvider } from '../src/types.js';
 
 const sampleLocalProvider: LocalProvider = {
   id: 'anthropic',
@@ -217,6 +217,7 @@ describe('buildFavoritesList', () => {
       id: 'empty-key',
       name: 'Empty Key',
       apiKey: '',
+      authRef: 'env:CLODEX_TEST_MISSING_KEY',
       authType: 'api',
       models: [{
         id: 'empty-key-model',

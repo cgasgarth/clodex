@@ -10,12 +10,12 @@ import {
   LOCAL_GATEWAY_API_KEY,
   setAnthropicCustomHeader,
   wrapperRequiresServer,
-} from '../src/wrapper-env.js';
+} from '../src/runtime/wrapper-env.js';
 import {
   readLiveServerRuntimeState,
   registerServerRuntimeState,
   type ServerRuntimeState,
-} from '../src/server-runtime.js';
+} from '../src/runtime/server-runtime.js';
 
 const baseEnv: NodeJS.ProcessEnv = {
   PATH: '/usr/bin',

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import { BunHttpResponse } from '../src/bun-http-response.js';
+import { BunHttpResponse } from '../src/transport/bun-http-response.js';
 
 describe('BunHttpResponse', () => {
   it('drops writes already in flight after the downstream body is cancelled', async () => {

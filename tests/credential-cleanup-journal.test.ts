@@ -17,7 +17,7 @@ import {
 } from '../src/registry/credential-cleanup-journal.js';
 import { emptyRegistry, saveRegistry } from '../src/registry/io.js';
 import { withRegistryWriteLockSync } from '../src/registry/lock.js';
-import { getCredentialCleanupPath, getProvidersPath } from '../src/paths.js';
+import { getCredentialCleanupPath, getProvidersPath } from '../src/config/paths.js';
 
 const TEST_HELPER_ID = 'a'.repeat(64);
 const helperRef = (account: string): string => `helper:v1:${TEST_HELPER_ID}:${account}`;
@@ -56,9 +56,10 @@ describe('credential cleanup journal', () => {
 
     const registry = emptyRegistry();
     withRegistryWriteLockSync(() => saveRegistry(registry));
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const persistedRegistry = JSON.parse(
       readFileSync(getProvidersPath(), 'utf8'),
-    ) as Record<string, unknown>;
+    ) as { providers: never[]; schemaVersion: number };
 
     expect(persistedRegistry).toEqual({ schemaVersion: 1, providers: [] });
     expect(await loadPendingCredentialDeletes()).toEqual([authRef]);
@@ -175,7 +176,7 @@ describe('credential cleanup journal', () => {
     );
   });
 
-  (typeof process.getuid === 'function' ? it : it.skip)(
+  (process.getuid ? it : it.skip)(
     'rejects a journal with group or other permissions',
     async () => {
       writeFileSync(getCredentialCleanupPath(), JSON.stringify({

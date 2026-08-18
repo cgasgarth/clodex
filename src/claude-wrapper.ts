@@ -27,15 +27,15 @@
 import { spawn } from 'node:child_process';
 import { accessSync, constants as fsConstants, statSync } from 'node:fs';
 import { constants as osConstants } from 'node:os';
-import { findClaudeBinary } from './launch.js';
-import { waitForTcpListenerCandidate } from './listener-ready.js';
+import { findClaudeBinary } from './runtime/launch.js';
+import { waitForTcpListenerCandidate } from './transport/listener-ready.js';
 import {
   orderWrapperServerCandidates,
   isPidAlive,
   readLiveServerRuntimeStates,
   type ServerRuntimeState,
-} from './server-runtime.js';
-import { computeWrapperEnv, wrapperRequiresServer } from './wrapper-env.js';
+} from './runtime/server-runtime.js';
+import { computeWrapperEnv, wrapperRequiresServer } from './runtime/wrapper-env.js';
 import { daemonControlRequest } from './daemon/control-client.js';
 import { readDaemonRuntimeState } from './daemon/runtime.js';
 
@@ -84,7 +84,7 @@ function isExecutableFile(path: string): boolean {
  * catchable; claude has not been launched when they throw.
  */
 function execIntoClaude(file: string, args: string[], env: NodeJS.ProcessEnv): void {
-  if (isWindows || typeof process.execve !== 'function') return;
+  if (isWindows || process.execve === undefined) return;
   if (!isExecutableFile(file)) return;
 
   try {

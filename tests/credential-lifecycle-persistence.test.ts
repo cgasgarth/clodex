@@ -7,18 +7,18 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
-import { credentialAuthRef } from '../src/credential-helper.js';
+import { credentialAuthRef } from '../src/credentials/helper.js';
 import {
   resolveProviderCredential,
   saveProviderCredential,
-} from '../src/env.js';
+} from '../src/config/environment.js';
 import {
   journalCredentialWrite,
   reconcilePendingCredentialDeletes,
 } from '../src/registry/credential-lifecycle.js';
 import { emptyRegistry, saveRegistry } from '../src/registry/io.js';
 import { withRegistryWriteLockSync } from '../src/registry/lock.js';
-import { getProvidersPath } from '../src/paths.js';
+import { getProvidersPath } from '../src/config/paths.js';
 
 const helperPath = fileURLToPath(
   new URL('./fixtures/credential-helper.mjs', import.meta.url),

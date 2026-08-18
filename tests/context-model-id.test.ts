@@ -4,7 +4,7 @@ import {
   normalizeRouteLookupId,
   routeLookupIds,
   stripOneMContextSuffix,
-} from '../src/context-model-id.js';
+} from '../src/models/context-model-id.js';
 
 describe('claudeCodeClientModelId', () => {
   it('appends [1m] for a genuine 1M context', () => {

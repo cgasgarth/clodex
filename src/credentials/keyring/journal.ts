@@ -106,8 +106,8 @@ export function reconcileKeyringJournal(
       mode: 'delete',
       generations: currentMarker ? [currentMarker] : [],
       blockLegacy: true,
-      ...(unverifiable ? { unverifiable: true } : {}),
     };
+    if (unverifiable) resumedJournal.unverifiable = true;
     try {
       writeKeyringJournal(keyring, account, resumedJournal);
     } catch (err) {
@@ -118,7 +118,7 @@ export function reconcileKeyringJournal(
   }
 
   let activeMarker: KeyringChunkMarker | null = null;
-  let activeShortDigest: string | null = null;
+  let activeShortCredentialDigest: string | null = null;
   if (journal.mode === 'delete') {
     let currentMarker: KeyringChunkMarker | null = null;
     let activeShortDigest = journal.shortDigest;
@@ -186,10 +186,10 @@ export function reconcileKeyringJournal(
     const preparedJournal: KeyringChunkJournal = {
       mode: 'delete',
       generations: preparedGenerations,
-      ...(activeShortDigest ? { shortDigest: activeShortDigest } : {}),
-      ...(journal.blockLegacy ? { blockLegacy: true } : {}),
-      ...(unverifiable ? { unverifiable: true } : {}),
     };
+    if (activeShortDigest) preparedJournal.shortDigest = activeShortDigest;
+    if (journal.blockLegacy) preparedJournal.blockLegacy = true;
+    if (unverifiable) preparedJournal.unverifiable = true;
     if (encodeKeyringJournal(preparedJournal) !== rawJournal) {
       try {
         writeKeyringJournal(keyring, account, preparedJournal);
@@ -256,7 +256,7 @@ export function reconcileKeyringJournal(
       journal.fallbackShortDigest &&
       createHash('sha256').update(activeValue).digest('hex') === journal.fallbackShortDigest
     ) {
-      activeShortDigest = journal.fallbackShortDigest;
+      activeShortCredentialDigest = journal.fallbackShortDigest;
     } else {
       try {
         activeMarker = parseKeyringChunkMarker(activeValue);
@@ -318,7 +318,7 @@ export function reconcileKeyringJournal(
             const encodedCandidate = encodeKeyringChunkMarker(candidate);
             accountEntry.setPassword(encodedCandidate);
             if (readKeyringEntry(keyring, KEYRING_SERVICE, account) !== encodedCandidate) {
-              throw new Error('keyring credential recovery verification failed');
+              throw new Error('keyring credential recovery verification failed', { cause: err });
             }
             activeMarker = candidate;
             recovered = true;
@@ -347,9 +347,9 @@ export function reconcileKeyringJournal(
     } else {
       const observedDigest = createHash('sha256').update(activeValue).digest('hex');
       if (observedDigest === journal.shortDigest) {
-        activeShortDigest = observedDigest;
+        activeShortCredentialDigest = observedDigest;
       } else if (observedDigest === journal.fallbackShortDigest) {
-        activeShortDigest = observedDigest;
+        activeShortCredentialDigest = observedDigest;
       } else {
         try {
           activeMarker = parseKeyringChunkMarker(activeValue);
@@ -393,8 +393,8 @@ export function reconcileKeyringJournal(
     const verifiedDelete: KeyringChunkJournal = {
       mode: 'delete',
       generations: [],
-      ...(journal.blockLegacy ? { blockLegacy: true } : {}),
     };
+    if (journal.blockLegacy) verifiedDelete.blockLegacy = true;
     try {
       writeKeyringJournal(keyring, account, verifiedDelete);
       journal = verifiedDelete;
@@ -440,11 +440,11 @@ export function reconcileKeyringJournal(
     }
   }
 
-  if (activeShortDigest) {
+  if (activeShortCredentialDigest) {
     const activeInventory: KeyringChunkJournal = {
       mode: 'short',
       generations: [],
-      shortDigest: activeShortDigest,
+      shortDigest: activeShortCredentialDigest,
     };
     if (encodeKeyringJournal(activeInventory) !== rawJournal) {
       try {

@@ -5,7 +5,7 @@ import {
   modelAliasTarget,
   normalizeModelAliases,
   parseModelAliasAssignment,
-} from '../src/model-aliases.js';
+} from '../src/models/aliases.js';
 
 describe('model aliases', () => {
   it('parses canonical and prefix-free targets while preserving colons in model ids', () => {

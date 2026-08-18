@@ -25,6 +25,21 @@ interface BenchmarkRow {
   poolWarm: Timings;
 }
 
+interface RewriteResult {
+  body: Uint8Array;
+  stats?: RewriteStats;
+}
+
+interface NativeBenchmarkResult {
+  result: RewriteResult;
+  timings: Timings;
+}
+
+interface PersistentBenchmarkResult {
+  firstMs: number;
+  resend: Timings;
+}
+
 const decoder = new TextDecoder();
 const encoder = new TextEncoder();
 const defaultSizesMiB = [0.25, 1, 3, 5, 8];
@@ -52,7 +67,7 @@ function sizeArguments(): number[] {
 
 function percentile(values: number[], fraction: number): number {
   if (values.length === 0) return 0;
-  const sorted = [...values].sort((left, right) => left - right);
+  const sorted = values.toSorted((left, right) => left - right);
   return sorted[Math.min(sorted.length - 1, Math.ceil(sorted.length * fraction) - 1)] ?? 0;
 }
 
@@ -103,8 +118,9 @@ function createRequestBody(targetMiB: number): Uint8Array {
 function rewriteWithSession(
   session: Session,
   body: Uint8Array,
-): { body: Uint8Array; stats?: RewriteStats } {
-  const request = JSON.parse(decoder.decode(body)) as Record<string, unknown>;
+): RewriteResult {
+  // SAFETY: createRequestBody produces the request shape that secondwind Session.rewrite owns.
+  const request = JSON.parse(decoder.decode(body)) as Parameters<Session['rewrite']>[0];
   const result = session.rewrite(request);
   return {
     body: encoder.encode(JSON.stringify(result.request)),
@@ -112,7 +128,7 @@ function rewriteWithSession(
   };
 }
 
-function directRewrite(body: Uint8Array): { body: Uint8Array; stats?: RewriteStats } {
+function directRewrite(body: Uint8Array): RewriteResult {
   const session = new Session();
   try {
     return rewriteWithSession(session, body);
@@ -121,10 +137,7 @@ function directRewrite(body: Uint8Array): { body: Uint8Array; stats?: RewriteSta
   }
 }
 
-function benchmarkNative(body: Uint8Array, iterations: number): {
-  result: ReturnType<typeof directRewrite>;
-  timings: Timings;
-} {
+function benchmarkNative(body: Uint8Array, iterations: number): NativeBenchmarkResult {
   const samples: number[] = [];
   let result: ReturnType<typeof directRewrite> | undefined;
   for (let iteration = 0; iteration < iterations; iteration += 1) {
@@ -136,10 +149,7 @@ function benchmarkNative(body: Uint8Array, iterations: number): {
   return { result, timings: timings(samples) };
 }
 
-function benchmarkPersistent(body: Uint8Array, iterations: number): {
-  firstMs: number;
-  resend: Timings;
-} {
+function benchmarkPersistent(body: Uint8Array, iterations: number): PersistentBenchmarkResult {
   const session = new Session();
   try {
     const startedFirstAt = performance.now();

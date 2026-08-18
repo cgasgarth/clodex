@@ -2,21 +2,22 @@ import * as p from '@clack/prompts';
 import { readFileSync } from 'node:fs';
 import type { ParsedArgs } from '../types.js';
 import { restartDaemonIfRunning } from '../daemon/index.js';
-import { getConfigPath, getProvidersPath } from '../paths.js';
+import { getConfigPath, getProvidersPath } from '../config/paths.js';
 import { resolveCliRuntimePaths } from './runtime-paths.js';
 
 const STARTER_CLAUDE_FLAGS = new Set(['--dry-run', '--trace', '--fast', '--endpoint', '--proxy', '--save-mode', '--help', '-h', '--version', '-v']);
 const CLODEX_LAUNCH_FLAGS = new Set(['--provider', '--model']);
 
+function readCatalogFile(path: string): string {
+  try {
+    return readFileSync(path, 'utf8');
+  } catch {
+    return '';
+  }
+}
+
 function daemonCatalogSnapshot(): string {
-  const read = (path: string) => {
-    try {
-      return readFileSync(path, 'utf8');
-    } catch {
-      return '';
-    }
-  };
-  return `${read(getConfigPath())}\0${read(getProvidersPath())}`;
+  return `${readCatalogFile(getConfigPath())}\0${readCatalogFile(getProvidersPath())}`;
 }
 
 export async function runCatalogCommand(

@@ -37,6 +37,8 @@ export function localProviderToRegistry(
   const first = provider.models[0]!;
   const apiUrl = (first.apiBaseUrl ?? first.baseUrl)?.trim();
   const authType = opts?.authType ?? 'api';
+  const api: RegistryProvider['api'] = { npm: first.npm };
+  if (apiUrl) api.url = apiUrl;
   return {
     id: provider.id,
     templateId: opts?.templateId ?? provider.id,
@@ -44,10 +46,7 @@ export function localProviderToRegistry(
     enabled: true,
     authRef: opts?.authRef ?? `keyring:provider:${provider.id}`,
     authType,
-    api: {
-      npm: first.npm,
-      ...(apiUrl ? { url: apiUrl } : {}),
-    },
+    api,
     addedAt: new Date().toISOString(),
     modelsCache: {
       fetchedAt: new Date().toISOString(),

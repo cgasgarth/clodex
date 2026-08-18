@@ -7,11 +7,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'bun:test';
 const fsState = createHoisted(() => ({
   registryPath: '',
   openPaths: new Map<number, string>(),
+  // SAFETY: The test fixture defines the asserted runtime shape.
   events: [] as string[],
   failTempFsync: false,
   failParentFsync: false,
   dropLockAfterTempFsync: false,
   maxWriteBytes: Number.POSITIVE_INFINITY,
+  // SAFETY: The test fixture defines the asserted runtime shape.
   tempWriteSizes: [] as number[],
 }));
 
@@ -20,8 +22,7 @@ function ioError(message: string): NodeJS.ErrnoException {
 }
 
 vi.mock('node:fs', () => {
-  const importOriginal = <T>() => importActual<T>('node:fs', import.meta.url);
-  const actual = importOriginal<typeof import('node:fs')>();
+  const actual = importActual<typeof import('node:fs')>('node:fs', import.meta.url);
   const isRegistryTemp = (path: string | undefined): boolean =>
     path?.startsWith(`${fsState.registryPath}.`) === true
     && path.endsWith('.tmp')

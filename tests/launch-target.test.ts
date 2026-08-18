@@ -9,7 +9,7 @@ import {
   planLaunchWizard,
   resolveLaunchTarget,
   wantsCleanAgentStdout,
-} from '../src/launch-target.js';
+} from '../src/runtime/launch-target.js';
 import type { LocalProvider } from '../src/types.js';
 
 const providers: LocalProvider[] = [

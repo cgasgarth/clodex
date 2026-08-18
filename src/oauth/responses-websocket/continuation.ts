@@ -1,13 +1,18 @@
 import { createHash } from 'node:crypto';
-import { IMAGE_INPUT_TOKEN_ESTIMATE } from '../../anthropic-endpoints.js';
+import { IMAGE_INPUT_TOKEN_ESTIMATE } from '../../providers/anthropic-endpoints.js';
+import { isBoolean, isNumber, isObject, isString } from '../../runtime/type-guards.js';
 import { RESPONSES_COMPACTION_RETAINED_USER_TOKENS } from './types.js';
-import type { JsonObject, ConnectionEntry } from './types.js';
+import type { JsonObject, JsonValue, ConnectionEntry } from './types.js';
 import { canonicalJson, inputArray } from './fingerprint.js';
 
-function normalizeToolCallJson(value: unknown): unknown {
+function isJsonObject(value: JsonValue): value is JsonObject {
+  return isObject(value) && !Array.isArray(value);
+}
+
+function normalizeToolCallJson(value: JsonValue): JsonValue {
   if (Array.isArray(value)) return value.map(normalizeToolCallJson);
-  if (!value || typeof value !== 'object') return value;
-  const record = value as JsonObject;
+  if (!isJsonObject(value)) return value;
+  const record = value;
   const out: JsonObject = {};
   for (const [key, child] of Object.entries(record)) out[key] = normalizeToolCallJson(child);
 
@@ -18,7 +23,7 @@ function normalizeToolCallJson(value: unknown): unknown {
   const jsonField = record.type === 'function_call'
     ? 'arguments'
     : record.type === 'custom_tool_call' ? 'input' : undefined;
-  if (jsonField && typeof record[jsonField] === 'string') {
+  if (jsonField && isString(record[jsonField])) {
     try {
       out[jsonField] = canonicalJson(JSON.parse(record[jsonField]));
     } catch {
@@ -35,24 +40,33 @@ export type ContinuationMatchMode =
   | 'claude_compaction_summary'
   | 'claude_compaction_request';
 
+interface ContinuationMatchRanks {
+  exact: number;
+  replayed_reasoning: number;
+  omitted_reasoning: number;
+  claude_compaction_summary: number;
+  claude_compaction_request: number;
+}
+
 export function continuationMatchRank(mode: ContinuationMatchMode): number {
-  switch (mode) {
-    case 'exact': return 0;
-    case 'replayed_reasoning': return 1;
-    case 'omitted_reasoning': return 2;
-    case 'claude_compaction_summary': return 3;
-    case 'claude_compaction_request': return 4;
-  }
+  const ranks: ContinuationMatchRanks = {
+    exact: 0,
+    replayed_reasoning: 1,
+    omitted_reasoning: 2,
+    claude_compaction_summary: 3,
+    claude_compaction_request: 4,
+  };
+  return ranks[mode];
 }
 
 export interface ContinuationMatch {
-  delta: unknown[];
+  delta: JsonValue[];
   mode: ContinuationMatchMode;
 }
 
 export interface ContinuationSource {
-  requestInput?: unknown[];
-  expectedAssistant?: unknown[];
+  requestInput?: JsonValue[];
+  expectedAssistant?: JsonValue[];
   requestInputHashes?: string[];
   requestInputKinds?: string[];
   expectedAssistantHashes?: string[];
@@ -61,7 +75,7 @@ export interface ContinuationSource {
 }
 
 export interface PreparedConversationItems {
-  items: unknown[];
+  items: JsonValue[];
   hashes: string[];
 }
 
@@ -80,11 +94,14 @@ const CLAUDE_COMPACTION_SUMMARY_TRAILERS = [
 ] as const;
 const MIN_CLAUDE_COMPACTION_SUMMARY_CHARACTERS = 32;
 
-export function conversationItemKind(value: unknown): string {
-  if (!value || typeof value !== 'object') return typeof value;
-  const record = value as JsonObject;
-  if (typeof record.type === 'string') return record.type;
-  if (typeof record.role === 'string') return record.role;
+export function conversationItemKind(value: JsonValue): string {
+  if (isString(value)) return 'string';
+  if (isNumber(value)) return 'number';
+  if (isBoolean(value)) return 'boolean';
+  if (value === undefined) return 'undefined';
+  if (!isJsonObject(value)) return 'object';
+  if (isString(value.type)) return value.type;
+  if (isString(value.role)) return value.role;
   return 'object';
 }
 
@@ -96,20 +113,20 @@ function approximateTextTokens(text: string): number {
   return Math.ceil(Buffer.byteLength(text, 'utf8') / 4);
 }
 
-function retainedContentPartTokens(value: unknown): number {
-  if (!value || typeof value !== 'object') return 0;
-  const record = value as JsonObject;
-  if (typeof record.text === 'string') return approximateTextTokens(record.text);
+function retainedContentPartTokens(value: JsonValue): number {
+  if (!isJsonObject(value)) return 0;
+  const record = value;
+  if (isString(record.text)) return approximateTextTokens(record.text);
   return record.type === 'input_image' || record.type === 'input_audio'
     ? IMAGE_INPUT_TOKEN_ESTIMATE
     : 0;
 }
 
-function approximateRetainedMessageTokens(value: unknown): number {
-  if (!value || typeof value !== 'object') return 1;
-  const content = (value as JsonObject).content;
+function approximateRetainedMessageTokens(value: JsonValue): number {
+  if (!isJsonObject(value)) return 1;
+  const content = value.content;
   if (!Array.isArray(content)) return 1;
-  return Math.max(1, content.reduce(
+  return Math.max(1, content.reduce<number>(
     (tokens, part) => tokens + retainedContentPartTokens(part),
     0,
   ));
@@ -157,15 +174,15 @@ function truncateRetainedText(text: string, maxTokens: number): string {
   return `${head}${marker}${tail}`;
 }
 
-function truncateRetainedUserMessage(value: unknown, maxTokens: number): unknown {
-  if (!value || typeof value !== 'object' || maxTokens <= 0) return undefined;
-  const record = value as JsonObject;
+function truncateRetainedUserMessage(value: JsonValue, maxTokens: number): JsonValue {
+  if (!isJsonObject(value) || maxTokens <= 0) return undefined;
+  const record = value;
   if (record.role !== 'user' || !Array.isArray(record.content)) return undefined;
   let remainingTokens = maxTokens;
   const content = record.content.flatMap(part => {
-    if (!part || typeof part !== 'object') return [];
-    const partRecord = part as JsonObject;
-    if (typeof partRecord.text !== 'string') {
+    if (!isJsonObject(part)) return [];
+    const partRecord = part;
+    if (!isString(partRecord.text)) {
       const partTokens = retainedContentPartTokens(part);
       if (partTokens > remainingTokens) return [];
       remainingTokens -= partTokens;
@@ -190,11 +207,11 @@ function truncateRetainedUserMessage(value: unknown, maxTokens: number): unknown
  * messages only, bounded to 64K approximate tokens, followed by the opaque
  * native compaction item.
  */
-export function retainedUserMessages(input: unknown[]): unknown[] {
+export function retainedUserMessages(input: JsonValue[]): JsonValue[] {
   let remaining = RESPONSES_COMPACTION_RETAINED_USER_TOKENS;
-  const retainedReversed: unknown[] = [];
-  for (const item of [...input].reverse()) {
-    if (!item || typeof item !== 'object' || (item as JsonObject).role !== 'user') continue;
+  const retainedReversed: JsonValue[] = [];
+  for (const item of input.toReversed()) {
+    if (!isJsonObject(item) || item.role !== 'user') continue;
     const itemTokens = approximateRetainedMessageTokens(item);
     if (itemTokens <= remaining) {
       retainedReversed.push(item);
@@ -233,17 +250,15 @@ export function compactionSummaryHash(text: string): string | undefined {
   return createHash('sha256').update(normalized).digest('hex');
 }
 
-export function assistantCompactionSummaryText(items: unknown[]): string {
+export function assistantCompactionSummaryText(items: JsonValue[]): string {
   let selected = '';
   for (const item of items) {
-    if (!item || typeof item !== 'object') continue;
-    const record = item as JsonObject;
+    if (!isJsonObject(item)) continue;
+    const record = item;
     if (record.role !== 'assistant' || !Array.isArray(record.content)) continue;
     const textParts = record.content.flatMap(part => (
-      part
-      && typeof part === 'object'
-      && typeof (part as JsonObject).text === 'string'
-        ? [(part as JsonObject).text as string]
+      isJsonObject(part) && isString(part.text)
+        ? [part.text]
         : []
     ));
     if (textParts.some(text => text.includes('<summary>'))) {
@@ -261,13 +276,13 @@ interface ClaudeCompactionEnvelope {
 export function claudeCompactionEnvelopeOccurrenceCount(payload: JsonObject): number {
   let count = 0;
   for (const item of inputArray(payload)) {
-    if (!item || typeof item !== 'object') continue;
-    const record = item as JsonObject;
+    if (!isJsonObject(item)) continue;
+    const record = item;
     if (record.role !== 'user' || !Array.isArray(record.content)) continue;
     for (const part of record.content) {
-      if (!part || typeof part !== 'object') continue;
-      const text = (part as JsonObject).text;
-      if (typeof text !== 'string') continue;
+      if (!isJsonObject(part)) continue;
+      const text = part.text;
+      if (!isString(text)) continue;
       let offset = 0;
       while (true) {
         const index = text.indexOf(CLAUDE_COMPACTION_CONTINUATION_PREFIX, offset);
@@ -302,7 +317,7 @@ function parseClaudeCompactionEnvelope(text: string): ClaudeCompactionEnvelope |
   const trailingText = suffixIndex === -1
     ? undefined
     : body.slice(suffixIndex + CLAUDE_COMPACTION_CONTINUATION_SUFFIX.length + 1).trim();
-  return { summaryHash, ...(trailingText ? { trailingText } : {}) };
+  return { summaryHash, trailingText: trailingText || undefined };
 }
 
 /**
@@ -319,27 +334,23 @@ function claudeCompactionContinuationMatch(
   const full = inputArray(payload);
   for (let itemIndex = 0; itemIndex < full.length; itemIndex += 1) {
     const item = full[itemIndex];
-    if (!item || typeof item !== 'object') continue;
-    const record = item as JsonObject;
+    if (!isJsonObject(item)) continue;
+    const record = item;
     if (record.role !== 'user' || !Array.isArray(record.content)) continue;
     for (let partIndex = 0; partIndex < record.content.length; partIndex += 1) {
       const part = record.content[partIndex];
-      if (!part || typeof part !== 'object') continue;
-      const partRecord = part as JsonObject;
-      if (typeof partRecord.text !== 'string') continue;
+      if (!isJsonObject(part)) continue;
+      const partRecord = part;
+      if (!isString(partRecord.text)) continue;
       const envelope = parseClaudeCompactionEnvelope(partRecord.text);
       if (!envelope || envelope.summaryHash !== entry.claudeCompactionSummaryHash) continue;
 
-      const remainingContent = [
-        ...(envelope.trailingText
-          ? [{ ...partRecord, text: envelope.trailingText }]
-          : []),
-        ...record.content.slice(partIndex + 1),
-      ];
-      const delta = [
-        ...(remainingContent.length ? [{ ...record, content: remainingContent }] : []),
-        ...full.slice(itemIndex + 1),
-      ];
+      const remainingContent = record.content.slice(partIndex + 1);
+      if (envelope.trailingText) {
+        remainingContent.unshift({ ...partRecord, text: envelope.trailingText });
+      }
+      const delta = full.slice(itemIndex + 1);
+      if (remainingContent.length) delta.unshift({ ...record, content: remainingContent });
       return delta.length
         ? { delta, mode: 'claude_compaction_summary' }
         : undefined;
@@ -348,7 +359,7 @@ function claudeCompactionContinuationMatch(
   return undefined;
 }
 
-export function conversationItemHash(value: unknown): string {
+export function conversationItemHash(value: JsonValue): string {
   return createHash('sha256').update(canonicalJson(normalizeToolCallJson(value))).digest('hex').slice(0, 16);
 }
 
@@ -362,7 +373,7 @@ export function continuationMismatchDetails(
   entry: ConnectionEntry,
   payload: JsonObject,
   prepared = prepareConversationItems(payload),
-): Record<string, unknown> {
+): JsonObject {
   const full = prepared.items;
   const prefix = [...(entry.requestInput ?? []), ...(entry.expectedAssistant ?? [])];
   const prefixHashes = [
@@ -379,21 +390,27 @@ export function continuationMismatchDetails(
   }
   const expected = mismatch < prefix.length ? prefix[mismatch] : undefined;
   const actual = mismatch < full.length ? full[mismatch] : undefined;
-  return {
+  const details: JsonObject = {
     fullItems: full.length,
     expectedPrefixItems: prefix.length,
     firstMismatch: mismatch,
     expectedKind: expected === undefined ? 'none' : conversationItemKind(expected),
     actualKind: actual === undefined ? 'none' : conversationItemKind(actual),
-    ...(expected !== undefined ? { expectedHash: prefixHashes[mismatch] } : {}),
-    ...(actual !== undefined ? { actualHash: prepared.hashes[mismatch] } : {}),
   };
+  if (expected !== undefined) details.expectedHash = prefixHashes[mismatch];
+  if (actual !== undefined) details.actualHash = prepared.hashes[mismatch];
+  return details;
 }
 
 export function continuationMismatchSummary(entry: ConnectionEntry, payload: JsonObject): string {
   const details = continuationMismatchDetails(entry, payload);
-  return `full_items=${details.fullItems} expected_prefix_items=${details.expectedPrefixItems} `
-    + `first_mismatch=${details.firstMismatch} expected=${details.expectedKind} actual=${details.actualKind}`;
+  const fullItems = isNumber(details.fullItems) ? details.fullItems : 0;
+  const expectedPrefixItems = isNumber(details.expectedPrefixItems) ? details.expectedPrefixItems : 0;
+  const firstMismatch = isNumber(details.firstMismatch) ? details.firstMismatch : 0;
+  const expectedKind = isString(details.expectedKind) ? details.expectedKind : 'none';
+  const actualKind = isString(details.actualKind) ? details.actualKind : 'none';
+  return `full_items=${fullItems} expected_prefix_items=${expectedPrefixItems} `
+    + `first_mismatch=${firstMismatch} expected=${expectedKind} actual=${actualKind}`;
 }
 
 export function historyContinuationMatch(
@@ -482,34 +499,37 @@ export function historyContinuationMatch(
     && fullHashes.slice(0, requestHashes.length)
       .every((hash, index) => hash === requestHashes[index])
   ) {
-    let fullIndex = requestHashes.length;
-    let expectedIndex = 0;
+    let reasoningFullIndex = requestHashes.length;
+    let reasoningExpectedIndex = 0;
     let ignoredReasoning = false;
-    let replayedReasoning = false;
-    while (expectedIndex < assistantHashes.length) {
-      if (assistantKinds[expectedIndex] === 'reasoning') {
+    let replayedReasoningEnvelope = false;
+    while (reasoningExpectedIndex < assistantHashes.length) {
+      if (assistantKinds[reasoningExpectedIndex] === 'reasoning') {
         ignoredReasoning = true;
-        expectedIndex += 1;
+        reasoningExpectedIndex += 1;
         while (
-          fullIndex < full.length
-          && conversationItemKind(full[fullIndex]) === 'reasoning'
+          reasoningFullIndex < full.length
+          && conversationItemKind(full[reasoningFullIndex]) === 'reasoning'
         ) {
-          replayedReasoning = true;
-          fullIndex += 1;
+          replayedReasoningEnvelope = true;
+          reasoningFullIndex += 1;
         }
         continue;
       }
-      if (fullIndex >= full.length || fullHashes[fullIndex] !== assistantHashes[expectedIndex]) break;
-      expectedIndex += 1;
-      fullIndex += 1;
+      if (
+        reasoningFullIndex >= full.length
+        || fullHashes[reasoningFullIndex] !== assistantHashes[reasoningExpectedIndex]
+      ) break;
+      reasoningExpectedIndex += 1;
+      reasoningFullIndex += 1;
     }
     if (
       ignoredReasoning
-      && replayedReasoning
-      && expectedIndex === assistantHashes.length
-      && fullIndex < full.length
+      && replayedReasoningEnvelope
+      && reasoningExpectedIndex === assistantHashes.length
+      && reasoningFullIndex < full.length
     ) {
-      return { delta: full.slice(fullIndex), mode: 'replayed_reasoning' };
+      return { delta: full.slice(reasoningFullIndex), mode: 'replayed_reasoning' };
     }
   }
 

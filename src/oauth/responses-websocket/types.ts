@@ -49,7 +49,7 @@ export interface ResponsesWebSocketFetchOptions {
   onDiagnostic?: (event: ResponsesWebSocketDiagnosticEvent) => void;
 }
 
-export interface ResponsesWebSocketDiagnosticEvent extends Record<string, unknown> {
+export interface ResponsesWebSocketDiagnosticEvent extends JsonObject {
   event: string;
   requestId?: string;
 }
@@ -72,14 +72,24 @@ export function withResponsesWebSocketDiagnosticContext<T>(
   return diagnosticContext.run(context, fn);
 }
 
-export type JsonObject = Record<string, unknown>;
+export type JsonValue =
+  | string
+  | number
+  | boolean
+  | null
+  | undefined
+  | JsonValue[]
+  | JsonObject;
+export interface JsonObject {
+  [key: string]: JsonValue;
+}
 export type RawData = Buffer | ArrayBuffer | Buffer[];
 
 export interface ResponsesWebSocket {
   send(data: string, callback?: (error?: Error) => void): void;
   close(code?: number, reason?: string): void;
   on(event: 'open', listener: () => void): this;
-  on(event: 'unexpected-response', listener: (request: unknown, response: import('node:http').IncomingMessage) => void): this;
+  on(event: 'unexpected-response', listener: (request: import('node:http').ClientRequest, response: import('node:http').IncomingMessage) => void): this;
   on(event: 'message', listener: (data: RawData) => void): this;
   on(event: 'error', listener: (error: Error) => void): this;
   on(event: 'close', listener: (code: number, reason: Buffer) => void): this;
@@ -102,7 +112,7 @@ export interface RequestContext {
   /** Retry payload after a successful native compact call. */
   retryPayload?: JsonObject;
   /** Canonical stateless history from the latest compact item through this input. */
-  compactedInputBase?: unknown[];
+  compactedInputBase?: JsonValue[];
   /** Pre-compaction head retained until the rebased request completes. */
   supersededEntry?: ConnectionEntry;
   /** This request is Claude Code's own portable-summary compaction turn. */
@@ -126,7 +136,7 @@ export interface RequestContext {
   contextWindow?: number;
   postCompactionInputTokens?: number;
   nextCompactionInputTokens?: number;
-  pendingEvents: unknown[];
+  pendingEvents: JsonValue[];
   emittedModelData: boolean;
   transportRetryPending: boolean;
   overflowRecoveryPending: boolean;
@@ -137,7 +147,7 @@ export interface RequestContext {
   reasoningPartsByItemId: Map<string, Map<number, ReasoningPartState>>;
   recentUpstreamEventTypes: string[];
   emittedProtocolAnomalies: Set<string>;
-  emitDiagnostic?: (event: { event: string } & Record<string, unknown>) => void;
+  emitDiagnostic?: (event: { event: string } & JsonObject) => void;
   entry?: ConnectionEntry;
   createReplacement: () => ConnectionEntry;
   abortCleanup?: () => void;
@@ -166,14 +176,14 @@ export interface ConnectionEntry {
   promptFieldHashes?: Record<string, string>;
   instructionsSnapshot?: string;
   responseId?: string;
-  requestInput?: unknown[];
-  expectedAssistant?: unknown[];
+  requestInput?: JsonValue[];
+  expectedAssistant?: JsonValue[];
   /** Canonical item hashes cached when this conversation head is completed. */
   requestInputHashes?: string[];
   requestInputKinds?: string[];
   expectedAssistantHashes?: string[];
   expectedAssistantKinds?: string[];
-  compactedInput?: unknown[];
+  compactedInput?: JsonValue[];
   lastInputTokens?: number;
   postCompactionInputTokens?: number;
   nextCompactionInputTokens?: number;
@@ -189,13 +199,13 @@ export interface CompactionCheckpoint {
   lineageId: number;
   lineageKey: string;
   key: string;
-  requestInput?: unknown[];
-  expectedAssistant?: unknown[];
+  requestInput?: JsonValue[];
+  expectedAssistant?: JsonValue[];
   requestInputHashes: string[];
   requestInputKinds: string[];
   expectedAssistantHashes: string[];
   expectedAssistantKinds: string[];
-  compactedInput?: unknown[];
+  compactedInput?: JsonValue[];
   lastInputTokens?: number;
   postCompactionInputTokens?: number;
   nextCompactionInputTokens?: number;
@@ -208,4 +218,4 @@ export interface CompactionCheckpoint {
   checkpointStoreMtimeMs?: number;
 }
 
-export type HydratedCompactionCheckpoint = CompactionCheckpoint & { compactedInput: unknown[] };
+export type HydratedCompactionCheckpoint = CompactionCheckpoint & { compactedInput: JsonValue[] };

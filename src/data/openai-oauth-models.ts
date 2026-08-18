@@ -15,8 +15,8 @@
 // Update this list when OpenAI adds new models to their ChatGPT OAuth offering.
 
 import type { CachedModel } from '../registry/types.js';
-import { resolveContextWindow } from '../context-window.js';
-import { deriveBrand } from '../models.js';
+import { resolveContextWindow } from '../models/context-window.js';
+import { deriveBrand } from '../models/types.js';
 
 interface OAuthModelSeed {
   id: string;

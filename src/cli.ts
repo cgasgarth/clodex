@@ -2,12 +2,12 @@ import pc from 'picocolors';
 import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { runServerCommand } from './server/index.js';
-import { resolveBridgeMode } from './config.js';
+import { resolveBridgeMode } from './config/config.js';
 import { VERSION } from './constants.js';
-import { runProvidersCommand, providersHelpText } from './providers-command.js';
+import { runProvidersCommand, providersHelpText } from './cli/providers-command.js';
 import { refreshModelsDevCacheAsync } from './registry/models-dev.js';
-import { runPatchCommand } from './patcher.js';
-import { installOutboundProxyDispatcher } from './outbound-proxy.js';
+import { runPatchCommand } from './patcher/index.js';
+import { installOutboundProxyDispatcher } from './transport/outbound-proxy.js';
 import { daemonHelpText, ensureDaemonRunning, runDaemonCommand, stopDaemon } from './daemon/index.js';
 import { accountsHelpText, runAccountsCommand } from './daemon/account-command.js';
 import { parseArgs, runCatalogCommand } from './cli/args.js';
@@ -54,7 +54,7 @@ export async function main(args: string[] = process.argv.slice(2)): Promise<numb
         );
         return 1;
       }
-      const { runDashboard } = await import('./dashboard.js');
+      const { runDashboard } = await import('./ui/dashboard.js');
       return runDashboard();
     }
     return 0;
@@ -208,7 +208,7 @@ function isCliEntryPoint(): boolean {
 if (isCliEntryPoint()) {
   main().then((exitCode) => {
     process.exit(exitCode);
-  }).catch((err: unknown) => {
+  }).catch((err) => {
     if (err === Symbol.for('clack:cancel')) {
       process.exit(0);
     }

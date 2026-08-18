@@ -2,8 +2,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { getProxyTokenPath } from '../src/paths.js';
-import { getOrCreateProxyToken } from '../src/proxy-token.js';
+import { getProxyTokenPath } from '../src/config/paths.js';
+import { getOrCreateProxyToken } from '../src/proxy/token.js';
 
 let tempHome: string;
 let previousClodexHome: string | undefined;

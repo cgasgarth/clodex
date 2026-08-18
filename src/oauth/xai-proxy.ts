@@ -2,6 +2,8 @@
 
 import { randomUUID } from 'node:crypto';
 import { VERSION } from '../constants.js';
+import { isObject, isString } from '../runtime/type-guards.js';
+import type { JsonObject, JsonValue } from './responses-websocket/types.js';
 
 export const XAI_SUBSCRIPTION_BASE_URL = 'https://cli-chat-proxy.grok.com/v1';
 export const XAI_SUBSCRIPTION_MODEL = 'grok-4.6';
@@ -18,7 +20,11 @@ interface XaiDoomLoopRecoveryDependencies {
 
 interface ParsedSseFrame {
   eventName?: string;
-  payload?: Record<string, unknown>;
+  payload?: JsonObject;
+}
+
+function isJsonObject(value: JsonValue): value is JsonObject {
+  return isObject(value) && !Array.isArray(value);
 }
 
 function parseSseFrame(frame: string): ParsedSseFrame {
@@ -29,30 +35,28 @@ function parseSseFrame(frame: string): ParsedSseFrame {
     if (line.startsWith('data:')) data.push(line.slice('data:'.length).trimStart());
   }
   const joined = data.join('\n');
-  let payload: Record<string, unknown> | undefined;
+  let payload: JsonObject | undefined;
   try {
-    const parsed = JSON.parse(joined);
-    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-      payload = parsed as Record<string, unknown>;
-    }
+    const parsed: JsonValue = JSON.parse(joined);
+    if (isJsonObject(parsed)) payload = parsed;
   } catch {
     // xAI treats malformed detector frames as non-fatal and swallows them.
   }
   return { eventName, payload };
 }
 
-function triggerLabels(payload?: Record<string, unknown>): string[] {
+function triggerLabels(payload?: JsonObject): string[] {
   if (!payload) return [];
   const direct = payload.doom_loop_check;
   const response = payload.response;
-  const nested = response && typeof response === 'object' && !Array.isArray(response)
-    ? (response as Record<string, unknown>).doom_loop_check
+  const nested = isJsonObject(response)
+    ? response.doom_loop_check
     : undefined;
   const check = direct ?? nested;
-  if (!check || typeof check !== 'object' || Array.isArray(check)) return [];
-  const triggers = (check as Record<string, unknown>).triggers;
+  if (!isJsonObject(check)) return [];
+  const triggers = check.triggers;
   return Array.isArray(triggers)
-    ? triggers.filter((trigger): trigger is string => typeof trigger === 'string')
+    ? triggers.filter(isString)
     : [];
 }
 
@@ -68,8 +72,8 @@ function hasConfidentThinkingLoop(labels: string[]): boolean {
   });
 }
 
-function commitsProviderOutput(payload?: Record<string, unknown>): boolean {
-  const type = typeof payload?.type === 'string' ? payload.type : '';
+function commitsProviderOutput(payload?: JsonObject): boolean {
+  const type = isString(payload?.type) ? payload.type : '';
   if (
     type === 'response.output_text.delta'
     || type === 'response.output_text.done'
@@ -80,8 +84,8 @@ function commitsProviderOutput(payload?: Record<string, unknown>): boolean {
   ) return true;
   if (type !== 'response.output_item.done') return false;
   const item = payload?.item;
-  if (!item || typeof item !== 'object' || Array.isArray(item)) return false;
-  const itemType = (item as Record<string, unknown>).type;
+  if (!isJsonObject(item)) return false;
+  const itemType = item.type;
   return itemType !== 'reasoning' && itemType !== 'message';
 }
 

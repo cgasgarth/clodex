@@ -8,7 +8,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { dirname } from 'node:path';
-import { getDaemonRuntimePath } from '../paths.js';
+import { getDaemonRuntimePath } from '../config/paths.js';
 
 const DAEMON_PROTOCOL_VERSION = 4;
 
@@ -32,8 +32,9 @@ interface HomeEnv {
   USERPROFILE?: string;
 }
 
-function validState(value: unknown): value is DaemonRuntimeState {
+function validState<Value>(value: Value): value is Value & DaemonRuntimeState {
   if (!value || typeof value !== 'object') return false;
+  // SAFETY: Every required DaemonRuntimeState field is validated below.
   const state = value as Partial<DaemonRuntimeState>;
   return state.protocolVersion === DAEMON_PROTOCOL_VERSION
     && typeof state.instanceId === 'string'

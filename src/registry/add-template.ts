@@ -1,10 +1,10 @@
 // src/registry/add-template.ts — add a provider from a builtin template
 
-import { provisionProviderCredential, saveProviderCredential } from '../env.js';
-import { credentialInstanceAuthRef } from '../credential-helper.js';
+import { provisionProviderCredential, saveProviderCredential } from '../config/environment.js';
+import { credentialInstanceAuthRef } from '../credentials/helper.js';
 import { isSdkMigratedNpm } from '../provider-factory.js';
-import type { ProviderTemplate } from '../provider-templates.js';
-import { classifyFreeStatus, isFreeStatus } from '../free-models.js';
+import type { ProviderTemplate } from '../providers/templates.js';
+import { classifyFreeStatus, isFreeStatus } from '../models/free-models.js';
 import {
   cancelCredentialDelete,
   journalCredentialWrite,
@@ -117,7 +117,7 @@ export async function addProviderFromTemplate(
   const pricingCache = loadPricingCache();
   const platform = pricingPlatformForProvider(template.id, template.id);
   const pricedModels = enrichModelsWithPricing(
-    usableModels.map(m => ({ ...m, apiUrl: fetched.baseUrl })),
+    usableModels.map(m => Object.assign({}, m, { apiUrl: fetched.baseUrl })),
     buildPricingIndex(pricingCache),
     platform,
   );
@@ -183,9 +183,6 @@ export async function addProviderFromTemplate(
           enabled: true,
           authRef,
           authType: trimmedKey ? template.authType : 'none',
-          ...(!trimmedKey && template.anonymousFreeModels
-            ? { subscriptionFilter: 'free' as const }
-            : {}),
           api: {
             npm: template.npm,
             url: fetched.baseUrl,
@@ -197,6 +194,9 @@ export async function addProviderFromTemplate(
             models: pricedModels,
           },
         };
+        if (!trimmedKey && template.anonymousFreeModels) {
+          entry.subscriptionFilter = 'free';
+        }
 
         if (existing) {
           const idx = registry.providers.findIndex(p => p.id === template.id);
@@ -216,12 +216,13 @@ export async function addProviderFromTemplate(
             credentialCleanupPending = true;
           }
         }
-        return {
+        const addedResult: AddTemplateResult = {
           added: true,
           provider: entry,
           modelCount: pricedModels.length,
-          ...(credentialCleanupPending ? { credentialCleanupPending: true } : {}),
         };
+        if (credentialCleanupPending) addedResult.credentialCleanupPending = true;
+        return addedResult;
       });
     };
 

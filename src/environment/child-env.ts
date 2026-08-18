@@ -1,12 +1,12 @@
 import { CONFLICTING_ENV_VARS } from '../constants.js';
-import { claudeCodeClientModelId, stripOneMContextSuffix } from '../context-model-id.js';
-import { resolveContextWindow } from '../context-window.js';
+import { claudeCodeClientModelId, stripOneMContextSuffix } from '../models/context-model-id.js';
+import { resolveContextWindow } from '../models/context-window.js';
 import type { ConflictInfo } from '../types.js';
 import {
   applyClaudeProxyReliabilityEnv,
   applyClodexClaudeFastModeEnv,
   removeAnthropicProxyBypass,
-} from '../wrapper-env.js';
+} from '../runtime/wrapper-env.js';
 
 export function detectConflicts(): ConflictInfo[] {
   return CONFLICTING_ENV_VARS.filter(name => process.env[name] !== undefined).map(name => ({

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 import { buildHttpProxyRoutes, httpProxyModelId } from '../src/http-proxy/routes.js';
-import { buildPatchModelConfig } from '../src/patcher.js';
+import { buildPatchModelConfig } from '../src/patcher/index.js';
 import type { LocalProvider } from '../src/types.js';
 
 const providers: LocalProvider[] = [

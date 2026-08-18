@@ -2,8 +2,9 @@ import { describe, expect, it, vi } from 'bun:test';
 import { estimateApiCost } from '../src/daemon/api-pricing.js';
 import { hashSessionId } from '../src/daemon/metrics.js';
 import { SecondwindService } from '../src/daemon/secondwind.js';
+import type { JsonObject } from './test-helpers.js';
 
-function toolRequest(content: string): Record<string, unknown> {
+function toolRequest(content: string): JsonObject {
   return {
     model: 'sol',
     messages: [{
@@ -20,7 +21,7 @@ function toolRequest(content: string): Record<string, unknown> {
 describe('Secondwind daemon service', () => {
   it('defaults to on and loads the optimizer', async () => {
     const createSession = vi.fn(async () => ({
-      rewrite: (request: Record<string, unknown>) => ({ request }),
+      rewrite: (request: JsonObject) => ({ request }),
       close: () => {},
     }));
     const service = new SecondwindService({ createSession });
@@ -43,7 +44,7 @@ describe('Secondwind daemon service', () => {
 
   it('measures shadow requests, applies on requests, and persists mode changes', async () => {
     const close = vi.fn();
-    const rewrite = vi.fn((request: Record<string, unknown>) => ({
+    const rewrite = vi.fn((_request: JsonObject) => ({
       request: toolRequest('short'),
       stats: {
         blocks_rewritten: 1,
@@ -515,7 +516,7 @@ describe('Secondwind daemon service', () => {
     const createSession = vi.fn(async () => {
       await gate;
       return {
-        rewrite: (request: Record<string, unknown>) => ({
+        rewrite: (request: JsonObject) => ({
           request,
           stats: { blocks_rewritten: 0 },
         }),
@@ -551,7 +552,7 @@ describe('Secondwind daemon service', () => {
   it('keeps missing-session requests ephemeral and isolates conversation keys', async () => {
     const close = vi.fn();
     const createSession = vi.fn(async () => ({
-      rewrite: (request: Record<string, unknown>) => ({
+      rewrite: (request: JsonObject) => ({
         request,
         stats: { blocks_rewritten: 0 },
       }),
@@ -597,6 +598,7 @@ describe('Secondwind daemon service', () => {
       new Response(child.stderr).text(),
     ]);
     expect(exitCode, stderr).toBe(0);
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const result = JSON.parse(stdout) as {
       originalBytes: number;
       rewrittenBytes: number;

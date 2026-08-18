@@ -1,4 +1,5 @@
-import { PROVIDER_METADATA_TIMEOUT_MS } from '../timeouts.js';
+import { PROVIDER_METADATA_TIMEOUT_MS } from '../config/timeouts.js';
+import { isString } from '../runtime/type-guards.js';
 
 const OPENAI_PROFILE_URL = 'https://api.openai.com/v1/me';
 
@@ -27,8 +28,9 @@ export async function fetchOpenAiProfileEmail(
       signal: controller.signal,
     });
     if (!response.ok) throw new Error(`OpenAI profile request failed (${response.status})`);
+    // SAFETY: Only the optional email field is read and validated below.
     const value = await response.json() as { email?: unknown };
-    const email = typeof value.email === 'string'
+    const email = isString(value.email)
       ? value.email.trim().toLowerCase()
       : '';
     return email.includes('@') ? email : undefined;

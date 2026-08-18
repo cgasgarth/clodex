@@ -12,8 +12,8 @@ import {
   runHttpProxyServerCommand,
   type LoadedHttpProxyRoutes,
 } from '../src/http-proxy/index.js';
-import type { ProxyRoute } from '../src/proxy.js';
-import { flushTraceLogs, getInferenceRequestLogPath } from '../src/trace-log.js';
+import type { ProxyRoute } from '../src/proxy/index.js';
+import { flushTraceLogs, getInferenceRequestLogPath } from '../src/observability/trace-log.js';
 import { waitForCondition } from './test-helpers.js';
 
 async function readFlushedLog(path: string): Promise<string> {

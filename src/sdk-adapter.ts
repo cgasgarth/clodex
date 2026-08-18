@@ -15,33 +15,75 @@ import {
   silenceSdkWarnings,
   type FullStreamPart,
   grabRoundTripSignature,
-} from './proxy-shared.js';
+} from './proxy/shared.js';
 import {
   deepMergeProviderOptions,
   effortProviderOptions,
   thinkingProviderOptions,
   type ReasoningMetadata,
 } from './provider-factory.js';
-import { resolveUpstreamTools } from './tool-search.js';
-import type { AnthropicRequestMessage } from './proxy-types.js';
-import { anthropicErrorType, upstreamHttpStatus } from './upstream-error.js';
+import { resolveUpstreamTools } from './tools/search.js';
+import type { AnthropicRequestMessage } from './proxy/types.js';
+import { anthropicErrorType, upstreamHttpStatus } from './transport/upstream-error.js';
 import { CLAUDE_CODE_BILLING_HEADER_PREFIX } from './oauth/claude-identity.js';
 import {
   MODEL_STREAM_IDLE_TIMEOUT_MS,
   MODEL_TOTAL_TIMEOUT_MS,
-} from './timeouts.js';
+} from './config/timeouts.js';
+import { isObject, isString } from './runtime/type-guards.js';
+import type { ProviderDataValue } from './types.js';
 
 export { silenceSdkWarnings };
+
+function asModelMessage<Value>(value: Value): ModelMessage {
+  // SAFETY: Translation helpers construct only AI SDK ModelMessage variants.
+  return value as ModelMessage;
+}
+
+function asFullStreamPart<Value>(value: Value): FullStreamPart {
+  // SAFETY: Tool-call fields are the corresponding AI SDK full-stream subset.
+  return value as FullStreamPart;
+}
+
+function asFullStream<Value>(value: Value): AsyncIterable<FullStreamPart> {
+  // SAFETY: AI SDK stream results expose FullStreamPart values through `stream`.
+  return value as AsyncIterable<FullStreamPart>;
+}
+
+function asAnthropicRequestMessages<Value>(value: Value): AnthropicRequestMessage[] {
+  // SAFETY: The local request message contract mirrors the shared proxy contract.
+  return value as AnthropicRequestMessage[];
+}
+
+function asAnthropicTools<Value>(value: Value): AnthropicTool[] {
+  // SAFETY: Tool resolution preserves the local Anthropic tool fields.
+  return value as AnthropicTool[];
+}
+
+function asAnthropicBlocks<Value>(value: Value): AnthropicBlock[] {
+  // SAFETY: Anthropic tool-result arrays contain Anthropic content blocks.
+  return value as AnthropicBlock[];
+}
+
+function asToolInput<Value>(value: Value): ToolInput {
+  // SAFETY: Anthropic and AI SDK tool inputs are parsed JSON objects.
+  return value as ToolInput;
+}
+
+function asStreamError<Value>(value: Value): StreamErrorData | undefined {
+  // SAFETY: AI SDK error parts may expose message and provider data fields.
+  return value as StreamErrorData | undefined;
+}
 
 export type SdkTranslationErrorSignature =
   | 'reasoning_part_not_found'
   | 'text_part_not_found';
 
 /** Classify privacy-safe AI SDK stream-state errors without logging dynamic part ids. */
-export function sdkTranslationErrorSignature(error: unknown): SdkTranslationErrorSignature | undefined {
+export function sdkTranslationErrorSignature<Value>(error: Value): SdkTranslationErrorSignature | undefined {
   const message = error instanceof Error
     ? error.message
-    : typeof error === 'string' ? error : undefined;
+    : isString(error) ? error : undefined;
   if (!message) return undefined;
   if (/\breasoning part \S+ not found\b/i.test(message)) return 'reasoning_part_not_found';
   if (/\btext part \S+ not found\b/i.test(message)) return 'text_part_not_found';
@@ -49,6 +91,66 @@ export function sdkTranslationErrorSignature(error: unknown): SdkTranslationErro
 }
 
 // ── Anthropic request shapes (only the fields we read) ───────────────────────
+interface ToolInput {
+  [key: string]: ProviderDataValue;
+}
+
+interface ProviderOptionBag {
+  [key: string]: ProviderDataValue;
+}
+
+interface SdkTextPart {
+  type: 'text';
+  text: string;
+  providerOptions?: ProviderOptionBag;
+}
+
+interface SdkFilePart {
+  type: 'file';
+  data: { type: 'data'; data: Uint8Array } | { type: 'url'; url: URL };
+  mediaType: string;
+  providerOptions?: ProviderOptionBag;
+}
+
+type SdkUserPart = SdkFilePart | SdkTextPart;
+
+interface SdkReasoningPart {
+  type: 'reasoning';
+  text: string;
+  providerOptions?: ProviderOptionBag;
+}
+
+interface SdkToolCallPart {
+  type: 'tool-call';
+  toolCallId: string;
+  toolName?: string;
+  input: ToolInput;
+  providerOptions?: ProviderOptionBag;
+}
+
+type SdkAssistantPart = SdkReasoningPart | SdkTextPart | SdkToolCallPart;
+
+interface StreamErrorData {
+  data?: ProviderDataValue;
+  message?: string;
+}
+
+interface WebSearchOutput {
+  action?: {
+    type?: string;
+    query?: string;
+    queries?: string[];
+    url?: string | null;
+    pattern?: string | null;
+  };
+  sources?: Array<{ type?: string; url?: string; name?: string }>;
+}
+
+function asWebSearchOutput<Value>(value: Value): WebSearchOutput | undefined {
+  // SAFETY: Provider-executed web search parts use the AI SDK web-search output contract.
+  return value as WebSearchOutput | undefined;
+}
+
 interface AnthropicBlock {
   type: string;
   text?: string;
@@ -56,7 +158,7 @@ interface AnthropicBlock {
   signature?: string;
   id?: string;
   name?: string;
-  input?: Record<string, unknown>;
+  input?: ToolInput;
   tool_use_id?: string;
   content?: unknown;
   source?: { type: 'base64' | 'url'; media_type?: string; data?: string; url?: string };
@@ -68,7 +170,7 @@ interface AnthropicMsg { role: 'user' | 'assistant' | 'system'; content: string 
 interface AnthropicTool {
   name: string;
   description?: string;
-  input_schema?: Record<string, unknown>;
+  input_schema?: ToolInput;
   cache_control?: { type?: string; ttl?: string };
   type?: string;
   allowed_domains?: string[];
@@ -118,8 +220,8 @@ export interface TranslateRequestOptions {
 
 const CLAUDE_SESSION_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-function validClaudeSessionId(value: unknown): string | undefined {
-  if (typeof value !== 'string') return undefined;
+function validClaudeSessionId<Value>(value: Value): string | undefined {
+  if (!isString(value)) return undefined;
   const trimmed = value.trim();
   return CLAUDE_SESSION_ID_RE.test(trimmed) ? trimmed.toLowerCase() : undefined;
 }
@@ -130,9 +232,9 @@ export function extractClaudeSessionId(
   headerFallback?: string,
 ): string | undefined {
   const userId = body.metadata?.user_id;
-  if (typeof userId === 'string') {
+  if (isString(userId)) {
     try {
-      const parsed = JSON.parse(userId) as { session_id?: unknown };
+      const parsed: { session_id?: ProviderDataValue } = JSON.parse(userId);
       const fromMetadata = validClaudeSessionId(parsed.session_id);
       if (fromMetadata) return fromMetadata;
     } catch {
@@ -150,7 +252,7 @@ export function claudeSessionPromptCacheKey(sessionId: string): string {
 /** Read reasoning effort from an Anthropic-format request body. */
 export function anthropicEffortFromRequest(body: AnthropicRequest): string | undefined {
   const effort = body.output_config?.effort;
-  if (typeof effort === 'string' && effort.trim()) return effort.trim();
+  if (isString(effort) && effort.trim()) return effort.trim();
   return undefined;
 }
 
@@ -212,10 +314,10 @@ function systemToString(
   stripAnthropicBillingHeader = false,
 ): string | undefined {
   if (!system) return undefined;
-  if (typeof system === 'string') {
+  if (isString(system)) {
     return stripAnthropicBillingHeader ? stripClaudeCodeBillingHeader(system) : system;
   }
-  const blocks = system.map(b => (typeof b === 'string' ? b : b.text ?? ''));
+  const blocks = system.map(b => (isString(b) ? b : b.text ?? ''));
   if (!stripAnthropicBillingHeader) return blocks.join('\n');
   return blocks.flatMap(text => {
     const stripped = stripClaudeCodeBillingHeader(text);
@@ -227,7 +329,7 @@ function inlineSystemToString(messages: AnthropicMsg[]): string | undefined {
   const text = messages
     .filter(message => message.role === 'system')
     .flatMap(message => {
-      if (typeof message.content === 'string') return [message.content];
+      if (isString(message.content)) return [message.content];
       return message.content
         .filter(block => block.type === 'text')
         .map(block => block.text ?? '');
@@ -250,7 +352,7 @@ const OPENAI_OAUTH_STEERING_POLICY = [
   'continue only the work that remains relevant.',
 ].join(' ');
 
-function openAiCacheBreakpoint(block: AnthropicBlock, enabled: boolean): Record<string, unknown> | undefined {
+function openAiCacheBreakpoint(block: AnthropicBlock, enabled: boolean): ProviderOptionBag | undefined {
   if (!enabled || !block.cache_control) return undefined;
   return { openai: { promptCacheBreakpoint: { mode: 'explicit' } } };
 }
@@ -259,20 +361,20 @@ function translateTopLevelSystemForOpenAi(
   system: AnthropicRequest['system'],
 ): ModelMessage[] {
   if (!system) return [];
-  if (typeof system === 'string') {
+  if (isString(system)) {
     return system.trim() ? [{ role: 'system', content: system }] : [];
   }
   return system.flatMap(block => {
-    const text = typeof block === 'string' ? block : block.text ?? '';
+    const text = isString(block) ? block : block.text ?? '';
     if (!text.trim()) return [];
-    const cacheControl = typeof block === 'string' ? undefined : block.cache_control;
-    return [{
+    const cacheControl = isString(block) ? undefined : block.cache_control;
+    return [asModelMessage({
       role: 'system',
       content: text,
-      ...(cacheControl
-        ? { providerOptions: { openai: { promptCacheBreakpoint: { mode: 'explicit' } } } }
-        : {}),
-    } as unknown as ModelMessage];
+      ...(cacheControl && {
+        providerOptions: { openai: { promptCacheBreakpoint: { mode: 'explicit' } } },
+      }),
+    })];
   });
 }
 
@@ -310,12 +412,12 @@ function imagePart(block: AnthropicBlock): {
  */
 function serializeToolResultForModel(
   tr: AnthropicBlock,
-  imageParts: Array<Record<string, unknown>>,
+  imageParts: SdkUserPart[],
 ): string {
   if (!Array.isArray(tr.content)) return serializeToolResultContent(tr.content);
   const rawId = splitToolUseId(tr.tool_use_id ?? '').rawId;
   let imageIndex = 0;
-  const blocks = (tr.content as AnthropicBlock[]).map(block => {
+  const blocks = asAnthropicBlocks(tr.content).map(block => {
     if (block.type !== 'image') return block;
     const part = imagePart(block);
     if (!part) return block;
@@ -340,20 +442,30 @@ export function annotateToolNames(messages: AnthropicMsg[]): void {
     if (!Array.isArray(msg.content)) continue;
     for (const b of msg.content) {
       if (b.type === 'tool_result' && b.tool_use_id) {
-        b._name = nameById.get(splitToolUseId(b.tool_use_id).rawId);
+        Object.defineProperty(b, '_name', {
+          value: nameById.get(splitToolUseId(b.tool_use_id).rawId),
+          writable: true,
+          enumerable: true,
+          configurable: true,
+        });
       }
     }
   }
 }
 
+function resolvedToolName(block: AnthropicBlock): string | undefined {
+  const value = Object.getOwnPropertyDescriptor(block, '_name')?.value;
+  return isString(value) ? value : undefined;
+}
+
 function thinkingToSdkPart(
   block: AnthropicBlock,
   npm: string,
-): Record<string, unknown> | null {
+): SdkReasoningPart | null {
   const text = block.thinking ?? '';
   if (npm === '@ai-sdk/openai' && !block.signature && !text.trim()) return null;
 
-  const part: Record<string, unknown> = { type: 'reasoning', text };
+  const part: SdkReasoningPart = { type: 'reasoning', text };
   if (block.signature) {
     if (npm === '@ai-sdk/google') {
       part.providerOptions = { google: { thoughtSignature: block.signature } };
@@ -367,7 +479,7 @@ function thinkingToSdkPart(
 function cacheBreakpointOptions(
   block: AnthropicBlock,
   enabled: boolean,
-): { providerOptions: Record<string, unknown> } | Record<string, never> {
+): { providerOptions?: ProviderOptionBag } {
   const providerOptions = openAiCacheBreakpoint(block, enabled);
   return providerOptions ? { providerOptions } : {};
 }
@@ -378,11 +490,11 @@ function translateSystemBlocks(
 ): ModelMessage[] {
   return blocks.flatMap(block => {
     if (block.type !== 'text' || !block.text?.trim()) return [];
-    return [{
+    return [asModelMessage({
       role: 'system',
       content: block.text,
       ...cacheBreakpointOptions(block, openAiPromptCacheBreakpoints),
-    } as unknown as ModelMessage];
+    })];
   });
 }
 
@@ -420,31 +532,30 @@ function translateUserBlocks(
   openAiPromptCacheBreakpoints: boolean,
   normalizeMidTurnSteering: boolean,
 ): ModelMessage[] {
-  const imageParts: Array<Record<string, unknown>> = [];
+  const imageParts: SdkUserPart[] = [];
   const toolResults = blocks.filter(block => block.type === 'tool_result');
   const messages: ModelMessage[] = [];
   if (toolResults.length > 0) {
-    messages.push({
+    messages.push(asModelMessage({
       role: 'tool',
-      content: toolResults.map(result => ({
+      content: toolResults.map(result => Object.assign({
         type: 'tool-result',
         toolCallId: splitToolUseId(result.tool_use_id ?? '').rawId,
-        toolName: result._name ?? 'unknown',
+        toolName: resolvedToolName(result) ?? 'unknown',
         output: { type: 'text', value: serializeToolResultForModel(result, imageParts) },
-        ...cacheBreakpointOptions(result, openAiPromptCacheBreakpoints),
-      })),
-    } as unknown as ModelMessage);
+      }, cacheBreakpointOptions(result, openAiPromptCacheBreakpoints))),
+    }));
   }
 
-  const parts: Array<Record<string, unknown>> = [];
-  const steeringParts: Array<Record<string, unknown>> = [];
+  const parts: SdkUserPart[] = [];
+  const steeringParts: SdkUserPart[] = [];
   for (const block of blocks) {
     if (block.type === 'text') {
       const text = block.text ?? '';
       const midTurnInstruction = normalizeMidTurnSteering
         ? normalizeClaudeMidTurnInstruction(text)
         : undefined;
-      const part = {
+      const part: SdkTextPart = {
         type: 'text',
         text: midTurnInstruction ?? text,
         ...cacheBreakpointOptions(block, openAiPromptCacheBreakpoints),
@@ -463,7 +574,7 @@ function translateUserBlocks(
   }
   const userParts = [...imageParts, ...parts, ...steeringParts];
   if (userParts.length > 0) {
-    messages.push({ role: 'user', content: userParts } as unknown as ModelMessage);
+    messages.push(asModelMessage({ role: 'user', content: userParts }));
   }
   return messages;
 }
@@ -473,7 +584,7 @@ function translateAssistantBlocks(
   npm: string,
 ): ModelMessage[] {
   const isGoogle = npm === '@ai-sdk/google';
-  const parts = blocks.flatMap(block => {
+  const parts = blocks.flatMap<SdkAssistantPart>(block => {
     if (block.type === 'text') return [{ type: 'text', text: block.text ?? '' }];
     if (block.type === 'thinking') {
       const reasoning = thinkingToSdkPart(block, npm);
@@ -481,7 +592,7 @@ function translateAssistantBlocks(
     }
     if (block.type !== 'tool_use' || !block.id) return [];
     const { rawId, thoughtSignature } = splitToolUseId(block.id);
-    const toolCall: Record<string, unknown> = {
+    const toolCall: SdkToolCallPart = {
       type: 'tool-call',
       toolCallId: rawId,
       toolName: block.name,
@@ -493,7 +604,7 @@ function translateAssistantBlocks(
     return [toolCall];
   });
   return parts.length > 0
-    ? [{ role: 'assistant', content: parts } as unknown as ModelMessage]
+    ? [asModelMessage({ role: 'assistant', content: parts })]
     : [];
 }
 
@@ -507,7 +618,7 @@ export function translateMessages(
   const out: ModelMessage[] = [];
 
   for (const msg of messages) {
-    const blocks: AnthropicBlock[] = typeof msg.content === 'string'
+    const blocks: AnthropicBlock[] = isString(msg.content)
       ? [{ type: 'text', text: msg.content }]
       : msg.content;
 
@@ -538,10 +649,10 @@ export function translateMessages(
  * array is an intentional value (e.g. TodoWrite's `todos: []` clears the list).
  */
 function sanitizeToolInput(
-  input: Record<string, unknown>,
+  input: ToolInput,
   requiredProps?: ReadonlySet<string>,
-): Record<string, unknown> {
-  const out: Record<string, unknown> = {};
+): ToolInput {
+  const out: ToolInput = {};
   for (const [k, v] of Object.entries(input)) {
     if (v === null) continue;
     if (Array.isArray(v) && v.length === 0 && !requiredProps?.has(k)) continue;
@@ -554,9 +665,11 @@ function sanitizeToolInput(
 function toolRequiredProps(tools?: SdkCallParams['tools']): Map<string, ReadonlySet<string>> {
   const map = new Map<string, ReadonlySet<string>>();
   for (const [name, t] of Object.entries(tools ?? {})) {
-    const schema = (t as { inputSchema?: { jsonSchema?: { required?: unknown } } }).inputSchema?.jsonSchema;
+    // SAFETY: AI SDK tool definitions store the source JSON schema under inputSchema.jsonSchema.
+    const schema = (t as { inputSchema?: { jsonSchema?: { required?: ProviderDataValue } } })
+      .inputSchema?.jsonSchema;
     const required = Array.isArray(schema?.required) ? schema.required : [];
-    map.set(name, new Set(required.filter((r): r is string => typeof r === 'string')));
+    map.set(name, new Set(required.filter((r): r is string => isString(r))));
   }
   return map;
 }
@@ -568,31 +681,28 @@ function isAnthropicWebSearchTool(toolDefinition: AnthropicTool): boolean {
 
 function translateOpenAiWebSearchTool(toolDefinition: AnthropicTool) {
   const location = toolDefinition.user_location;
-  return openai.tools.webSearch({
-    ...(toolDefinition.allowed_domains?.length || toolDefinition.blocked_domains?.length
-      ? {
-          filters: {
-            ...(toolDefinition.allowed_domains?.length
-              ? { allowedDomains: toolDefinition.allowed_domains }
-              : {}),
-            ...(toolDefinition.blocked_domains?.length
-              ? { blockedDomains: toolDefinition.blocked_domains }
-              : {}),
-          },
-        }
-      : {}),
-    ...(location?.type === 'approximate'
-      ? {
-          userLocation: {
-            type: 'approximate' as const,
-            country: location.country,
-            city: location.city,
-            region: location.region,
-            timezone: location.timezone,
-          },
-        }
-      : {}),
-  });
+  type WebSearchOptions = NonNullable<Parameters<typeof openai.tools.webSearch>[0]>;
+  const options: WebSearchOptions = {};
+  if (toolDefinition.allowed_domains?.length || toolDefinition.blocked_domains?.length) {
+    const filters: NonNullable<WebSearchOptions['filters']> = {};
+    if (toolDefinition.allowed_domains?.length) {
+      filters.allowedDomains = toolDefinition.allowed_domains;
+    }
+    if (toolDefinition.blocked_domains?.length) {
+      filters.blockedDomains = toolDefinition.blocked_domains;
+    }
+    options.filters = filters;
+  }
+  if (location?.type === 'approximate') {
+    options.userLocation = {
+      type: 'approximate',
+      country: location.country,
+      city: location.city,
+      region: location.region,
+      timezone: location.timezone,
+    };
+  }
+  return openai.tools.webSearch(options);
 }
 
 export function translateTools(
@@ -614,7 +724,7 @@ export function translateTools(
   return Object.keys(tools).length ? tools : undefined;
 }
 
-export function translateToolChoice(tc: AnthropicRequest['tool_choice']): SdkCallParams['toolChoice'] {
+function translateToolChoice(tc: AnthropicRequest['tool_choice']): SdkCallParams['toolChoice'] {
   if (!tc) return undefined;
   if (tc.type === 'auto') return 'auto';
   if (tc.type === 'any') return 'required';
@@ -630,7 +740,7 @@ export function isClaudeCodeCompactRequest(body: AnthropicRequest): boolean {
 
   const finalMessage = body.messages.at(-1);
   if (!finalMessage || finalMessage.role !== 'user') return false;
-  const text = typeof finalMessage.content === 'string'
+  const text = isString(finalMessage.content)
     ? finalMessage.content
     : finalMessage.content
       .filter(block => block.type === 'text')
@@ -685,10 +795,10 @@ export function translateRequest(
   // definitions intact for prompt-cache prefix reuse; toolChoice='none' below
   // makes them unavailable at the provider API rather than by prompt compliance.
   const compactRequest = isClaudeCodeCompactRequest(body);
-  let upstreamTools = resolveUpstreamTools(
+  let upstreamTools = asAnthropicTools(resolveUpstreamTools(
     body.tools,
-    messages as unknown as AnthropicRequestMessage[],
-  ) as unknown as AnthropicTool[];
+    asAnthropicRequestMessages(messages),
+  ));
   if (options?.maxTools !== undefined && upstreamTools.length > options.maxTools) {
     upstreamTools = upstreamTools.slice(0, options.maxTools);
   }
@@ -706,11 +816,10 @@ export function translateRequest(
   // ChatGPT Codex OAuth backend requires `instructions` in providerOptions and
   // rejects the standard `system` field. It also manages its own output limit.
   if (options?.openAiOAuth && systemText) {
+    const openAiOptions: OpenAIResponsesProviderOptions = { instructions: systemText };
+    if (options.processingMode === 'fast') openAiOptions.serviceTier = 'fast';
     providerOptions = deepMergeProviderOptions(providerOptions, {
-      openai: {
-        instructions: systemText,
-        ...(options.processingMode === 'fast' ? { serviceTier: 'fast' } : {}),
-      },
+      openai: openAiOptions,
     });
   }
 
@@ -727,17 +836,17 @@ export function translateRequest(
   // blocks, while retaining an automatic latest-message breakpoint as fallback.
   if (npm === '@ai-sdk/openai') {
     const claudeSessionId = extractClaudeSessionId(body, options?.claudeSessionId);
-    const openAiOptions = {
+    const openAiOptions: OpenAIResponsesProviderOptions = {
       promptCacheKey: claudeSessionId
         ? claudeSessionPromptCacheKey(claudeSessionId)
         : openAiPromptCacheKey(baseSystem, upstreamTools),
-      ...(upstreamTools.length > 0
-        ? { parallelToolCalls: body.tool_choice?.disable_parallel_tool_use !== true }
-        : {}),
-      ...(supportsExplicitOpenAiCaching
-        ? { promptCacheOptions: { mode: 'implicit' as const, ttl: '30m' as const } }
-        : {}),
-    } satisfies OpenAIResponsesProviderOptions;
+    };
+    if (upstreamTools.length > 0) {
+      openAiOptions.parallelToolCalls = body.tool_choice?.disable_parallel_tool_use !== true;
+    }
+    if (supportsExplicitOpenAiCaching) {
+      openAiOptions.promptCacheOptions = { mode: 'implicit', ttl: '30m' };
+    }
     providerOptions = deepMergeProviderOptions(providerOptions, {
       openai: openAiOptions,
     });
@@ -780,9 +889,32 @@ interface AnthropicUsage {
   speed?: 'standard' | 'fast';
 }
 
+interface AnthropicResponseTextBlock {
+  type: 'text';
+  text: string;
+}
+
+interface AnthropicResponseToolUseBlock {
+  type: 'tool_use';
+  id: string;
+  name: string;
+  input: ToolInput;
+}
+
+interface AnthropicResponse {
+  id: string;
+  type: 'message';
+  role: 'assistant';
+  model: string;
+  content: Array<AnthropicResponseTextBlock | AnthropicResponseToolUseBlock>;
+  stop_reason: string;
+  usage: AnthropicUsage;
+}
+
 function openAiServiceTier(providerMetadata: ProviderMetadata | undefined): string | undefined {
   const openAiMetadata = providerMetadata?.openai;
   if (openAiMetadata === undefined) return undefined;
+  // SAFETY: The `openai` metadata entry is owned by the OpenAI Responses provider.
   return (openAiMetadata as OpenaiResponsesProviderMetadata['openai']).serviceTier;
 }
 
@@ -842,8 +974,9 @@ const SDK_TOTAL_TIMEOUT_MS = MODEL_TOTAL_TIMEOUT_MS;
 
 function streamAbortError(signal?: AbortSignal): Error {
   if (signal?.reason instanceof Error) return signal.reason;
+  const reason = signal?.reason;
   const error = new Error(
-    typeof signal?.reason === 'string' ? signal.reason : 'SDK stream aborted',
+    isString(reason) ? reason : 'SDK stream aborted',
   );
   error.name = 'AbortError';
   return error;
@@ -865,6 +998,14 @@ function forwardAbortSignal(source: AbortSignal | undefined, target: AbortContro
   }
   source.addEventListener('abort', forward, { once: true });
   return () => source.removeEventListener('abort', forward);
+}
+
+function isProviderWebSearch(part: FullStreamPart): boolean {
+  return part.toolName === 'web_search' && part.providerExecuted === true;
+}
+
+function serverToolUseId(id: string): string {
+  return id.startsWith('srvtoolu_') ? id : `srvtoolu_${id}`;
 }
 
 export async function writeAnthropicStream(
@@ -895,7 +1036,7 @@ export async function writeAnthropicStream(
     cache_read_input_tokens: 0,
   };
 
-  const emit = (event: string, data: unknown) => write(sseChunk(event, data));
+  const emit = <Data>(event: string, data: Data) => write(sseChunk(event, data));
   const ensureStart = () => {
     if (started) return;
     emit('message_start', {
@@ -937,14 +1078,14 @@ export async function writeAnthropicStream(
     openType = null;
     openToolId = null;
   };
-  const openBlock = (
+  const openBlock = <Content>(
     type: 'text' | 'thinking' | 'tool' | 'server-tool' | 'server-tool-result',
-    contentBlock: unknown,
+    contentBlock: Content,
   ) => {
     ensureStart(); closeOpen(); blockIndex++; openType = type;
     emit('content_block_start', { type: 'content_block_start', index: blockIndex, content_block: contentBlock });
   };
-  const ensureOpenBlock = (type: 'text' | 'thinking', contentBlock: unknown) => {
+  const ensureOpenBlock = <Content>(type: 'text' | 'thinking', contentBlock: Content) => {
     if (openType === type) return;
     openBlock(type, contentBlock);
   };
@@ -952,22 +1093,9 @@ export async function writeAnthropicStream(
   // iterations; TypeScript's local narrowing cannot model that mutation.
   const currentOpenType = () => openType;
   const providerWebSearchIds = new Set<string>();
-  const isProviderWebSearch = (part: FullStreamPart): boolean =>
-    part.toolName === 'web_search' && part.providerExecuted === true;
-  const serverToolUseId = (id: string): string =>
-    id.startsWith('srvtoolu_') ? id : `srvtoolu_${id}`;
   const handleWebSearchResult = (part: FullStreamPart): void => {
     const toolCallId = part.toolCallId ?? '';
-    const output = part.output as {
-      action?: {
-        type?: string;
-        query?: string;
-        queries?: string[];
-        url?: string | null;
-        pattern?: string | null;
-      };
-      sources?: Array<{ type?: string; url?: string; name?: string }>;
-    } | undefined;
+    const output = asWebSearchOutput(part.output);
     const action = output?.action;
     const query = action?.query
       ?? action?.queries?.join(' OR ')
@@ -987,7 +1115,7 @@ export async function writeAnthropicStream(
       type: 'web_search_tool_result',
       tool_use_id: id,
       content: (output?.sources ?? [])
-        .filter(source => source.type === 'url' && typeof source.url === 'string')
+        .filter(source => source.type === 'url' && isString(source.url))
         .map(source => ({
           type: 'web_search_result',
           url: source.url,
@@ -1004,7 +1132,7 @@ export async function writeAnthropicStream(
     if (idToBlock.has(id)) {
       if (flushedTools.has(id)) return;
       const json = part.input !== undefined && part.input !== null
-        ? JSON.stringify(sanitizeToolInput(part.input as Record<string, unknown>, required))
+        ? JSON.stringify(sanitizeToolInput(asToolInput(part.input), required))
         : (toolJsonBuffer.get(id) ?? '');
       if (json) {
         emit('content_block_delta', {
@@ -1030,7 +1158,7 @@ export async function writeAnthropicStream(
       delta: {
         type: 'input_json_delta',
         partial_json: JSON.stringify(
-          sanitizeToolInput(part.input as Record<string, unknown>, required),
+          sanitizeToolInput(asToolInput(part.input), required),
         ),
       },
     });
@@ -1133,12 +1261,12 @@ export async function writeAnthropicStream(
         break;
 
       case 'error': {
-        const e = part.error as { data?: unknown; message?: string } | undefined;
-        const errMsg = e?.message || (typeof part.error === 'string' ? part.error : JSON.stringify(e?.data ?? part.error));
+        const e = asStreamError(part.error);
+        const errMsg = e?.message || (isString(part.error) ? part.error : JSON.stringify(e?.data ?? part.error));
         const errorType = anthropicErrorType(upstreamHttpStatus(part.error, errMsg));
         log?.(() => `sdk stream error (${errorType}): ${errMsg}`);
         closeOpen();
-        throw part.error instanceof Error || (part.error && typeof part.error === 'object')
+        throw part.error instanceof Error || (part.error && isObject(part.error))
           ? part.error
           : new Error(errMsg);
       }
@@ -1183,12 +1311,12 @@ export async function streamAnthropicResponse(
   // Do not combine streamText's total/chunk timeout signals here. In AI SDK 7,
   // that composition retains completed StreamTextResult graphs. Relay
   // owns the timers and explicitly settles its controller after consumption.
-  const providerStream = (dependencies.streamText ?? streamText)({
+  const providerStream = asFullStream((dependencies.streamText ?? streamText)({
     model,
     ...params,
     abortSignal,
     onError: () => {},
-  }).stream as AsyncIterable<FullStreamPart>;
+  }).stream);
 
   const watchedStream = (async function* () {
     try {
@@ -1230,7 +1358,7 @@ export async function generateAnthropicResponse(
     streamText?: typeof streamText;
     generateText?: typeof generateText;
   },
-): Promise<Record<string, unknown>> {
+): Promise<AnthropicResponse> {
   let text: string;
   let toolCalls: Array<{ toolCallId: string; toolName: string; input: unknown }>;
   let finishReason: string;
@@ -1266,7 +1394,7 @@ export async function generateAnthropicResponse(
     let streamedFinishReason = 'stop';
     let streamedUsage: SdkUsage | undefined;
     try {
-      for await (const part of r.stream as AsyncIterable<FullStreamPart>) {
+      for await (const part of asFullStream(r.stream)) {
         clearTimeout(idleTimer);
         idleTimer = setTimeout(
           () => forceAbort.abort(new Error(`no data received from provider for ${Math.round(idleTimeoutMs / 1000)}s`)),
@@ -1277,16 +1405,16 @@ export async function generateAnthropicResponse(
           throw streamAbortError(abortSignal);
         }
         if (part.type === 'error') {
-          throw part.error instanceof Error || (part.error && typeof part.error === 'object')
+          throw part.error instanceof Error || (part.error && isObject(part.error))
             ? part.error
-            : new Error(typeof part.error === 'string' ? part.error : 'Upstream stream failed');
+            : new Error(isString(part.error) ? part.error : 'Upstream stream failed');
         }
         if (part.type === 'text-delta') streamedText.push(part.text ?? '');
         else if (part.type === 'tool-call') {
           streamedToolCalls.push({
             toolCallId: part.toolCallId ?? '',
             toolName: part.toolName ?? '',
-            input: part.input,
+            input: asToolInput(part.input),
           });
         } else if (part.type === 'finish') {
           streamedFinishReason = part.finishReason ?? streamedFinishReason;
@@ -1330,17 +1458,25 @@ export async function generateAnthropicResponse(
   }
 
   const requiredProps = toolRequiredProps(params.tools);
+  const content: AnthropicResponse['content'] = [];
+  if (text) content.push({ type: 'text', text });
+  for (const toolCall of toolCalls) {
+    content.push({
+      type: 'tool_use',
+      id: encodeToolUseId(
+        toolCall.toolCallId,
+        grabRoundTripSignature(asFullStreamPart(toolCall)),
+      ),
+      name: toolCall.toolName,
+      input: sanitizeToolInput(
+        asToolInput(toolCall.input),
+        requiredProps.get(toolCall.toolName),
+      ),
+    });
+  }
   return {
     id: 'msg_' + Date.now(), type: 'message', role: 'assistant', model: modelId,
-    content: [
-      ...(text ? [{ type: 'text', text }] : []),
-      ...toolCalls.map(tc => ({
-        type: 'tool_use',
-        id: encodeToolUseId(tc.toolCallId, grabRoundTripSignature(tc as FullStreamPart)),
-        name: tc.toolName,
-        input: sanitizeToolInput(tc.input as Record<string, unknown>, requiredProps.get(tc.toolName)),
-      })),
-    ],
+    content,
     stop_reason: finishReason === 'tool-calls' ? 'tool_use' : 'end_turn',
     usage: applyOpenAiServiceTier(toAnthropicUsage(usage), providerMetadata),
   };

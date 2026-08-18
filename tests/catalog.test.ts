@@ -6,10 +6,9 @@ import {
   localModelToRoute,
   makeRouteResolver,
   resolveCatalogModelAliases,
-} from '../src/catalog.js';
-import * as env from '../src/env.js';
-import { modelAliasTarget } from '../src/model-aliases.js';
-import type { ModelInfo } from '../src/types.js';
+} from '../src/models/catalog.js';
+import * as env from '../src/config/environment.js';
+import { modelAliasTarget } from '../src/models/aliases.js';
 import type { FavoriteModel, LocalProvider, ModelAlias } from '../src/types.js';
 
 const TEST_HELPER_REF = `helper:v1:${'a'.repeat(64)}:oauth:provider:openai-oauth`;

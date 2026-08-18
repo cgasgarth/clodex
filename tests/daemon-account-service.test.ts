@@ -45,9 +45,10 @@ describe('DaemonAccountService launch tickets', () => {
       authType: 'oauth' as const,
     };
 
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const payload = JSON.parse(
       Buffer.from(launch.ticket.split('.')[0]!, 'base64url').toString('utf8'),
-    ) as Record<string, unknown>;
+    ) as { a: Record<string, never>; v: number };
     expect(payload).toMatchObject({ v: 3, a: {} });
     expect(launch.accountIds).toEqual({ 'openai-oauth': one.id });
     expect(service.accountForTicket(launch.ticket)?.id).toBe(one.id);
@@ -108,6 +109,7 @@ describe('DaemonAccountService launch tickets', () => {
       authType: 'oauth' as const,
     };
 
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const payload = JSON.parse(
       Buffer.from(launch!.ticket.split('.')[0]!, 'base64url').toString('utf8'),
     ) as { a?: Record<string, string> };
@@ -338,7 +340,8 @@ describe('DaemonAccountService launch tickets', () => {
       join(root, 'accounts.json'),
     );
 
-    new DaemonAccountService(store);
+    const service = new DaemonAccountService(store);
+    expect(service).toBeInstanceOf(DaemonAccountService);
 
     expect(store.list('xai-oauth')).toEqual([]);
   });

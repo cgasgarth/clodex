@@ -1,47 +1,52 @@
 import pc from 'picocolors';
-import { relayIntro, providerSelectOption } from '../ui.js';
+import { relayIntro, providerSelectOption } from '../ui/prompts.js';
 import * as p from '@clack/prompts';
-import { findClaudeBinary, launchClaude } from '../launch.js';
-import { detectConflicts, buildChildEnv } from '../env.js';
+import { findClaudeBinary, launchClaude } from '../runtime/launch.js';
+import { detectConflicts, buildChildEnv } from '../config/environment.js';
 import {
   claudeCodeClientModelId,
   normalizeRouteLookupId,
   stripOneMContextSuffix,
-} from '../context-model-id.js';
-import { needsFirstRunSetup, runFirstRunWizard } from '../first-run.js';
-import { startProxy } from '../proxy.js';
-import type { ProxyHandle } from '../proxy.js';
+} from '../models/context-model-id.js';
+import { needsFirstRunSetup, runFirstRunWizard } from './first-run.js';
+import { startProxy } from '../proxy/index.js';
+import type { ProxyHandle } from '../proxy/index.js';
 import {
   buildCatalogRoutes,
   makeRouteResolver,
   resolveCatalogModelAliases,
-} from '../catalog.js';
-import { loadPreferences, savePreferences, recordLaunchSelection } from '../config.js';
-import { pickLocalModel } from '../prompts.js';
-import { fetchProviderCatalog, providersForPicker, resolveLocalProviderApiKey } from '../provider-catalog.js';
+} from '../models/catalog.js';
+import { loadPreferences, savePreferences, recordLaunchSelection } from '../config/config.js';
+import { pickLocalModel } from './prompts.js';
+import { fetchProviderCatalog, providersForPicker, resolveLocalProviderApiKey } from '../models/provider-catalog.js';
 import type { ParsedArgs, FavoriteModel, LocalProvider, LocalProviderModel } from '../types.js';
 import {
   getSessionLogPath,
   prepareClaudeTraceLog,
   printTraceLog,
-} from '../trace-log.js';
-import { providersForTarget } from '../target-compatibility.js';
-import { setAgentStdoutMode, isAgentStdoutMode } from '../agent-io.js';
+} from '../observability/trace-log.js';
+import { providersForTarget } from '../models/target-compatibility.js';
+import { setAgentStdoutMode, isAgentStdoutMode } from '../agents/io.js';
 import {
   findProviderAndModel,
   normalizeClaudeAgentArgs,
   planLaunchWizard,
   wantsCleanAgentStdout,
-} from '../launch-target.js';
+} from '../runtime/launch-target.js';
 import { loadHttpProxyRoutes } from '../http-proxy/index.js';
-import { runLaunchPatchCheck } from '../patcher.js';
+import { runLaunchPatchCheck } from '../patcher/index.js';
 import { ensureDaemonRunning } from '../daemon/index.js';
 import { daemonControlRequest } from '../daemon/control-client.js';
-import { LAUNCH_TICKET_HEADER, setAnthropicCustomHeader } from '../wrapper-env.js';
-import { getOrCreateProxyToken } from '../proxy-token.js';
+import { LAUNCH_TICKET_HEADER, setAnthropicCustomHeader } from '../runtime/wrapper-env.js';
+import { getOrCreateProxyToken } from '../proxy/token.js';
 import { catalogUsesNativeContextOwner, launchClaudeViaCatalog } from './catalog-runtime.js';
 import { resolveCliRuntimePaths } from './runtime-paths.js';
 import type { CliRuntimePaths } from './runtime-paths.js';
+
+interface LaunchAttachRequest {
+  accountId?: string;
+  fast?: true;
+}
 
 function requestedClaudeModel(args: string[]): string | undefined {
   let index = -1;
@@ -101,14 +106,12 @@ async function runClaudeDaemonEndpointCommand(
 
   let launchTicket: string | undefined;
   try {
+    const body: LaunchAttachRequest = {};
+    if (process.env['CLODEX_ACCOUNT']) body.accountId = process.env['CLODEX_ACCOUNT'];
+    if (parsed.fast) body.fast = true;
     const attached = await daemonControlRequest<{ ticket: string } | null>('/v1/launches/attach', {
       method: 'POST',
-      body: {
-        ...(process.env['CLODEX_ACCOUNT']
-          ? { accountId: process.env['CLODEX_ACCOUNT'] }
-          : {}),
-        ...(parsed.fast ? { fast: true } : {}),
-      },
+      body,
       socketPath: runtime.controlSocketPath,
       timeoutMs: 5_000,
     });
@@ -201,10 +204,10 @@ export async function runClaudeCommand(
     return runClaudeDaemonEndpointCommand(parsed, claudeArgs, agentStdout, runtimePaths);
   }
 
-  const prefs = dryRun ? {} as ReturnType<typeof loadPreferences> : loadPreferences();
+  const prefs: ReturnType<typeof loadPreferences> = dryRun ? {} : loadPreferences();
   const conflicts = detectConflicts();
 
-  const favorites = dryRun ? [] : (prefs.favoriteModels ?? []);
+  const favorites = prefs.favoriteModels ?? [];
   const launchPlan = planLaunchWizard({
     explicit: { providerId: launchProvider, modelId: launchModel },
     childArgs: claudeArgs,

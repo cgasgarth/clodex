@@ -2,11 +2,12 @@ import { describe, expect, it } from 'bun:test';
 import { EventEmitter } from 'node:events';
 import { gzipSync, zstdCompressSync } from 'node:zlib';
 import type { IncomingMessage } from 'node:http';
-import { readBody } from '../src/http-utils.js';
+import { readBody } from '../src/transport/http-utils.js';
 
 function mockRequest(body: Buffer, headers: Record<string, string> = {}): IncomingMessage {
-  const req = new EventEmitter() as unknown as IncomingMessage;
-  (req as unknown as { headers: Record<string, string> }).headers = headers;
+  // SAFETY: The test fixture defines the asserted runtime shape.
+  const req = new EventEmitter() as IncomingMessage;
+  Object.defineProperty(req, 'headers', { value: headers, writable: true });
   queueMicrotask(() => {
     req.emit('data', body);
     req.emit('end');

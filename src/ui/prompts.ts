@@ -1,0 +1,213 @@
+// Shared clodex CLI styling — @clack/prompts + picocolors.
+// Use printPanel for important callouts (p.note dims all body text).
+import pc from 'picocolors';
+import * as p from '@clack/prompts';
+import type { ConflictInfo, LocalProvider, LocalProviderModel } from '../types.js';
+
+/** Human-readable label for a model (registry names are often raw ids). */
+export function formatModelLabel(model: Pick<LocalProviderModel, 'id' | 'name'>): string {
+  const trimmed = model.name.trim();
+  if (trimmed && trimmed !== model.id) return trimmed;
+
+  const id = model.id;
+  const claude = id.match(/^claude-([\w-]+?)-(\d+)-(\d+)(?:-\d{8})?$/);
+  if (claude) {
+    const tier = claude[1]!.split('-').map(part =>
+      part.charAt(0).toUpperCase() + part.slice(1),
+    ).join(' ');
+    return `Claude ${tier} ${claude[2]}.${claude[3]}`;
+  }
+
+  const gpt = id.match(/^gpt-(\d+(?:\.\d+)?)(?:-([\w-]+))?$/i);
+  if (gpt) {
+    const suffix = gpt[2] ? ` ${gpt[2].split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')}` : '';
+    return `GPT-${gpt[1]}${suffix}`;
+  }
+
+  return id;
+}
+
+const bar = pc.gray('│');
+const hline = pc.gray('─');
+const ANSI_ESCAPE = String.fromCharCode(27);
+const ANSI_PATTERN = new RegExp(`${ANSI_ESCAPE}\\[[0-9;]*m`, 'g');
+
+function stripAnsi(s: string): string {
+  return s.replace(ANSI_PATTERN, '');
+}
+
+function panelWidth(lines: string[], title: string): number {
+  const maxLine = lines.reduce((max, line) => Math.max(max, stripAnsi(line).length), 0);
+  return Math.max(maxLine, stripAnsi(title).length) + 2;
+}
+
+/** Colored panel — clack note shape without dimmed body. */
+export function printPanel(title: string, lines: string[]): void {
+  const width = panelWidth(lines, title);
+  const topRule = hline.repeat(Math.max(width - stripAnsi(title).length - 1, 1));
+  process.stdout.write(`${bar}\n`);
+  process.stdout.write(`${pc.green('◇')}  ${pc.bold(title)} ${pc.gray(topRule + '╮')}\n`);
+  for (const line of lines) {
+    if (line.trim() === '') {
+      process.stdout.write(`${bar}  ${bar}\n`);
+      continue;
+    }
+    const pad = ' '.repeat(Math.max(width - stripAnsi(line).length, 0));
+    process.stdout.write(`${bar}  ${line}${pad}${bar}\n`);
+  }
+  process.stdout.write(`${pc.gray('├' + '─'.repeat(width + 2) + '╯')}\n`);
+}
+
+export function relayIntro(section: string): void {
+  p.intro(`${pc.bold(pc.cyan('clodex'))}${pc.bold(` — ${section}`)}`);
+}
+
+export function relayOutro(status: string, detail?: string): void {
+  p.outro(detail
+    ? `${pc.green(status)} ${pc.dim('—')} ${detail}`
+    : pc.green(status));
+}
+
+export function fmtModel(label: string, id?: string): string {
+  return id
+    ? `${pc.cyan(pc.bold(label))} ${pc.dim(`(${id})`)}`
+    : pc.cyan(pc.bold(label));
+}
+
+export function fmtProvider(name: string): string {
+  return pc.cyanBright(pc.bold(name));
+}
+
+/** Bracketed provider tag for global favorites search — bright, color per provider id. */
+export function fmtProviderBracket(providerId: string, providerName: string, isFree?: boolean): string {
+  const color = providerTagColor(providerId);
+  const text = isFree ? `${providerName} · free` : providerName;
+  return color(pc.bold(`(${text})`));
+}
+
+function providerTagColor(providerId: string): (text: string) => string {
+  switch (providerId) {
+    case 'anthropic':
+      return pc.yellow;
+    case 'openai':
+    case 'openai-oauth':
+      return pc.white;
+    default:
+      return pc.yellow;
+  }
+}
+
+function fmtCommand(cmd: string): string {
+  return pc.cyan(cmd);
+}
+
+export function fmtUrl(url: string): string {
+  return pc.cyan(url);
+}
+
+function fmtCount(n: number, noun: string): string {
+  return `${pc.bold(String(n))} ${noun}${n === 1 ? '' : 's'}`;
+}
+
+function fmtRecentHint(): string {
+  return pc.yellow('recent');
+}
+
+export function fmtEnabledStar(enabled: boolean): string {
+  return enabled ? pc.yellow('★') : pc.dim('○');
+}
+
+export function providerSelectOption(provider: Pick<LocalProvider, 'id' | 'name' | 'models'>) {
+  return {
+    value: provider.id,
+    label: fmtProvider(provider.name),
+    hint: `${provider.models.length} model${provider.models.length !== 1 ? 's' : ''}`,
+  };
+}
+
+export function modelSelectOption(model: LocalProviderModel, hint?: string) {
+  const label = formatModelLabel(model);
+  const defaultHint = hint
+    ?? (model.name !== model.id ? model.id : model.brand || model.family || '');
+  return {
+    value: model.id,
+    label: fmtModel(label),
+    hint: hint === 'recent' ? fmtRecentHint() : defaultHint,
+  };
+}
+
+export function navOption(value: string, label: string, hint = '') {
+  return { value, label: pc.cyan(label), hint };
+}
+
+export function confirmLaunchMessage(
+  target: string,
+  modelLabel: string,
+  modelId: string,
+  providerName: string,
+  via?: string,
+): string {
+  const viaSuffix = via ? ` ${pc.dim('(')}${via}${pc.dim(')')}` : '';
+  return `Launch ${pc.bold(target)} · ${fmtModel(modelLabel, modelId)} ${pc.dim('via')} ${fmtProvider(providerName)}?${viaSuffix}`;
+}
+
+
+
+export function logConnected(name: string, modelCount: number): void {
+  p.log.success(
+    `${pc.bold('Connected')} ${pc.dim('·')} ${fmtCount(modelCount, 'model')} ${pc.dim('—')} ${fmtProvider(name)}`,
+  );
+}
+
+export function printWelcomePanel(): void {
+  printPanel(pc.cyan('Welcome to clodex'), [
+    pc.white("Let's get you set up."),
+    `${pc.dim('You can manage providers later with ')}${fmtCommand('clodex providers')}${pc.dim('.')}`,
+  ]);
+}
+
+export function printEnvConflictPanel(conflicts: ConflictInfo[]): void {
+  if (conflicts.length === 0) return;
+  printPanel(pc.yellow('Env overrides'), [
+    `${pc.white('These variables will be ')}${pc.yellow(pc.bold('temporarily removed'))}${pc.white(' for the Claude Code child process:')}`,
+    '',
+    ...conflicts.map(c => `  ${pc.dim(c.name)}${pc.white('=')}${pc.yellow(c.value)}`),
+  ]);
+}
+
+
+
+
+export function printProviderDetailPanel(
+  name: string,
+  modelCount: number,
+  authLabel: string,
+): void {
+  printPanel(fmtProvider(name), [
+    `${pc.bold('Models')}  ${pc.cyan(String(modelCount))} cached`,
+    `${pc.bold('Auth')}    ${pc.white(authLabel)}`,
+  ]);
+}
+
+
+export function printOAuthStepsPanel(title: string, providerLabel: string): void {
+  printPanel(pc.cyan(title), [
+    pc.white('1. Open the URL below in your browser'),
+    pc.white('2. Enter the code when prompted'),
+    `${pc.white('3. Approve access for ')}${fmtProvider(providerLabel)}`,
+  ]);
+}
+
+export function printNetworkWarningPanel(): void {
+  printPanel(pc.yellow('Network mode'), [
+    `${pc.yellow(pc.bold('Anyone on your network'))}${pc.white(' who knows the password can use this server through your account.')}`,
+  ]);
+}
+
+export function printFavoritesOnlyPanel(): void {
+  printPanel(pc.cyan('Favorites-only mode'), [
+    `${pc.white('Limits ')}${pc.cyan('GET /anthropic/v1/models')}${pc.white(' to your curated favorites.')}`,
+    pc.white('Registry models not in your favorites will not appear in the Desktop / Cowork picker.'),
+    `${pc.white('Edit with ')}${pc.cyan('clodex models')}${pc.white('.')}`,
+  ]);
+}

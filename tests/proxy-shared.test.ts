@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import { parseDsmlToolCalls } from '../src/proxy-shared.js';
+import { parseDsmlToolCalls } from '../src/proxy/shared.js';
 
 describe('parseDsmlToolCalls', () => {
   it('parses a single invoke with a string parameter (clean fullwidth-pipe spec form)', () => {

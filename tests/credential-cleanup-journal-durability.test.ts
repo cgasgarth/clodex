@@ -7,7 +7,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'bun:test';
 const fsState = createHoisted(() => ({
   journalPath: '',
   openPaths: new Map<number, string>(),
+  // SAFETY: The test fixture defines the asserted runtime shape.
   tempOpenFlags: [] as Array<string | number>,
+  // SAFETY: The test fixture defines the asserted runtime shape.
   events: [] as string[],
   failTempFsync: false,
   failParentFsync: false,
@@ -18,8 +20,7 @@ function ioError(message: string): NodeJS.ErrnoException {
 }
 
 vi.mock('node:fs', () => {
-  const importOriginal = <T>() => importActual<T>('node:fs', import.meta.url);
-  const actual = importOriginal<typeof import('node:fs')>();
+  const actual = importActual<typeof import('node:fs')>('node:fs', import.meta.url);
   const isJournalTemp = (path: string | undefined): boolean =>
     path?.startsWith(`${fsState.journalPath}.`) === true
     && path.endsWith('.tmp')
@@ -68,7 +69,7 @@ import {
   rmSync,
 } from 'node:fs';
 import { queueCredentialDelete } from '../src/registry/credential-cleanup-journal.js';
-import { getCredentialCleanupPath } from '../src/paths.js';
+import { getCredentialCleanupPath } from '../src/config/paths.js';
 import { createHoisted } from './test-helpers.js';
 
 describe('credential cleanup journal durability', () => {

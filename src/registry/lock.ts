@@ -1,3 +1,4 @@
+import { isNumber, isObject, isString } from '../runtime/type-guards.js';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { createHash, randomUUID } from 'node:crypto';
 import {
@@ -14,11 +15,15 @@ import {
 } from 'node:fs';
 import { userInfo } from 'node:os';
 import { dirname, isAbsolute, join } from 'node:path';
-import { getProvidersPath } from '../paths.js';
+import { getProvidersPath } from '../config/paths.js';
 
 const DEFAULT_WAIT_MS = 30_000;
 const DEFAULT_CREDENTIAL_MUTATION_WAIT_MS = 150_000;
 const DEFAULT_RETRY_MS = 25;
+
+interface RegistryRuntimeError {
+  value: unknown;
+}
 
 interface RegistryLockOwner {
   pid: number;
@@ -69,27 +74,43 @@ function getRegistryLockPath(): string {
   return `${getProvidersPath()}.lock`;
 }
 
+function systemErrorCode(error: RegistryRuntimeError['value']): string | undefined {
+  return isObject(error) && 'code' in error && isString(error.code) ? error.code : undefined;
+}
+
+function removeLockTemporaryFile(path: string): void {
+  try {
+    unlinkSync(path);
+  } catch (error) {
+    if (systemErrorCode(error) !== 'ENOENT') throw error;
+  }
+}
+
 function isPidAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
     return true;
   } catch (err) {
-    return (err as NodeJS.ErrnoException).code === 'EPERM';
+    return systemErrorCode(err) === 'EPERM';
   }
 }
 
 function parseLockOwner(raw: string): RegistryLockOwner | null {
   try {
-    const parsed = JSON.parse(raw) as Partial<RegistryLockOwner>;
-    if (!Number.isInteger(parsed.pid) || (parsed.pid ?? 0) <= 0) return null;
+    const parsed: Partial<RegistryLockOwner> = JSON.parse(raw);
+    if (!isNumber(parsed.pid) || !Number.isInteger(parsed.pid) || parsed.pid <= 0) return null;
     if (
-      typeof parsed.startedAt !== 'number' ||
+      !isNumber(parsed.startedAt) ||
       !Number.isFinite(parsed.startedAt)
     )
       return null;
-    if (typeof parsed.token !== 'string' || parsed.token.length === 0)
+    if (!isString(parsed.token) || parsed.token.length === 0)
       return null;
-    return parsed as RegistryLockOwner;
+    return {
+      pid: parsed.pid,
+      startedAt: parsed.startedAt,
+      token: parsed.token,
+    };
   } catch {
     return null;
   }
@@ -112,7 +133,7 @@ function createLockRecord(
     try {
       linkSync(tempPath, lockPath);
     } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === 'EEXIST') return null;
+      if (systemErrorCode(err) === 'EEXIST') return null;
       throw err;
     }
     return {
@@ -123,11 +144,7 @@ function createLockRecord(
     };
   } finally {
     if (fd !== undefined) closeSync(fd);
-    try {
-      unlinkSync(tempPath);
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
-    }
+    removeLockTemporaryFile(tempPath);
   }
 }
 
@@ -146,7 +163,7 @@ function lockFileMatchesLease(lease: RegistryLockLease): boolean {
       pathStats.ino === lease.inode
     );
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    if (systemErrorCode(err) === 'ENOENT') return false;
     throw err;
   } finally {
     if (fd !== undefined) closeSync(fd);
@@ -224,7 +241,7 @@ function removeStaleLock(
     unlinkSync(lockPath);
     return true;
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+    if (systemErrorCode(err) !== 'ENOENT') throw err;
     return false;
   }
 }
@@ -245,7 +262,7 @@ function tryAcquireReaperGuard(
       const snapshot = createLockRecord(guardPath, owner);
       if (snapshot) return createLease(guardPath, owner, snapshot);
     } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') continue;
+      if (systemErrorCode(err) === 'ENOENT') continue;
       throw err;
     }
 
@@ -253,7 +270,7 @@ function tryAcquireReaperGuard(
     try {
       stale = getStaleLockSnapshot(guardPath, alive);
     } catch (readErr) {
-      if ((readErr as NodeJS.ErrnoException).code === 'ENOENT') continue;
+      if (systemErrorCode(readErr) === 'ENOENT') continue;
       throw readErr;
     }
     if (!stale) return null;
@@ -280,7 +297,7 @@ export function tryAcquireRegistryLock(
       const snapshot = createLockRecord(lockPath, owner, options.onLockTempCreated);
       if (snapshot) return createLease(lockPath, owner, snapshot);
     } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') continue;
+      if (systemErrorCode(err) === 'ENOENT') continue;
       throw err;
     }
 
@@ -288,7 +305,7 @@ export function tryAcquireRegistryLock(
     try {
       stale = getStaleLockSnapshot(lockPath, alive);
     } catch (readErr) {
-      if ((readErr as NodeJS.ErrnoException).code === 'ENOENT') continue;
+      if (systemErrorCode(readErr) === 'ENOENT') continue;
       throw readErr;
     }
     if (!stale) return null;
@@ -299,7 +316,7 @@ export function tryAcquireRegistryLock(
       try {
         currentStale = getStaleLockSnapshot(lockPath, alive);
       } catch (readErr) {
-        if ((readErr as NodeJS.ErrnoException).code === 'ENOENT') continue;
+        if (systemErrorCode(readErr) === 'ENOENT') continue;
         throw readErr;
       }
       if (!currentStale) return null;
@@ -328,7 +345,7 @@ function lockTimeoutError(
   try {
     owner = parseLockOwner(readFileSync(lockPath, 'utf8'));
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+    if (systemErrorCode(err) !== 'ENOENT') throw err;
   }
   if (owner && alive(owner.pid)) {
     return new Error(

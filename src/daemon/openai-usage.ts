@@ -1,4 +1,6 @@
-import { PROVIDER_METADATA_TIMEOUT_MS } from '../timeouts.js';
+import { isBoolean, isNumber, isObject, isString } from '../runtime/type-guards.js';
+import { PROVIDER_METADATA_TIMEOUT_MS } from '../config/timeouts.js';
+import type { JsonObject, JsonValue } from '../oauth/responses-websocket/types.js';
 
 const CODEX_USAGE_URL = 'https://chatgpt.com/backend-api/wham/usage';
 
@@ -28,13 +30,48 @@ export interface OpenAiUsageSnapshot {
 
 type FetchLike = typeof fetch;
 
-function finiteNumber(value: unknown): number | undefined {
-  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+interface OpenAiUsageInput extends JsonObject {
+  plan_type?: JsonValue;
+  rate_limit?: OpenAiRateLimitInput;
+  credits?: OpenAiCreditsInput;
+  additional_rate_limits?: (OpenAiAdditionalLimitInput | null)[];
 }
 
-function parseWindow(value: unknown): OpenAiUsageWindow | undefined {
-  if (!value || typeof value !== 'object') return undefined;
-  const window = value as Record<string, unknown>;
+interface OpenAiRateLimitInput extends JsonObject {
+  primary_window?: OpenAiWindowInput;
+  secondary_window?: OpenAiWindowInput;
+}
+
+interface OpenAiWindowInput extends JsonObject {
+  used_percent?: JsonValue;
+  reset_at?: JsonValue;
+  limit_window_seconds?: JsonValue;
+}
+
+interface OpenAiCreditsInput extends JsonObject {
+  has_credits?: JsonValue;
+  unlimited?: JsonValue;
+  balance?: JsonValue;
+}
+
+interface OpenAiAdditionalLimitInput extends JsonObject {
+  limit_name?: JsonValue;
+  metered_feature?: JsonValue;
+  rate_limit?: OpenAiRateLimitInput;
+}
+
+interface ClassifiedWindows {
+  primary?: OpenAiUsageWindow;
+  weekly?: OpenAiUsageWindow;
+}
+
+function finiteNumber(value: JsonValue): number | undefined {
+  return isNumber(value) && Number.isFinite(value) ? value : undefined;
+}
+
+function parseWindow(value: JsonValue): OpenAiUsageWindow | undefined {
+  if (!value || !isObject(value) || Array.isArray(value)) return undefined;
+  const window: OpenAiWindowInput = value;
   const usedPercent = finiteNumber(window.used_percent);
   const resetAt = finiteNumber(window.reset_at);
   const limitWindowSeconds = finiteNumber(window.limit_window_seconds);
@@ -51,75 +88,78 @@ function parseWindow(value: unknown): OpenAiUsageWindow | undefined {
 function classifyWindows(
   first: OpenAiUsageWindow | undefined,
   second: OpenAiUsageWindow | undefined,
-): { primary?: OpenAiUsageWindow; weekly?: OpenAiUsageWindow } {
+): ClassifiedWindows {
   const windows = [first, second].filter(
     (window): window is OpenAiUsageWindow => window !== undefined,
   );
   const weekly = windows.find(window => window.limitWindowSeconds >= 6 * 24 * 60 * 60);
   const primary = windows.find(window => window !== weekly);
-  return {
-    ...(primary ? { primary } : {}),
-    ...(weekly ? { weekly } : {}),
-  };
+  const classified: ClassifiedWindows = {};
+  if (primary) classified.primary = primary;
+  if (weekly) classified.weekly = weekly;
+  return classified;
 }
 
 export function parseOpenAiUsage(
-  value: unknown,
+  value: JsonValue,
   now = new Date(),
 ): OpenAiUsageSnapshot {
-  if (!value || typeof value !== 'object') throw new Error('OpenAI usage response is not an object');
-  const root = value as Record<string, unknown>;
-  const rateLimit = root.rate_limit && typeof root.rate_limit === 'object'
-    ? root.rate_limit as Record<string, unknown>
+  if (!value || !isObject(value) || Array.isArray(value)) {
+    throw new Error('OpenAI usage response is not an object');
+  }
+  const root: OpenAiUsageInput = value;
+  const rateLimit = root.rate_limit && isObject(root.rate_limit)
+    ? root.rate_limit
     : {};
-  const credits = root.credits && typeof root.credits === 'object'
-    ? root.credits as Record<string, unknown>
+  const credits = root.credits && isObject(root.credits)
+    ? root.credits
     : undefined;
   const additional = Array.isArray(root.additional_rate_limits)
     ? root.additional_rate_limits.flatMap(item => {
-        if (!item || typeof item !== 'object') return [];
-        const record = item as Record<string, unknown>;
-        const itemLimit = record.rate_limit && typeof record.rate_limit === 'object'
-          ? record.rate_limit as Record<string, unknown>
+        if (!item) return [];
+        const record = item;
+        const itemLimit = record.rate_limit && isObject(record.rate_limit)
+          ? record.rate_limit
           : {};
         const { primary, weekly } = classifyWindows(
           parseWindow(itemLimit.primary_window),
           parseWindow(itemLimit.secondary_window),
         );
-        const name = typeof record.limit_name === 'string'
-          ? record.limit_name.slice(0, 100)
+        const name = isString(record.limit_name)
+          ? String(record.limit_name).slice(0, 100)
           : undefined;
-        const feature = typeof record.metered_feature === 'string'
-          ? record.metered_feature.slice(0, 100)
+        const feature = isString(record.metered_feature)
+          ? String(record.metered_feature).slice(0, 100)
           : undefined;
         if (!name && !feature && !primary && !weekly) return [];
-        return [{
-          ...(name ? { name } : {}),
-          ...(feature ? { feature } : {}),
-          ...(primary ? { primary } : {}),
-          ...(weekly ? { weekly } : {}),
-        }];
+        const limit: OpenAiUsageSnapshot['additional'][number] = {};
+        if (name) limit.name = name;
+        if (feature) limit.feature = feature;
+        if (primary) limit.primary = primary;
+        if (weekly) limit.weekly = weekly;
+        return [limit];
       })
     : [];
   const windows = classifyWindows(
     parseWindow(rateLimit.primary_window),
     parseWindow(rateLimit.secondary_window),
   );
-  return {
+  const snapshot: OpenAiUsageSnapshot = {
     fetchedAt: now.toISOString(),
-    ...(typeof root.plan_type === 'string' ? { plan: root.plan_type.slice(0, 100) } : {}),
-    ...windows,
-    ...(credits
-      ? {
-          credits: {
-            ...(typeof credits.has_credits === 'boolean' ? { hasCredits: credits.has_credits } : {}),
-            ...(typeof credits.unlimited === 'boolean' ? { unlimited: credits.unlimited } : {}),
-            ...(finiteNumber(credits.balance) !== undefined ? { balance: finiteNumber(credits.balance) } : {}),
-          },
-        }
-      : {}),
     additional,
   };
+  if (isString(root.plan_type)) snapshot.plan = String(root.plan_type).slice(0, 100);
+  if (windows.primary) snapshot.primary = windows.primary;
+  if (windows.weekly) snapshot.weekly = windows.weekly;
+  if (credits) {
+    const parsedCredits: NonNullable<OpenAiUsageSnapshot['credits']> = {};
+    const balance = finiteNumber(credits.balance);
+    if (isBoolean(credits.has_credits)) parsedCredits.hasCredits = credits.has_credits;
+    if (isBoolean(credits.unlimited)) parsedCredits.unlimited = credits.unlimited;
+    if (balance !== undefined) parsedCredits.balance = balance;
+    snapshot.credits = parsedCredits;
+  }
+  return snapshot;
 }
 
 export async function fetchOpenAiUsage(
@@ -139,12 +179,15 @@ export async function fetchOpenAiUsage(
   timer.unref();
   try {
     const response = await (options.fetch ?? fetch)(CODEX_USAGE_URL, {
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        Accept: 'application/json',
-        'User-Agent': 'codex-cli',
-        ...(accountId ? { 'ChatGPT-Account-Id': accountId } : {}),
-      },
+      headers: (() => {
+        const headers = new Headers({
+          Authorization: `Bearer ${accessToken}`,
+          Accept: 'application/json',
+          'User-Agent': 'codex-cli',
+        });
+        if (accountId) headers.set('ChatGPT-Account-Id', accountId);
+        return headers;
+      })(),
       signal: controller.signal,
     });
     if (!response.ok) throw new Error(`OpenAI usage request failed (${response.status})`);

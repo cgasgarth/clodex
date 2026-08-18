@@ -1,10 +1,10 @@
 // src/registry/custom-endpoint.ts — add custom OpenAI/Anthropic-compatible providers
 
-import { provisionProviderCredential } from '../env.js';
-import { credentialInstanceAuthRef } from '../credential-helper.js';
-import { deriveBrand } from '../models.js';
-import { resolveContextWindow } from '../context-window.js';
-import { PROVIDER_METADATA_TIMEOUT_MS } from '../timeouts.js';
+import { provisionProviderCredential } from '../config/environment.js';
+import { credentialInstanceAuthRef } from '../credentials/helper.js';
+import { deriveBrand } from '../models/types.js';
+import { resolveContextWindow } from '../models/context-window.js';
+import { PROVIDER_METADATA_TIMEOUT_MS } from '../config/timeouts.js';
 import {
   cancelCredentialDelete,
   journalCredentialWrite,
@@ -24,7 +24,7 @@ import {
   getProviderDebugLogPath,
   makeTraceLogger,
   registerTraceSecret,
-} from '../trace-log.js';
+} from '../observability/trace-log.js';
 
 type CustomEndpointKind = 'openai' | 'anthropic';
 
@@ -49,6 +49,14 @@ export interface AddCustomEndpointResult {
   credentialCleanupPending?: boolean;
 }
 
+interface AnthropicModelsResponse {
+  data?: Array<{ id?: string; name?: string }>;
+}
+
+interface AnthropicRequestHeaders {
+  [name: string]: string;
+}
+
 function npmForKind(kind: CustomEndpointKind): string {
   return kind === 'anthropic' ? '@ai-sdk/anthropic' : '@ai-sdk/openai-compatible';
 }
@@ -68,14 +76,15 @@ export async function fetchAnthropicModels(
   const timer = setTimeout(() => controller.abort(), PROVIDER_METADATA_TIMEOUT_MS);
 
   try {
+    const requestHeaders: AnthropicRequestHeaders = {
+      'anthropic-version': '2023-06-01',
+      Accept: 'application/json',
+      ...extraHeaders,
+    };
+    if (apiKey) requestHeaders['x-api-key'] = apiKey;
     const response = await fetch(modelsUrl, {
       method: 'GET',
-      headers: {
-        ...(apiKey ? { 'x-api-key': apiKey } : {}),
-        'anthropic-version': '2023-06-01',
-        Accept: 'application/json',
-        ...extraHeaders,
-      },
+      headers: requestHeaders,
       redirect: 'manual',
       signal: controller.signal,
     });
@@ -93,10 +102,10 @@ export async function fetchAnthropicModels(
     }
 
     if (response.ok) {
-      let json: { data?: Array<{ id?: string; name?: string }> } = {};
+      let json: AnthropicModelsResponse = {};
       try {
         if (rawBodyText.trim()) {
-          json = JSON.parse(rawBodyText) as { data?: Array<{ id?: string; name?: string }> };
+          json = JSON.parse(rawBodyText);
         }
       } catch {
         // Failed to parse
@@ -227,6 +236,8 @@ export async function addCustomEndpointProvider(input: AddCustomEndpointInput): 
           };
         }
         const now = new Date().toISOString();
+        const providerApi: RegistryProvider['api'] = { npm, url: fetched.baseUrl };
+        if (headers) providerApi.headers = headers;
         const entry: RegistryProvider = {
           id: providerId,
           templateId: input.kind === 'anthropic' ? 'custom-anthropic' : 'custom-openai',
@@ -234,7 +245,7 @@ export async function addCustomEndpointProvider(input: AddCustomEndpointInput): 
           enabled: true,
           authRef,
           authType: anonymous ? 'none' : 'api',
-          api: { npm, url: fetched.baseUrl, ...(headers ? { headers } : {}) },
+          api: providerApi,
           addedAt: now,
           refreshedAt: now,
           modelsCache: {
@@ -258,12 +269,13 @@ export async function addCustomEndpointProvider(input: AddCustomEndpointInput): 
             credentialCleanupPending = true;
           }
         }
-        return {
+        const addedResult: AddCustomEndpointResult = {
           added: true,
           provider: entry,
           modelCount: fetched.models.length,
-          ...(credentialCleanupPending ? { credentialCleanupPending: true } : {}),
         };
+        if (credentialCleanupPending) addedResult.credentialCleanupPending = true;
+        return addedResult;
       });
     };
 

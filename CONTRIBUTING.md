@@ -84,7 +84,7 @@ migration.
 ## Development
 
 ```bash
-bun install --frozen-lockfile
+bun ci
 bun run build
 bun run test
 bun run typecheck
@@ -93,8 +93,10 @@ bun run dev
 bun test tests/patcher.test.ts
 ```
 
-Development and the published CLI require **Bun >= 1.3.14**. `packageManager`,
-`engines.bun`, and `bun.lock` define the toolchain. Dependencies are exact-pinned.
+Development and the published CLI require **Bun 1.4 canary or newer**. CI follows
+the moving canary channel and prints the exact revision used by each run.
+`packageManager`, `engines.bun`, and `bun.lock` define the toolchain contract.
+Dependencies are exact-pinned.
 Do not add Node, npm, pnpm, Vitest, or tsup execution paths.
 
 Before opening a PR, run:
@@ -107,8 +109,8 @@ CI runs `bun run check:ci` on every pull request and every push to `main`.
 
 ## Commits
 
-This repo uses [Conventional Commits](https://www.conventionalcommits.org/), enforced by
-commitlint both locally through a Husky `commit-msg` hook and in CI.
+Use [Conventional Commits](https://www.conventionalcommits.org/) so history stays
+easy to scan. Husky runs the full repository checks before each commit.
 
 | Prefix | Use for |
 | --- | --- |

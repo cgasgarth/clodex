@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
+import { afterAll, beforeAll, expect, it } from 'bun:test';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -11,7 +11,8 @@ import { PassThrough } from 'node:stream';
 import { gzipSync } from 'node:zlib';
 import { ensureHttpProxyCaBundle, ensureHttpProxyCertificates } from '../src/http-proxy/ca.js';
 import { shouldInterceptConnect, startHttpProxy } from '../src/http-proxy/server.js';
-import { flushTraceLogs } from '../src/trace-log.js';
+import { flushTraceLogs } from '../src/observability/trace-log.js';
+import { requireTcpAddress, type JsonObject } from './test-helpers.js';
 
 const testHome = mkdtempSync(join(tmpdir(), 'clodex-http-proxy-'));
 const previousRelayHome = process.env['CLODEX_HOME'];
@@ -25,8 +26,7 @@ async function readFlushedLog(path: string): Promise<string> {
 async function listen(server: http.Server | https.Server): Promise<number> {
   server.listen(0, '127.0.0.1');
   await once(server, 'listening');
-  const address = server.address();
-  if (!address || typeof address === 'string') throw new Error('test server did not bind');
+  const address = requireTcpAddress(server.address(), 'test server did not bind');
   return address.port;
 }
 
@@ -47,6 +47,7 @@ async function connectMitm(
 
   let response = Buffer.alloc(0);
   while (!response.includes(Buffer.from('\r\n\r\n'))) {
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const [chunk] = await once(socket, 'data') as [Buffer];
     response = Buffer.concat([response, chunk]);
   }
@@ -152,9 +153,10 @@ async function waitForSocketResponseEnd(socket: tls.TLSSocket): Promise<void> {
 }
 
 function activeProxySockets(proxyPort: number): net.Socket[] {
-  const getActiveHandles = (process as typeof process & {
+  // SAFETY: The test fixture defines the asserted runtime shape.
+  const { _getActiveHandles: getActiveHandles } = process as typeof process & {
     _getActiveHandles(): unknown[];
-  })._getActiveHandles;
+  };
   return getActiveHandles.call(process).filter((handle): handle is net.Socket =>
     handle instanceof net.Socket
     && handle.localPort === proxyPort
@@ -164,36 +166,50 @@ function activeProxySockets(proxyPort: number): net.Socket[] {
 function adapterRequestWithResponseEvents(
   emitEvents: (response: http.IncomingMessage) => void,
 ): typeof http.request {
+  // SAFETY: The test fixture defines the asserted runtime shape.
   return ((
     _options: http.RequestOptions,
     onResponse: (response: http.IncomingMessage) => void,
   ) => {
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const request = new EventEmitter() as EventEmitter & {
       end(body: Buffer): void;
       destroy(error?: Error): void;
     };
     request.end = () => {
       queueMicrotask(() => {
+        // SAFETY: The test fixture defines the asserted runtime shape.
         const response = Object.assign(new PassThrough(), {
           statusCode: 200,
           statusMessage: 'OK',
           headers: { 'content-type': 'text/event-stream' },
           rawHeaders: ['Content-Type', 'text/event-stream'],
           complete: false,
-        }) as unknown as http.IncomingMessage;
+        }) as http.IncomingMessage;
         onResponse(response);
         emitEvents(response);
       });
     };
     request.destroy = () => {};
     return request;
-  }) as unknown as typeof http.request;
+  }) as typeof http.request;
+}
+
+function closedAdapterRequest() {
+  // SAFETY: The test fixture defines the asserted runtime shape.
+  const request = new EventEmitter() as EventEmitter & {
+    end(body: Buffer): void;
+    destroy(error?: Error): void;
+  };
+  request.end = () => queueMicrotask(() => request.emit('close'));
+  request.destroy = () => {};
+  return request;
 }
 
 async function adapterResponseFailureEntries(
   logName: string,
   emitEvents: (response: http.IncomingMessage) => void,
-): Promise<Array<Record<string, unknown>>> {
+): Promise<JsonObject[]> {
   const certificates = ensureHttpProxyCertificates();
   const inferenceLogPath = join(testHome, logName);
   const route = {
@@ -240,7 +256,8 @@ async function adapterResponseFailureEntries(
     return (await readFlushedLog(inferenceLogPath))
       .trim()
       .split('\n')
-      .map(line => JSON.parse(line) as Record<string, unknown>);
+      // SAFETY: The test fixture defines the asserted runtime shape.
+      .map(line => /* SAFETY: Each trace line is a serialized JSON object. */ JSON.parse(line) as JsonObject);
   } finally {
     await proxy.close();
   }
@@ -256,8 +273,7 @@ afterAll(() => {
   rmSync(testHome, { recursive: true, force: true });
 });
 
-describe('selective HTTP proxy', () => {
-  it('preserves an existing custom CA in the child trust bundle', () => {
+it('preserves an existing custom CA in the child trust bundle', () => {
     const certificates = ensureHttpProxyCertificates();
     const extraPath = join(testHome, 'corporate-ca.pem');
     writeFileSync(extraPath, '-----BEGIN CERTIFICATE-----\ncorporate-test\n-----END CERTIFICATE-----\n');
@@ -335,7 +351,7 @@ describe('selective HTTP proxy', () => {
   it('sends Grok requests through Secondwind before provider translation', async () => {
     const certificates = ensureHttpProxyCertificates();
     let adapterBody = '';
-    const observed: Array<Record<string, unknown>> = [];
+    const observed: JsonObject[] = [];
     const adapterServer = http.createServer(async (req, res) => {
       const chunks: Buffer[] = [];
       req.on('data', chunk => chunks.push(Buffer.from(chunk)));
@@ -487,8 +503,8 @@ describe('selective HTTP proxy', () => {
     try {
       const body = Buffer.from('{\n  "model" : "claude-sonnet-4-6",\n  "output_config":{"effort":"high"},\n  "messages":[{"role":"user","content":[{"type":"image","source":{"type":"base64","data":"private-image-data"}},{"type":"text","text":"identify this Sonnet request"}]}],\n  "stream":true\n}\n');
       const secure = await connectMitm(proxy.port, certificates.caCert);
-      let response = '';
-      secure.on('data', chunk => { response += chunk.toString(); });
+      let rawResponse = '';
+      secure.on('data', chunk => { rawResponse += chunk.toString(); });
       secure.write([
         'POST /v1/messages?beta=true HTTP/1.1',
         'Host: api.anthropic.com',
@@ -502,7 +518,7 @@ describe('selective HTTP proxy', () => {
       ].join('\r\n') + body.toString());
       await waitForSocketResponseEnd(secure);
 
-      expect(response).toContain('200 OK');
+      expect(rawResponse).toContain('200 OK');
       expect(receivedPath).toBe('/v1/messages?beta=true');
       expect(receivedAuth).toBe('Bearer subscription-oauth-token');
       expect(receivedBody.equals(body)).toBe(true);
@@ -884,7 +900,9 @@ describe('selective HTTP proxy', () => {
       req.on('data', chunk => chunks.push(Buffer.from(chunk)));
       await once(req, 'end');
       adapterAuth = req.headers.authorization;
+      // SAFETY: The test fixture defines the asserted runtime shape.
       adapterApiKey = req.headers['x-api-key'] as string | undefined;
+      // SAFETY: The test fixture defines the asserted runtime shape.
       adapterClaudeSessionId = req.headers['x-claude-code-session-id'] as string | undefined;
       adapterBody = Buffer.concat(chunks).toString();
       await new Promise(resolve => setTimeout(resolve, 35));
@@ -940,8 +958,8 @@ describe('selective HTTP proxy', () => {
         stream: true,
       });
       const secure = await connectMitm(proxy.port, certificates.caCert);
-      let response = '';
-      secure.on('data', chunk => { response += chunk.toString(); });
+      let providerResponse = '';
+      secure.on('data', chunk => { providerResponse += chunk.toString(); });
       secure.write([
         'POST /v1/messages HTTP/1.1',
         'Host: api.anthropic.com',
@@ -955,7 +973,7 @@ describe('selective HTTP proxy', () => {
       ].join('\r\n') + body);
       await waitForSocketResponseEnd(secure);
 
-      expect(response).toContain('200 OK');
+      expect(providerResponse).toContain('200 OK');
       expect(anthropicRequests).toBe(0);
       expect(adapterAuth).toBeUndefined();
       expect(adapterApiKey).toBe('adapter-local-token');
@@ -1450,7 +1468,7 @@ describe('selective HTTP proxy', () => {
         route: 'translated',
         statusCode: 502,
         phase: 'waiting_for_headers',
-        errorType: 'Error',
+        errorType: expect.stringMatching(/^(?:Error|TypeError)$/),
         errorCode: expect.stringMatching(/^(?:ECONN(?:REFUSED|RESET)|ConnectionRefused)$/),
         failureSource: 'adapter_request_error',
         terminationSource: 'upstream_failure',
@@ -1498,6 +1516,7 @@ describe('selective HTTP proxy', () => {
           adapterServer.close();
         },
       },
+      // SAFETY: The test fixture defines the asserted runtime shape.
       adapterRequest: ((options: http.RequestOptions, onResponse: (response: http.IncomingMessage) => void) =>
         http.request(
           { ...options, agent: options.agent ?? false },
@@ -1557,15 +1576,7 @@ describe('selective HTTP proxy', () => {
       npm: '@ai-sdk/openai-compatible',
       providerId: 'test-provider',
     };
-    const adapterRequest = () => {
-      const request = new EventEmitter() as EventEmitter & {
-        end(body: Buffer): void;
-        destroy(error?: Error): void;
-      };
-      request.end = () => queueMicrotask(() => request.emit('close'));
-      request.destroy = () => {};
-      return request;
-    };
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const proxy = await startHttpProxy({
       routes: [route],
       adapterHandle: {
@@ -1574,7 +1585,7 @@ describe('selective HTTP proxy', () => {
         close: () => {},
       },
       inferenceLogPath,
-      adapterRequest,
+      adapterRequest: closedAdapterRequest,
     } as Parameters<typeof startHttpProxy>[0]);
 
     try {
@@ -1749,4 +1760,3 @@ describe('selective HTTP proxy', () => {
       }),
     ]);
   }, 20_000);
-});

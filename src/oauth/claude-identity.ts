@@ -2,6 +2,8 @@
 // Anthropic validates that OAuth requests match the claude-cli fingerprint.
 
 import { createHash, randomUUID } from 'node:crypto';
+import { isObject, isString } from '../runtime/type-guards.js';
+import type { ProviderDataValue } from '../types.js';
 
 export const CLAUDE_CODE_CLI_VERSION = '2.1.195';
 export const CLAUDE_CODE_USER_AGENT = `claude-cli/${CLAUDE_CODE_CLI_VERSION} (external, cli)`;
@@ -30,21 +32,21 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
 /** Resolve cliUserID (device_id) from stored providerData, falling back to a hash. */
 function resolveCliUserID(
-  providerData: Record<string, unknown> | undefined,
+  providerData: Record<string, ProviderDataValue> | undefined,
   seed: string,
 ): string {
   const v = providerData?.cliUserID;
-  if (typeof v === 'string' && HEX64_RE.test(v)) return v;
+  if (isString(v) && HEX64_RE.test(v)) return v;
   return createHash('sha256').update(`cliUserID:${seed}`).digest('hex');
 }
 
 /** Resolve accountUUID from stored providerData, falling back to a deterministic UUID. */
 function resolveAccountUUID(
-  providerData: Record<string, unknown> | undefined,
+  providerData: Record<string, ProviderDataValue> | undefined,
   seed: string,
 ): string {
   const v = providerData?.accountUUID;
-  if (typeof v === 'string' && UUID_RE.test(v)) return v;
+  if (isString(v) && UUID_RE.test(v)) return v;
   return uuidFromHash(`account:${seed}`);
 }
 
@@ -56,28 +58,43 @@ function buildClaudeCodeBillingSystemLine(): string {
   return `${CLAUDE_CODE_BILLING_HEADER_PREFIX} cc_version=${CLAUDE_CODE_CLI_VERSION}.0; cc_entrypoint=${CLAUDE_CODE_ENTRYPOINT};`;
 }
 
-function systemBlockText(block: unknown): string | undefined {
-  if (typeof block === 'string') return block;
-  if (block && typeof block === 'object' && 'text' in block) {
-    const text = (block as { text?: unknown }).text;
-    return typeof text === 'string' ? text : undefined;
+interface ClaudeBillingSystemBlock {
+  text?: string;
+}
+
+interface ClaudeBillingRequestBody {
+  system?: string | Array<string | ClaudeBillingSystemBlock> | null;
+}
+
+interface ClaudeToolMarker {}
+
+interface ClaudeBetaRequestBody extends ClaudeBillingRequestBody {
+  tools?: ClaudeToolMarker[];
+  model?: string;
+}
+
+function systemBlockText<Value>(block: Value): string | undefined {
+  if (isString(block)) return block;
+  if (isObject(block) && 'text' in block) {
+    const text = block.text;
+    return isString(text) ? text : undefined;
   }
   return undefined;
 }
 
-function hasClaudeCodeBillingSystemLine(system: unknown): boolean {
-  if (typeof system === 'string') return system.startsWith(CLAUDE_CODE_BILLING_HEADER_PREFIX);
+function hasClaudeCodeBillingSystemLine<Value>(system: Value): boolean {
+  if (isString(system)) return system.startsWith(CLAUDE_CODE_BILLING_HEADER_PREFIX);
   if (!Array.isArray(system)) return false;
   return system.some(block => systemBlockText(block)?.startsWith(CLAUDE_CODE_BILLING_HEADER_PREFIX));
 }
 
-export function injectClaudeCodeBillingSystemLine(body: Record<string, unknown>): void {
+export function injectClaudeCodeBillingSystemLine(body: ClaudeBillingRequestBody): void {
   if (hasClaudeCodeBillingSystemLine(body.system)) return;
 
   const billingBlock = { type: 'text', text: buildClaudeCodeBillingSystemLine() };
   if (body.system === undefined || body.system === null) {
     body.system = [billingBlock];
-  } else if (typeof body.system === 'string') {
+  } else if (isString(body.system)) {
     body.system = [billingBlock, { type: 'text', text: body.system }];
   } else if (Array.isArray(body.system)) {
     body.system = [billingBlock, ...body.system];
@@ -114,15 +131,15 @@ const OPUS_ONLY: string[] = ['context-1m-2025-08-07', 'mid-conversation-system-2
  * forcing betas the client never requested (can cause malformed tool_use streams).
  */
 export function selectBetaFlags(
-  body: Record<string, unknown>,
+  body: ClaudeBetaRequestBody,
   model?: string | null,
   clientBeta?: string | null,
 ): string {
   const hasSystem = !!body.system &&
-    (typeof body.system === 'string' || (Array.isArray(body.system) && body.system.length > 0));
-  const tools = body.tools as unknown[] | undefined;
+    (isString(body.system) || (Array.isArray(body.system) && body.system.length > 0));
+  const tools = body.tools;
   const isFullAgent = hasSystem && Array.isArray(tools) && tools.length > 0;
-  const m = (model ?? (typeof body.model === 'string' ? body.model : '')).toLowerCase();
+  const m = (model ?? (isString(body.model) ? body.model : '')).toLowerCase();
   const isOpus = m.includes('opus');
   const isSonnetOrOpus = isOpus || m.includes('sonnet');
 
@@ -147,16 +164,20 @@ export function selectBetaFlags(
  * Inject Claude Code identity metadata into an Anthropic request body in-place.
  * Must be called before forwarding the request to api.anthropic.com.
  */
-export function injectClaudeIdentity(
-  body: Record<string, unknown>,
-  providerData: Record<string, unknown> | undefined,
+export interface ClaudeIdentity {
+  sessionId: string;
+  userId: string;
+}
+
+export function injectClaudeIdentity<Body extends { metadata?: { user_id?: unknown } }>(
+  body: Body,
+  providerData: Record<string, ProviderDataValue> | undefined,
   seed: string,
-): { sessionId: string; userId: string } {
+): ClaudeIdentity {
   const deviceId = resolveCliUserID(providerData, seed);
   const accountUUID = resolveAccountUUID(providerData, seed);
   const sessionId = getOrCreateSessionId(seed);
   const userId = buildUserIdJson(deviceId, accountUUID, sessionId);
-  const existing = body.metadata as Record<string, unknown> | undefined;
-  body.metadata = { ...(existing ?? {}), user_id: userId };
+  Object.assign(body, { metadata: { ...body.metadata, user_id: userId } });
   return { sessionId, userId };
 }

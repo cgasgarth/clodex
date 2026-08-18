@@ -1,4 +1,6 @@
-import type { InferenceTraceEvent } from '../trace-log.js';
+import { isBoolean, isNumber, isString } from '../runtime/type-guards.js';
+import { diagnosticRecord } from '../observability/trace-log.js';
+import type { DiagnosticRecord, InferenceTraceEvent } from '../observability/trace-log.js';
 import { normalizeApiProcessingMode, type ApiProcessingMode } from './api-pricing.js';
 import { DaemonMetricsStore, hashSessionId } from './metrics.js';
 import { DaemonSessionRegistry } from './session-registry.js';
@@ -28,7 +30,7 @@ export interface DaemonDiagnostic {
   threadName?: string;
   code?: string;
   statusCode?: number;
-  detail?: Record<string, unknown>;
+  detail?: DiagnosticRecord;
 }
 
 const TERMINAL_EVENTS = new Set([
@@ -42,12 +44,14 @@ export class DaemonInferenceCollector {
   readonly metrics: DaemonMetricsStore;
   private readonly pending = new Map<string, PendingUsage>();
   private readonly diagnostics: DaemonDiagnostic[] = [];
+  private readonly sessionTitle: typeof resolveClaudeSessionTitle;
 
   constructor(
     metrics = new DaemonMetricsStore(),
-    private readonly sessionTitle = resolveClaudeSessionTitle,
+    sessionTitle = resolveClaudeSessionTitle,
   ) {
     this.metrics = metrics;
+    this.sessionTitle = sessionTitle;
   }
 
   handle(event: InferenceTraceEvent): void {
@@ -122,20 +126,21 @@ export class DaemonInferenceCollector {
           : 'completed';
       this.finish(usage, outcome, now);
       if (outcome === 'failed') {
-        this.pushDiagnostic({
+        const diagnostic: DaemonDiagnostic = {
           timestamp: now.toISOString(),
           kind: entry.event,
           requestId,
           sessionHash,
           code: entry.errorCode ?? entry.errorType,
-          ...(entry.statusCode !== undefined ? { statusCode: entry.statusCode } : {}),
           detail: {
             phase: entry.phase,
             failureSource: entry.failureSource,
             terminationSource: entry.terminationSource,
             errorSignature: entry.errorSignature,
           },
-        });
+        };
+        if (entry.statusCode !== undefined) diagnostic.statusCode = entry.statusCode;
+        this.pushDiagnostic(diagnostic);
       }
       return;
     }
@@ -169,7 +174,7 @@ export class DaemonInferenceCollector {
     }
 
     const diagnosticEvent = event.entry;
-    const eventName = typeof diagnosticEvent.event === 'string'
+    const eventName = isString(diagnosticEvent.event)
       ? diagnosticEvent.event
       : 'websocket';
     if (
@@ -178,25 +183,25 @@ export class DaemonInferenceCollector {
       || eventName.includes('compact')
       || eventName.includes('retry')
     ) {
-      const sessionId = typeof diagnosticEvent.claudeSessionId === 'string'
+      const sessionId = isString(diagnosticEvent.claudeSessionId)
         ? diagnosticEvent.claudeSessionId
         : undefined;
       this.pushDiagnostic({
         timestamp: now.toISOString(),
         kind: eventName,
-        requestId: typeof diagnosticEvent.requestId === 'string'
+        requestId: isString(diagnosticEvent.requestId)
           ? diagnosticEvent.requestId
           : undefined,
         sessionHash: hashSessionId(sessionId),
         sessionId,
         threadName: sessionId ? this.sessionTitle(sessionId) : undefined,
-        detail: sanitizeDiagnosticDetail(diagnosticEvent),
+        detail: sanitizeDiagnosticDetail(diagnosticRecord(diagnosticEvent)),
       });
     }
   }
 
   recentDiagnostics(limit = 50): DaemonDiagnostic[] {
-    return this.diagnostics.slice(-Math.max(1, Math.min(limit, 200))).reverse();
+    return this.diagnostics.slice(-Math.max(1, Math.min(limit, 200))).toReversed();
   }
 
   recordDiagnostic(diagnostic: DaemonDiagnostic): void {
@@ -235,9 +240,9 @@ export class DaemonInferenceCollector {
 }
 
 function sanitizeDiagnosticDetail(
-  event: Record<string, unknown>,
-): Record<string, unknown> {
-  const safe: Record<string, unknown> = {};
+  event: DiagnosticRecord,
+): DiagnosticRecord {
+  const safe: DiagnosticRecord = {};
   const allowed = [
     'event',
     'decision',
@@ -278,8 +283,8 @@ function sanitizeDiagnosticDetail(
   ];
   for (const key of allowed) {
     const value = event[key];
-    if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
-      safe[key] = typeof value === 'string' ? value.slice(0, 200) : value;
+    if (isString(value) || isNumber(value) || isBoolean(value)) {
+      safe[key] = isString(value) ? value.slice(0, 200) : value;
     }
   }
   return safe;

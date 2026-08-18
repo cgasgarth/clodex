@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'bun:test';
 import { filterServerModelsByFavorites } from '../src/server/catalog-filter.js';
 import { MAX_MODEL_CATALOG } from '../src/constants.js';
-import { getServerFavoritesOnly, setServerFavoritesOnly } from '../src/config.js';
+import { getServerFavoritesOnly, setServerFavoritesOnly } from '../src/config/config.js';
 import type { ServerModelInfo } from '../src/server/models.js';
 import type { FavoriteModel } from '../src/types.js';
 

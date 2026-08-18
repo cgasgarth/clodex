@@ -1,4 +1,4 @@
-import { BunNativeWebSocket } from '../src/bun-websocket.js';
+import { BunNativeWebSocket } from '../src/transport/bun-websocket.js';
 import {
   CODEX_RESPONSES_LITE_VERSION,
   CODEX_RESPONSES_LITE_WS_URL,
@@ -12,6 +12,36 @@ interface Usage {
   cachedTokens: number;
 }
 
+interface BenchmarkHeaders {
+  [key: string]: string;
+  Authorization: string;
+  originator: string;
+}
+
+interface BenchmarkPayload {
+  model: string;
+  instructions: string;
+  tools: never[];
+  parallel_tool_calls: boolean;
+  reasoning: { effort: string; context: string };
+  prompt_cache_key: string;
+  store: boolean;
+  input: Array<{
+    role: string;
+    content: Array<{ type: string; text: string }>;
+  }>;
+}
+
+interface BenchmarkEvent {
+  type?: string;
+  response?: {
+    usage?: {
+      input_tokens?: number;
+      input_tokens_details?: { cached_tokens?: number };
+    };
+  };
+}
+
 if (process.env.CLODEX_LIVE_CACHE_BENCHMARK !== '1') {
   throw new Error('Set CLODEX_LIVE_CACHE_BENCHMARK=1 to authorize this live benchmark');
 }
@@ -23,14 +53,14 @@ const provider = (await loadRegistryProviders()).find(candidate => (
 if (!provider?.apiKey) throw new Error('No usable OpenAI OAuth provider was found');
 const accountId = extractOpenAiAccountId({ access_token: provider.apiKey })?.trim()
   || provider.oauthAccountId?.trim();
-const headers = {
+const headers: BenchmarkHeaders = {
   Authorization: `Bearer ${provider.apiKey}`,
-  ...(accountId ? { 'ChatGPT-Account-Id': accountId } : {}),
   originator: 'clodex-cache-benchmark',
   version: CODEX_RESPONSES_LITE_VERSION,
   'x-openai-internal-codex-responses-lite': 'true',
   'OpenAI-Beta': CODEX_RESPONSES_WEBSOCKETS_BETA,
 };
+if (accountId) headers['ChatGPT-Account-Id'] = accountId;
 
 async function openSocket(): Promise<BunNativeWebSocket> {
   const socket = new BunNativeWebSocket(CODEX_RESPONSES_LITE_WS_URL, { headers });
@@ -41,7 +71,7 @@ async function openSocket(): Promise<BunNativeWebSocket> {
   return socket;
 }
 
-async function create(socket: BunNativeWebSocket, payload: Record<string, unknown>): Promise<Usage> {
+async function create(socket: BunNativeWebSocket, requestPayload: BenchmarkPayload): Promise<Usage> {
   return await new Promise<Usage>((resolve, reject) => {
     const cleanup = () => {
       socket.off('error', onError);
@@ -52,31 +82,31 @@ async function create(socket: BunNativeWebSocket, payload: Record<string, unknow
       reject(error);
     };
     const onMessage = (data: Buffer) => {
-      const event = JSON.parse(data.toString()) as Record<string, unknown>;
-      const type = typeof event.type === 'string' ? event.type : '';
+      // SAFETY: The WebSocket server emits the documented OpenAI response event envelope.
+      const event = JSON.parse(data.toString()) as BenchmarkEvent;
+      const type = event.type ?? '';
       if (!['response.completed', 'response.failed', 'error'].includes(type)) return;
       cleanup();
       if (type !== 'response.completed') {
         reject(new Error(`Benchmark request failed: ${JSON.stringify(event)}`));
         return;
       }
-      const response = event.response as Record<string, unknown>;
-      const usage = response.usage as Record<string, unknown>;
-      const details = usage.input_tokens_details as Record<string, unknown>;
+      const usage = event.response?.usage;
+      const details = usage?.input_tokens_details;
       resolve({
-        inputTokens: Number(usage.input_tokens ?? 0),
-        cachedTokens: Number(details.cached_tokens ?? 0),
+        inputTokens: usage?.input_tokens ?? 0,
+        cachedTokens: details?.cached_tokens ?? 0,
       });
     };
     socket.on('error', onError);
     socket.on('message', onMessage);
-    socket.send(JSON.stringify({ type: 'response.create', ...payload }));
+    socket.send(JSON.stringify({ type: 'response.create', ...requestPayload }));
   });
 }
 
 const requests = 12;
 const instructions = 'Stable synthetic prompt-cache benchmark prefix. '.repeat(450);
-function payload(mode: string, index: number): Record<string, unknown> {
+function payload(mode: string, index: number): BenchmarkPayload {
   return {
     model: 'gpt-5.6-sol',
     instructions,
@@ -103,10 +133,14 @@ async function baseline(): Promise<Usage[]> {
 }
 
 async function pooled(): Promise<Usage[]> {
-  const sockets = [await openSocket(), await openSocket()];
+  const sockets: [BunNativeWebSocket, BunNativeWebSocket] = [
+    await openSocket(),
+    await openSocket(),
+  ];
   const samples: Usage[] = [];
   for (let index = 0; index < requests; index += 1) {
-    samples.push(await create(sockets[index % 2]!, payload('pooled', index)));
+    const socket = index % 2 === 0 ? sockets[0] : sockets[1];
+    samples.push(await create(socket, payload('pooled', index)));
   }
   sockets.forEach(socket => socket.close());
   return samples;

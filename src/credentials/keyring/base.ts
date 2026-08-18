@@ -1,13 +1,13 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { credentialAccountBase } from '../../credential-helper.js';
+import { credentialAccountBase } from '../helper.js';
 import {
   KEYRING_GENERATION_PATTERN,
   isReservedKeyringAccount,
 } from '../keyring-account.js';
 
 /** Classify a keyring error into a human-readable reason (never throws). */
-export function classifyKeyringError(err: unknown): string {
-  const msg = err instanceof Error ? err.message : String(err);
+export function classifyKeyringError(cause: unknown): string {
+  const msg = cause instanceof Error ? cause.message : String(cause);
   const lower = msg.toLowerCase();
   if (lower.includes('cannot find module') || lower.includes('module not found') || lower.includes('failed to load')) {
     return 'native keyring module not available on this system';

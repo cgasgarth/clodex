@@ -7,6 +7,10 @@ export function importActual<T>(specifier: string, parentUrl: string): T {
   const resolved = specifier.startsWith('node:')
     ? specifier
     : import.meta.resolve(specifier, parentUrl);
-  if (specifier.startsWith('node:')) return requireActual(specifier) as T;
-  return requireActual(`${resolved}?clodex-actual`) as T;
+  // SAFETY: The test fixture defines the asserted runtime shape.
+  if (specifier.startsWith('node:')) {
+    return /* SAFETY: The caller supplies the imported Node module contract. */ requireActual(specifier) as T;
+  }
+  // SAFETY: The test fixture defines the asserted runtime shape.
+  return /* SAFETY: The caller supplies the imported module contract. */ requireActual(`${resolved}?clodex-actual`) as T;
 }

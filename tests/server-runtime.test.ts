@@ -14,10 +14,11 @@ import {
   registerServerRuntimeState,
   unregisterServerRuntimeState,
   type ServerRuntimeState,
-} from '../src/server-runtime.js';
+} from '../src/runtime/server-runtime.js';
 
 let tempHome: string;
-let env: { CLODEX_HOME: string };
+type RuntimeEnvironment = { CLODEX_HOME: string };
+let env: RuntimeEnvironment;
 
 beforeEach(() => {
   tempHome = mkdtempSync(join(tmpdir(), 'clodex-runtime-test-'));
@@ -49,6 +50,13 @@ function endpointState(overrides: Partial<ServerRuntimeState> = {}): ServerRunti
   };
 }
 
+function errnoError(code: string): NodeJS.ErrnoException {
+  // SAFETY: The test fixture defines the asserted runtime shape.
+  const error = new Error(code) as NodeJS.ErrnoException;
+  error.code = code;
+  return error;
+}
+
 describe('server runtime state file', () => {
   it('lives at server-runtime.json inside the app home', () => {
     expect(getServerRuntimePath(env)).toBe(join(env.CLODEX_HOME, 'server-runtime.json'));
@@ -74,7 +82,7 @@ describe('server runtime state file', () => {
 
     const records = readLiveServerRuntimeStates(env, { isAlive: () => true });
     expect(records).toHaveLength(2);
-    expect(records.map(record => record.mode).sort()).toEqual(['endpoint', 'proxy']);
+    expect(records.map(record => record.mode).toSorted()).toEqual(['endpoint', 'proxy']);
   });
 
   it('re-registering the same pid updates its record instead of duplicating it', () => {
@@ -131,7 +139,7 @@ describe('server runtime state file', () => {
     registerServerRuntimeState(endpoint, env, { isAlive: () => true });
 
     const records = readLiveServerRuntimeStates(env, { isAlive: () => true });
-    expect(records.map(record => record.mode).sort()).toEqual(['endpoint', 'proxy']);
+    expect(records.map(record => record.mode).toSorted()).toEqual(['endpoint', 'proxy']);
   });
 });
 
@@ -192,13 +200,8 @@ describe('stale detection', () => {
   });
 
   it('isPidAlive maps ESRCH to dead and EPERM to alive', () => {
-    const errWith = (code: string) => {
-      const err = new Error(code) as NodeJS.ErrnoException;
-      err.code = code;
-      return err;
-    };
-    expect(isPidAlive(1234, () => { throw errWith('ESRCH'); })).toBe(false);
-    expect(isPidAlive(1234, () => { throw errWith('EPERM'); })).toBe(true);
+    expect(isPidAlive(1234, () => { throw errnoError('ESRCH'); })).toBe(false);
+    expect(isPidAlive(1234, () => { throw errnoError('EPERM'); })).toBe(true);
     expect(isPidAlive(1234, () => undefined)).toBe(true);
   });
 

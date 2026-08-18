@@ -3,7 +3,7 @@ import {
   isTargetCompatibleModel,
   providersForTarget,
   routableModelsForTarget,
-} from '../src/target-compatibility.js';
+} from '../src/models/target-compatibility.js';
 import type { LocalProvider, LocalProviderModel } from '../src/types.js';
 
 const openAiModel: LocalProviderModel = {
@@ -67,7 +67,7 @@ describe('target compatibility matrix', () => {
     ];
 
     for (const target of ['claude', 'server'] as const) {
-      expect(providersForTarget(providers, target).map(p => p.id).sort(), target).toEqual(['openai', 'openai-oauth']);
+      expect(providersForTarget(providers, target).map(p => p.id).toSorted(), target).toEqual(['openai', 'openai-oauth']);
     }
     expect(routableModelsForTarget(providers[2]!, 'claude')).toHaveLength(0);
   });

@@ -1,8 +1,8 @@
 // src/registry/load.ts — materialize registry into runtime LocalProvider[]
 
-import { resolveProviderCredential, resolveProviderOAuthAccountId, resolveProviderOAuthProviderData } from '../env.js';
-import type { CompatibilityAgent } from '../model-compatibility.js';
-import type { LocalProvider } from '../types.js';
+import { resolveProviderCredential, resolveProviderOAuthAccountId, resolveProviderOAuthProviderData } from '../config/environment.js';
+import type { CompatibilityAgent } from '../models/compatibility.js';
+import type { LocalProvider, ProviderDataValue } from '../types.js';
 import { isAnonymousProvider, materializeRegistry } from './materialize.js';
 import { loadRegistry } from './io.js';
 
@@ -14,7 +14,7 @@ export async function loadRegistryProviders(
   const registry = loadRegistry();
   const keys = new Map<string, string>();
   const oauthAccountIds = new Map<string, string>();
-  const oauthProviderData = new Map<string, Record<string, unknown>>();
+  const oauthProviderData = new Map<string, Record<string, ProviderDataValue>>();
   await Promise.all(registry.providers.map(async provider => {
     if (isAnonymousProvider(provider)) return;
     try {
@@ -35,8 +35,7 @@ export async function loadRegistryProviders(
     }
   }));
   return materializeRegistry(registry, provider => keys.get(provider.id) ?? null, opts)
-    .map(provider => ({
-      ...provider,
+    .map(provider => Object.assign({}, provider, {
       oauthAccountId: oauthAccountIds.get(provider.id),
       providerData: oauthProviderData.get(provider.id),
     }));

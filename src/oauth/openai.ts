@@ -3,6 +3,7 @@
 import { positiveSecondsToMs, sleepMs } from './pkce.js';
 import type { OAuthTokenResponse } from './types.js';
 import { VERSION } from '../constants.js';
+import { isString } from '../runtime/type-guards.js';
 import { postOAuthRefresh } from './refresh-http.js';
 
 const CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann';
@@ -30,8 +31,11 @@ function openAiTokenClaims(tokens: OAuthTokenResponse): OpenAiIdTokenClaims | un
   if (!token) return undefined;
   const parts = token.split('.');
   if (parts.length !== 3) return undefined;
+  const payload = parts[1];
+  if (!payload) return undefined;
   try {
-    return JSON.parse(Buffer.from(parts[1]!, 'base64url').toString()) as OpenAiIdTokenClaims;
+    // SAFETY: JWT payload fields remain optional and consumers use optional access only.
+    return JSON.parse(Buffer.from(payload, 'base64url').toString()) as OpenAiIdTokenClaims;
   } catch {
     return undefined;
   }
@@ -47,7 +51,7 @@ export function extractOpenAiAccountId(tokens: OAuthTokenResponse): string | und
 export function extractOpenAiEmail(tokens: OAuthTokenResponse): string | undefined {
   const claims = openAiTokenClaims(tokens);
   const email = claims?.email ?? claims?.preferred_username;
-  return typeof email === 'string' && email.includes('@')
+  return isString(email) && email.includes('@')
     ? email.trim().toLowerCase()
     : undefined;
 }
@@ -64,6 +68,7 @@ async function requestOpenAiDeviceCode(): Promise<OpenAiDeviceCodeData> {
   if (!response.ok) {
     throw new Error('Failed to initiate OpenAI device authorization');
   }
+  // SAFETY: The successful device-code endpoint returns the documented envelope.
   return response.json() as Promise<OpenAiDeviceCodeData>;
 }
 
@@ -94,6 +99,7 @@ async function pollOpenAiDeviceCodeToken(
     });
 
     if (response.ok) {
+      // SAFETY: A successful polling response contains the authorization exchange fields.
       const data = await response.json() as { authorization_code: string; code_verifier: string };
       const tokenResponse = await fetch(`${ISSUER}/oauth/token`, {
         method: 'POST',
@@ -109,6 +115,7 @@ async function pollOpenAiDeviceCodeToken(
       if (!tokenResponse.ok) {
         throw new Error(`OpenAI token exchange failed (${tokenResponse.status})`);
       }
+      // SAFETY: A successful token exchange returns the OAuth token envelope.
       const tokens = await tokenResponse.json() as OAuthTokenResponse;
       return {
         tokens,

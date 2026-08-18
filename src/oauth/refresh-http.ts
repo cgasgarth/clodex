@@ -1,5 +1,5 @@
 import type { OAuthTokenResponse } from './types.js';
-import { PROVIDER_METADATA_TIMEOUT_MS } from '../timeouts.js';
+import { PROVIDER_METADATA_TIMEOUT_MS } from '../config/timeouts.js';
 
 const OAUTH_REFRESH_TIMEOUT_MS = PROVIDER_METADATA_TIMEOUT_MS;
 
@@ -34,7 +34,9 @@ export async function postOAuthRefresh(
         Accept: 'application/json',
         ...options.headers,
       },
-      body: isJson ? JSON.stringify(body) : (body as URLSearchParams).toString(),
+      body: isJson
+        ? JSON.stringify(body)
+        : body instanceof URLSearchParams ? body.toString() : new URLSearchParams(body).toString(),
     });
 
     if (!response.ok) {
@@ -52,6 +54,7 @@ export async function postOAuthRefresh(
       throw new Error(`${options.errorPrefix}${status}${detail ? `: ${detail}` : ''}`);
     }
 
+    // SAFETY: A successful refresh response returns the OAuth token envelope.
     return await response.json() as OAuthTokenResponse;
   } finally {
     clearTimeout(timeout);

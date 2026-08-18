@@ -124,6 +124,7 @@ describe('Responses standalone compaction', () => {
         'Content-Length': '123',
       },
       payload,
+      // SAFETY: The test fixture defines the asserted runtime shape.
       fetch: requestFetch as typeof fetch,
     });
 
@@ -168,6 +169,7 @@ describe('Responses standalone compaction', () => {
         requestUrl: 'https://example.test/responses',
         headers: {},
         payload: { model: 'gpt-5.6-sol', input: [] },
+        // SAFETY: The test fixture defines the asserted runtime shape.
         fetch: requestFetch as typeof fetch,
       });
     } catch (error) {
@@ -175,6 +177,7 @@ describe('Responses standalone compaction', () => {
     }
 
     expect(thrown).toBeInstanceOf(ResponsesCompactionError);
+    // SAFETY: The test fixture defines the asserted runtime shape.
     expect((thrown as ResponsesCompactionError).statusCode).toBe(400);
     expect(String(thrown)).not.toContain('sensitive upstream detail');
     expect(String(thrown)).toMatch(/error [0-9a-f]{16}/);
@@ -197,10 +200,12 @@ describe('Responses standalone compaction', () => {
       headers: { 'content-type': 'application/json' },
     }));
 
+    // SAFETY: The caught value is the expected domain error for this fixture.
     const error = await compactResponsesWindow({
       requestUrl: 'https://example.test/responses',
       headers: {},
       payload: { model: 'gpt-5.4', input: [] },
+      // SAFETY: The test fixture defines the asserted runtime shape.
       fetch: requestFetch as typeof fetch,
     }).catch(value => value as ResponsesCompactionError);
 
@@ -230,6 +235,7 @@ describe('Responses standalone compaction', () => {
       requestUrl: 'https://example.test/responses',
       headers: {},
       payload: { model: 'gpt-5.6-sol', input: [] },
+      // SAFETY: The test fixture defines the asserted runtime shape.
       fetch: requestFetch as typeof fetch,
       timeoutMs: 5,
     })).rejects.toThrow(/compaction exceeded/);

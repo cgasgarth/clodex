@@ -11,6 +11,9 @@ import {
 } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
+import { isNumber, isObject, isString } from '../runtime/type-guards.js';
+import type { PromptFieldHashes } from './responses-websocket/fingerprint.js';
+import type { JsonObject, JsonValue } from './responses-websocket/types.js';
 
 const STORE_VERSION = 2;
 // Native compact output can legitimately retain a large, dependency-closed
@@ -38,26 +41,30 @@ export interface StoredResponsesCheckpoint {
   requestInputKinds: string[];
   expectedAssistantHashes: string[];
   expectedAssistantKinds: string[];
-  compactedInput: unknown[];
+  compactedInput: JsonValue[];
   lastInputTokens?: number;
   postCompactionInputTokens?: number;
   nextCompactionInputTokens?: number;
   claudeCompactionSummaryHash?: string;
-  promptFieldHashes?: Record<string, string>;
+  promptFieldHashes?: PromptFieldHashes;
   lastUsedAt: number;
 }
 
-function isStringArray(value: unknown): value is string[] {
-  return Array.isArray(value) && value.every(item => typeof item === 'string');
+function isStringArray<Value>(value: Value): value is Value & string[] {
+  return Array.isArray(value) && value.every(isString);
 }
 
-function isStoredCheckpoint(value: unknown): value is StoredResponsesCheckpoint {
-  if (!value || typeof value !== 'object') return false;
-  const record = value as Record<string, unknown>;
+function isJsonObject<Value>(value: Value): value is Value & JsonObject {
+  return isObject(value) && !Array.isArray(value);
+}
+
+function isStoredCheckpoint<Value>(value: Value): value is Value & StoredResponsesCheckpoint {
+  if (!isJsonObject(value)) return false;
+  const record = value;
   return record.version === STORE_VERSION
-    && typeof record.checkpointKey === 'string'
+    && isString(record.checkpointKey)
     && CHECKPOINT_KEY_PATTERN.test(record.checkpointKey)
-    && typeof record.lineageKey === 'string'
+    && isString(record.lineageKey)
     && LINEAGE_KEY_PATTERN.test(record.lineageKey)
     && isStringArray(record.requestInputHashes)
     && isStringArray(record.requestInputKinds)
@@ -67,14 +74,14 @@ function isStoredCheckpoint(value: unknown): value is StoredResponsesCheckpoint 
     && record.expectedAssistantHashes.length === record.expectedAssistantKinds.length
     && Array.isArray(record.compactedInput)
     && (record.postCompactionInputTokens === undefined
-      || (typeof record.postCompactionInputTokens === 'number'
+      || (isNumber(record.postCompactionInputTokens)
         && Number.isSafeInteger(record.postCompactionInputTokens)
         && record.postCompactionInputTokens >= 0))
     && (record.nextCompactionInputTokens === undefined
-      || (typeof record.nextCompactionInputTokens === 'number'
+      || (isNumber(record.nextCompactionInputTokens)
         && Number.isSafeInteger(record.nextCompactionInputTokens)
         && record.nextCompactionInputTokens > 0))
-    && typeof record.lastUsedAt === 'number';
+    && isNumber(record.lastUsedAt);
 }
 
 function checkpointPath(directory: string, checkpointKey: string, lineageKey: string): string {
@@ -123,7 +130,7 @@ export function loadStoredResponsesCheckpoints(
         rmSync(path, { force: true });
         continue;
       }
-      const parsed = JSON.parse(readFileSync(path, 'utf8')) as unknown;
+      const parsed: JsonValue = JSON.parse(readFileSync(path, 'utf8'));
       if (!isStoredCheckpoint(parsed) || now - parsed.lastUsedAt >= ttlMs) {
         rmSync(path, { force: true });
         continue;
@@ -180,7 +187,7 @@ export function loadStoredResponsesCheckpoint(
     const path = checkpointPath(directory, checkpointKey, lineageKey);
     const stat = lstatSync(path);
     if (!stat.isFile() || stat.isSymbolicLink() || stat.size > MAX_CHECKPOINT_FILE_BYTES) return undefined;
-    const parsed = JSON.parse(readFileSync(path, 'utf8')) as unknown;
+    const parsed: JsonValue = JSON.parse(readFileSync(path, 'utf8'));
     return isStoredCheckpoint(parsed) ? parsed : undefined;
   } catch {
     return undefined;
@@ -219,12 +226,12 @@ export function saveStoredResponsesCheckpoint(
     const partitionPrefix = `${checkpoint.checkpointKey}-`;
     const partitionExcess = files
       .filter(candidate => candidate.name.startsWith(partitionPrefix))
-      .sort((left, right) => right.mtimeMs - left.mtimeMs)
+      .toSorted((left, right) => right.mtimeMs - left.mtimeMs)
       .slice(maxPerPartition);
     for (const candidate of partitionExcess) rmSync(candidate.path, { force: true });
     const globalExcess = files
       .filter(candidate => !partitionExcess.some(removed => removed.path === candidate.path))
-      .sort((left, right) => right.mtimeMs - left.mtimeMs)
+      .toSorted((left, right) => right.mtimeMs - left.mtimeMs)
       .slice(maxTotal);
     for (const candidate of globalExcess) rmSync(candidate.path, { force: true });
     return true;

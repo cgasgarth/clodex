@@ -2,14 +2,15 @@ import { randomUUID } from 'node:crypto';
 import pc from 'picocolors';
 import * as p from '@clack/prompts';
 import open from 'open';
-import { credentialInstanceAuthRef } from '../credential-helper.js';
+import { isString } from '../runtime/type-guards.js';
+import { credentialInstanceAuthRef } from '../credentials/helper.js';
 import {
   deleteProviderCredential,
   provisionProviderCredential,
   resolveProviderCredential,
   resolveProviderOAuthAccountId,
   saveProviderCredential,
-} from '../env.js';
+} from '../config/environment.js';
 import {
   extractOpenAiAccountId,
   extractOpenAiEmail,
@@ -81,7 +82,7 @@ export async function loginProviderAccount(
   const xaiIdentity = providerId === 'xai-oauth'
     ? await fetchXaiIdentity(result.tokens.access_token)
     : undefined;
-  const resultEmail = 'email' in result && typeof result.email === 'string'
+  const resultEmail = 'email' in result && isString(result.email)
     ? result.email
     : undefined;
   const emailValue = providerId === 'openai-oauth'
@@ -96,7 +97,7 @@ export async function loginProviderAccount(
     : xaiIdentity?.accountId;
   const existingIdentities = await Promise.all(store.list(providerId).map(async account => {
     const token = await resolveProviderCredential(providerId, account.authRef);
-    const xaiIdentity = providerId === 'xai-oauth' && token
+    const storedXaiIdentity = providerId === 'xai-oauth' && token
       ? await fetchXaiIdentity(token).catch(() => undefined)
       : undefined;
     return {
@@ -104,7 +105,7 @@ export async function loginProviderAccount(
       email: account.email?.toLowerCase()
         ?? (providerId === 'openai-oauth' && token
           ? extractOpenAiEmail({ access_token: token })
-          : xaiIdentity?.email),
+          : storedXaiIdentity?.email),
       accountId: account.accountId
         ?? (providerId === 'openai-oauth' && token
           ? extractOpenAiAccountId({ access_token: token })
@@ -256,7 +257,7 @@ export async function runAccountsCommand(args: string[]): Promise<number> {
           ? 'openai-oauth'
           : undefined;
       if (!providerId) throw new Error('Usage: clodex accounts add [openai|xai]');
-      const spinner = p.spinner();
+      const spinner = p.spinner({ indicator: 'timer' });
       spinner.start(`Starting ${providerDisplayName(providerId)} device authorization…`);
       const account = await loginProviderAccount(providerId, {
         onDeviceCode: ({ url, userCode }) => {

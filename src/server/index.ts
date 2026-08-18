@@ -1,7 +1,7 @@
 import pc from 'picocolors';
 import { networkInterfaces } from 'node:os';
 import * as p from '@clack/prompts';
-import { relayIntro } from '../ui.js';
+import { relayIntro } from '../ui/prompts.js';
 import {
   getSavedServerPassword,
   getServerExposedProviders,
@@ -14,13 +14,13 @@ import {
   setServerFavoritesOnly,
   setServerListenMode,
   setServerMaskGatewayIds,
-} from '../config.js';
+} from '../config/config.js';
 import { MAX_MODEL_CATALOG, DEFAULT_SERVER_PORT } from '../constants.js';
 import {
   fetchProviderCatalog,
   localProvidersToServerModels,
-} from '../provider-catalog.js';
-import { providersForTarget } from '../target-compatibility.js';
+} from '../models/provider-catalog.js';
+import { providersForTarget } from '../models/target-compatibility.js';
 import type { ServerModelInfo, GatewayModelOptions } from './models.js';
 import {
   upstreamModelId,
@@ -51,12 +51,12 @@ import {
   isDiscoveryDisabled,
   registerServerRuntimeState,
   unregisterServerRuntimeState,
-} from '../server-runtime.js';
-import { getInferenceRequestLogPath, getSessionLogPath } from '../trace-log.js';
+} from '../runtime/server-runtime.js';
+import { getInferenceRequestLogPath, getSessionLogPath } from '../observability/trace-log.js';
 import {
   describeModelAliasRejection,
   normalizeModelAliases,
-} from '../model-aliases.js';
+} from '../models/aliases.js';
 
 interface ServerRunConfig {
   exposedProviders: string[] | null;
@@ -112,7 +112,7 @@ export function formatModelCatalogLines(models: ServerModelInfo[], gateway?: Gat
   }
 
   const lines: string[] = ['Model catalog:', ''];
-  const sortedGroups = [...groups.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+  const sortedGroups = [...groups.entries()].toSorted((a, b) => a[0].localeCompare(b[0]));
   for (const [label, groupModels] of sortedGroups) {
     const rows = buildDedupedModelRows(groupModels, gateway);
     const hiddenDuplicates = groupModels.length - rows.length;
@@ -291,7 +291,7 @@ function applyServerRunOverrides(config: ServerRunConfig, options: ServerCommand
 }
 
 function shouldUseQuickServerMode(options: ServerCommandOptions): boolean {
-  return Boolean(options.quick || hasServerRunOverrides(options) || !process.stdin.isTTY);
+  return options.quick || hasServerRunOverrides(options) || !process.stdin.isTTY;
 }
 
 async function configureExposedProviders(): Promise<string[] | null | undefined> {

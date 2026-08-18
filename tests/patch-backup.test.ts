@@ -16,8 +16,8 @@ import {
   scanPristineBackups,
   type BackupCandidate,
   type PristineFacts,
-} from '../src/patch-backup.js';
-import { applyClodexPatches } from '../src/patch-transforms.js';
+} from '../src/patcher/backup.js';
+import { applyClodexPatches } from '../src/patcher/transforms.js';
 
 const sha = (content: string) => createHash('sha256').update(content).digest('hex');
 
@@ -65,10 +65,10 @@ describe('scanPristineBackups', () => {
 
     const scan = scanPristineBackups('2.1.220', dir);
     expect(scan.corrupt).toEqual([]);
-    expect(scan.valid.map(candidate => [candidate.path, candidate.kind, candidate.sha256]).sort()).toEqual([
+    expect(scan.valid.map(candidate => [candidate.path, candidate.kind, candidate.sha256]).toSorted()).toEqual([
       [contentPath, 'content-addressed', sha(bytes)],
       [legacy, 'legacy', sha(bytes)],
-    ].sort());
+    ].toSorted());
   });
 
   it('rejects a content-addressed backup whose bytes no longer match its own name', () => {
@@ -162,7 +162,7 @@ const PRISTINE = sha('pristine 2.1.220');
 const PATCHED = sha('patched 2.1.220');
 const OTHER_VERSION = sha('pristine 2.1.215');
 
-function candidate(overrides: Partial<BackupCandidate> = {}): BackupCandidate {
+function backupCandidate(overrides: Partial<BackupCandidate> = {}): BackupCandidate {
   return {
     path: contentAddressedBackupPath('2.1.220', PRISTINE, '/backups'),
     kind: 'content-addressed',
@@ -184,29 +184,29 @@ function facts(overrides: Partial<PristineFacts> = {}): PristineFacts {
 
 describe('planPristineSource', () => {
   it('reuses the live binary when its bytes match a stored backup', () => {
-    const plan = planPristineSource(facts({ liveSha256: PRISTINE, backups: [candidate()] }));
+    const plan = planPristineSource(facts({ liveSha256: PRISTINE, backups: [backupCandidate()] }));
     expect(plan).toMatchObject({ action: 'reuse', pristineSha256: PRISTINE });
   });
 
   it('prefers the self-validating name when a legacy copy holds the same bytes', () => {
-    const legacy = candidate({ path: legacyBackupPath('2.1.220', '/backups'), kind: 'legacy' });
-    const plan = planPristineSource(facts({ liveSha256: PRISTINE, backups: [legacy, candidate()] }));
-    expect(plan).toMatchObject({ action: 'reuse', backupPath: candidate().path });
+    const legacy = backupCandidate({ path: legacyBackupPath('2.1.220', '/backups'), kind: 'legacy' });
+    const plan = planPristineSource(facts({ liveSha256: PRISTINE, backups: [legacy, backupCandidate()] }));
+    expect(plan).toMatchObject({ action: 'reuse', backupPath: backupCandidate().path });
   });
 
   it('restores the recorded pristine content when the manifest says the live bytes are its patch', () => {
     const plan = planPristineSource(facts({
-      backups: [candidate()],
+      backups: [backupCandidate()],
       manifest: {
         binaryPath: '/install/claude',
-        backupPath: candidate().path,
+        backupPath: backupCandidate().path,
         patchedSha256: PATCHED,
         pristineSha256: PRISTINE,
       },
     }));
     expect(plan).toMatchObject({
       action: 'restore',
-      backupPath: candidate().path,
+      backupPath: backupCandidate().path,
       pristineSha256: PRISTINE,
       probeVersion: false,
     });
@@ -226,11 +226,12 @@ describe('planPristineSource', () => {
       },
     }));
     expect(plan.action).toBe('error');
+    // SAFETY: The test fixture defines the asserted runtime shape.
     expect((plan as { message: string }).message).toMatch(/no trustworthy pristine backup/);
   });
 
   it('asks for source inspection when the live bytes are unrecognized', () => {
-    expect(planPristineSource(facts({ backups: [candidate()] }))).toEqual({ action: 'inspect' });
+    expect(planPristineSource(facts({ backups: [backupCandidate()] }))).toEqual({ action: 'inspect' });
   });
 });
 
@@ -246,26 +247,28 @@ describe('planInspectedPristineSource', () => {
 
   it('keeps both files and warns when an existing backup for the version disagrees', () => {
     const plan = planInspectedPristineSource(
-      facts({ liveSha256: PRISTINE, backups: [candidate({ sha256: OTHER_VERSION })] }),
+      facts({ liveSha256: PRISTINE, backups: [backupCandidate({ sha256: OTHER_VERSION })] }),
       { patched: false },
     );
     expect(plan.action).toBe('snapshot');
+    // SAFETY: The test fixture defines the asserted runtime shape.
     expect((plan as { notes: string[] }).notes.join(' ')).toMatch(/hold different bytes/);
   });
 
   it('NEVER snapshots a patched binary — it errors instead', () => {
     const plan = planInspectedPristineSource(facts(), { patched: true });
     expect(plan.action).toBe('error');
+    // SAFETY: The test fixture defines the asserted runtime shape.
     expect((plan as { message: string }).message).toMatch(/already patched and no trustworthy pristine backup/);
   });
 
   it('restores the version\'s backup when the binary is patched', () => {
-    const plan = planInspectedPristineSource(facts({ backups: [candidate()] }), { patched: true });
-    expect(plan).toMatchObject({ action: 'restore', backupPath: candidate().path, probeVersion: false });
+    const plan = planInspectedPristineSource(facts({ backups: [backupCandidate()] }), { patched: true });
+    expect(plan).toMatchObject({ action: 'restore', backupPath: backupCandidate().path, probeVersion: false });
   });
 
   it('demands a version probe before restoring an unverifiable legacy backup', () => {
-    const legacy = candidate({ path: legacyBackupPath('2.1.220', '/backups'), kind: 'legacy' });
+    const legacy = backupCandidate({ path: legacyBackupPath('2.1.220', '/backups'), kind: 'legacy' });
     const plan = planInspectedPristineSource(facts({ backups: [legacy] }), { patched: true });
     expect(plan).toMatchObject({ action: 'restore', backupPath: legacy.path, probeVersion: true });
   });
@@ -274,13 +277,14 @@ describe('planInspectedPristineSource', () => {
     const plan = planInspectedPristineSource(
       facts({
         backups: [
-          candidate(),
-          candidate({ path: legacyBackupPath('2.1.220', '/backups'), kind: 'legacy', sha256: OTHER_VERSION }),
+          backupCandidate(),
+          backupCandidate({ path: legacyBackupPath('2.1.220', '/backups'), kind: 'legacy', sha256: OTHER_VERSION }),
         ],
       }),
       { patched: true },
     );
     expect(plan.action).toBe('error');
+    // SAFETY: The test fixture defines the asserted runtime shape.
     expect((plan as { message: string }).message).toMatch(/conflicting pristine backups/);
   });
 
@@ -289,6 +293,7 @@ describe('planInspectedPristineSource', () => {
       facts({ corruptBackups: ['/backups/claude-2.1.220-deadbeefdeadbeef.orig'] }),
       { patched: true },
     );
+    // SAFETY: The test fixture defines the asserted runtime shape.
     expect((plan as { message: string }).message).toMatch(/failed integrity checks/);
   });
 });
@@ -296,10 +301,10 @@ describe('planInspectedPristineSource', () => {
 describe('planRestoreOnly', () => {
   it('restores the manifest-recorded pristine content', () => {
     const plan = planRestoreOnly(facts({
-      backups: [candidate()],
-      manifest: { binaryPath: '/install/claude', backupPath: candidate().path, pristineSha256: PRISTINE },
+      backups: [backupCandidate()],
+      manifest: { binaryPath: '/install/claude', backupPath: backupCandidate().path, pristineSha256: PRISTINE },
     }));
-    expect(plan).toMatchObject({ action: 'restore', backupPath: candidate().path });
+    expect(plan).toMatchObject({ action: 'restore', backupPath: backupCandidate().path });
   });
 
   it('errors rather than restoring when nothing for this version is trustworthy', () => {

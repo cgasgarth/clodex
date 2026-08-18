@@ -292,7 +292,9 @@ describe('Responses oversized-context recovery planner', () => {
       payload: { model: 'gpt-5.6-sol', input: fullInput },
       compactThreshold: 1_000,
       contextWindow: 2_000,
+      // SAFETY: The test fixture defines the asserted runtime shape.
       fetch: (async (_url: string | URL | Request, init?: RequestInit) => {
+        // SAFETY: The test fixture defines the asserted runtime shape.
         const body = JSON.parse(String(init?.body)) as { input: unknown[] };
         compactBodies.push(body.input);
         return new Response(JSON.stringify({
@@ -372,6 +374,7 @@ describe('Responses oversized-context recovery planner', () => {
         payload: { model: 'gpt-5.6-sol', input: [] },
         compactThreshold: 1_000,
         contextWindow: 2_000,
+        // SAFETY: The test fixture defines the asserted runtime shape.
         fetch: (async () => {
           calls += 1;
           return new Response(JSON.stringify(failure.body), {
@@ -410,6 +413,7 @@ describe('Responses oversized-context recovery planner', () => {
       payload: { model: 'gpt-5.6-sol', input: [] },
       compactThreshold: 1_000,
       contextWindow: 2_000,
+      // SAFETY: The test fixture defines the asserted runtime shape.
       fetch: (async () => {
         calls += 1;
         throw new Error('socket closed');

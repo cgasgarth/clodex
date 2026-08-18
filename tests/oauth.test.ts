@@ -25,7 +25,8 @@ describe('oauth types', () => {
 
   it('rejects malformed token responses before they can be stored', () => {
     expect(() => tokensToStoredCredential(
-      {} as unknown as Parameters<typeof tokensToStoredCredential>[0],
+      // SAFETY: The test fixture defines the asserted runtime shape.
+      {} as Parameters<typeof tokensToStoredCredential>[0],
     )).toThrow(
       'missing a valid access token',
     );
@@ -118,8 +119,9 @@ describe('oauth refresh http', () => {
         errorPrefix: 'token refresh failed',
       },
     );
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const signal = fetchMock.mock.calls[0]?.[1]?.signal as AbortSignal;
-    const rejection = refresh.catch((error: unknown) => error);
+    const rejection = refresh.catch(<T>(error: T) => error);
 
     await advanceTestTimersByTime(59_999);
     expect(signal.aborted).toBe(false);
@@ -134,6 +136,7 @@ describe('oauth refresh http', () => {
       async (_url: string | URL | Request, init?: RequestInit): Promise<Response> => {
         const signal = init?.signal;
         if (!signal) throw new Error('missing abort signal');
+        // SAFETY: The test fixture defines the asserted runtime shape.
         return {
           ok: true,
           json: () => new Promise((_resolve, reject) => {
@@ -152,8 +155,9 @@ describe('oauth refresh http', () => {
         errorPrefix: 'token refresh failed',
       },
     );
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const signal = fetchMock.mock.calls[0]?.[1]?.signal as AbortSignal;
-    const rejection = refresh.catch((error: unknown) => error);
+    const rejection = refresh.catch(<T>(error: T) => error);
 
     await advanceTestTimersByTime(59_999);
     expect(signal.aborted).toBe(false);
@@ -211,6 +215,7 @@ describe('oauth refresh', () => {
       expires: 0,
     });
     expect(cred.access).toBe('new-xai-access');
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const [, init] = (fetch as ReturnType<typeof vi.fn>).mock.calls[0]!;
     expect(String(init.body)).toContain('client_id=b1a00492-073a-47ea-816f-4c329264a828');
   });

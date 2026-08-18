@@ -19,11 +19,12 @@ function defaultWorkerUrl(): URL {
 }
 
 function requestFromSerialized(request: SerializedControlRequest): Request {
-  return new Request(request.url, {
+  const init: RequestInit = {
     method: request.method,
     headers: request.headers,
-    ...(request.body === undefined ? {} : { body: request.body }),
-  });
+  };
+  if (request.body !== undefined) init.body = request.body;
+  return new Request(request.url, init);
 }
 
 async function serializeResponse(id: number, response: Response): Promise<SerializedControlResponse> {
@@ -69,10 +70,10 @@ export async function startIsolatedDaemonControlApi(
     worker.postMessage({
       type: 'response',
       response: await serializeResponse(request.id, response),
-    } satisfies ControlWorkerCommand);
+    } satisfies ControlWorkerCommand, []);
   };
 
-  worker.onmessage = (event: MessageEvent<ControlWorkerEvent>) => {
+  worker.addEventListener('message', (event: MessageEvent<ControlWorkerEvent>) => {
     const message = event.data;
     if (message.type === 'ready') readyResolve?.();
     else if (message.type === 'failed') {
@@ -81,13 +82,13 @@ export async function startIsolatedDaemonControlApi(
     }
     else if (message.type === 'closed') closeResolve?.();
     else void postResponse(message.request);
-  };
-  worker.onerror = () => {
+  });
+  worker.addEventListener('error', () => {
     const error = new Error('Daemon control worker failed');
     if (started) options.requestStop();
     else readyReject?.(error);
     closeResolve?.();
-  };
+  });
   worker.addEventListener('close', () => {
     if (!closed && started) options.requestStop();
     closeResolve?.();
@@ -96,7 +97,7 @@ export async function startIsolatedDaemonControlApi(
     type: 'start',
     socketPath: options.socketPath,
     runtime: options.runtime,
-  } satisfies ControlWorkerCommand);
+  } satisfies ControlWorkerCommand, []);
 
   const startupTimeoutMs = options.startupTimeoutMs ?? 5_000;
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -123,7 +124,7 @@ export async function startIsolatedDaemonControlApi(
       if (closed) return;
       closed = true;
       try {
-        worker.postMessage({ type: 'close' } satisfies ControlWorkerCommand);
+        worker.postMessage({ type: 'close' } satisfies ControlWorkerCommand, []);
       } catch {
         closeResolve?.();
       }

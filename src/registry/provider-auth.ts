@@ -1,6 +1,6 @@
 // provider-auth.ts — clodex providers auth (native subscription device-code flows)
 
-import { printOAuthStepsPanel } from '../ui.js';
+import { printOAuthStepsPanel } from '../ui/prompts.js';
 import pc from 'picocolors';
 import * as p from '@clack/prompts';
 import open from 'open';
@@ -8,8 +8,8 @@ import {
   probeProviderCredentialStore,
   provisionProviderCredential,
   saveProviderCredential,
-} from '../env.js';
-import { credentialInstanceAuthRef } from '../credential-helper.js';
+} from '../config/environment.js';
+import { credentialInstanceAuthRef } from '../credentials/helper.js';
 import { runOpenAiDeviceCodeFlow } from '../oauth/openai.js';
 import { runXaiDeviceCodeFlow } from '../oauth/xai.js';
 import {
@@ -19,7 +19,7 @@ import {
   type NativeOAuthProviderId,
   type StoredOAuthCredential,
 } from '../oauth/types.js';
-import { getTemplateById } from '../provider-templates.js';
+import { getTemplateById } from '../providers/templates.js';
 import { oauthAuthRef, oauthTemplateId, toOAuthRegistryId } from './import-build.js';
 import {
   cancelCredentialDelete,
@@ -53,12 +53,12 @@ export interface ProviderAuthResult {
 
 const OPENAI_DISPLAY = 'OpenAI ChatGPT Plus/Pro';
 const XAI_DISPLAY = 'xAI SuperGrok';
-const PROVIDER_DISPLAY: Record<NativeOAuthProviderId, string> = {
+const PROVIDER_DISPLAY = {
   openai: OPENAI_DISPLAY,
   'openai-oauth': OPENAI_DISPLAY,
   xai: XAI_DISPLAY,
   'xai-oauth': XAI_DISPLAY,
-};
+} satisfies Record<NativeOAuthProviderId, string>;
 
 function openBrowser(url: string): void {
   open(url).catch(() => {});
@@ -68,7 +68,7 @@ async function runNativeDeviceCode(providerId: NativeOAuthProviderId): Promise<S
   const label = PROVIDER_DISPLAY[providerId];
   printOAuthStepsPanel(`${label} — Sign in`, label);
 
-  const spinner = p.spinner();
+  const spinner = p.spinner({ indicator: 'timer' });
   spinner.start('Waiting for authorization...');
 
   try {
@@ -125,6 +125,11 @@ async function upsertOAuthProvider(
     if (!entry) {
       if (!template) throw new Error(`Provider "${providerId}" has no template`);
       const displayName = oauthDisplayName(registryId, template.name);
+      const api: RegistryProvider['api'] = {
+        npm: template.npm,
+        url: template.defaultBaseUrl ?? '',
+      };
+      if (template.headers) api.headers = template.headers;
       entry = {
         id: registryId,
         templateId,
@@ -132,11 +137,7 @@ async function upsertOAuthProvider(
         enabled: true,
         authRef,
         authType: 'oauth',
-        api: {
-          npm: template.npm,
-          url: template.defaultBaseUrl ?? '',
-          ...(template.headers ? { headers: template.headers } : {}),
-        },
+        api,
         addedAt: new Date().toISOString(),
       };
     } else {

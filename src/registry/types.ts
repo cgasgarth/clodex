@@ -1,6 +1,6 @@
 // src/registry/types.ts — native provider registry schema (no secrets)
 
-import type { FreeStatus } from '../free-models.js';
+import type { FreeStatus } from '../models/free-models.js';
 
 export const REGISTRY_SCHEMA_VERSION = 1;
 

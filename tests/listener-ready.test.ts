@@ -5,7 +5,7 @@ import {
   tcpListenerUrlHost,
   waitForTcpListener,
   waitForTcpListenerCandidate,
-} from '../src/listener-ready.js';
+} from '../src/transport/listener-ready.js';
 
 describe('tcp listener readiness', () => {
   it.each([

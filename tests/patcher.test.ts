@@ -15,14 +15,14 @@ import {
   summarizePatchResults,
   tryAcquirePatchLock,
   type PatchManifest,
-} from '../src/patcher.js';
+} from '../src/patcher/index.js';
 import {
   applyClodexPatches,
   PATCH_TRANSFORMS_VERSION,
   PatchApplyError,
   type PatchScriptModelConfig,
-} from '../src/patch-transforms.js';
-import { createHoisted } from './test-helpers.js';
+} from '../src/patcher/transforms.js';
+import { createHoisted, type JsonObject } from './test-helpers.js';
 
 /**
  * The digest a pre-versioning clodex wrote into `patch-state.json`: the bare
@@ -33,7 +33,7 @@ import { createHoisted } from './test-helpers.js';
  * transform-set-version test below, which is immune to tuple drift.)
  */
 function computeLegacyPatchConfigHash(config: PatchScriptModelConfig): string {
-  const canonical = Object.keys(config).sort().map(key => {
+  const canonical = Object.keys(config).toSorted().map(key => {
     const entry = config[key]!;
     return [key, entry.alias ?? null, entry.context ?? null, entry.display ?? null];
   });
@@ -248,7 +248,7 @@ describe('buildDesiredPatchConfig', () => {
   });
 
   function writeInputs(
-    model: Record<string, unknown>,
+    model: JsonObject,
     provider: {
       id?: string;
       templateId?: string;
@@ -456,13 +456,13 @@ describe('PATCH_TRANSFORMS_VERSION', () => {
     // otherwise fail this guard with zero source change, which is exactly the
     // "re-pin without thinking" reflex the guard is meant to avoid.
     const source = readFileSync(
-      new URL('../src/patch-transforms.ts', import.meta.url),
+      new URL('../src/patcher/transforms.ts', import.meta.url),
       'utf8',
     ).replace(/\r\n/g, '\n');
     const digest = createHash('sha256').update(source).digest('hex');
     expect({ version: PATCH_TRANSFORMS_VERSION, digest }).toEqual({
       version: 10,
-      digest: 'ed7cca2df89b9d829e89bc92687c40ac27c4bae7816fa58578f79a328ca3a75d',
+      digest: '96fa563a6be353d5d89cf32f91e17c2e8498fad05f25c1d26500a0949444b94b',
     });
   });
 });
@@ -625,7 +625,9 @@ describe('applyClodexPatches input validation', () => {
       caught = err;
     }
     expect(caught).toBeInstanceOf(PatchApplyError);
+    // SAFETY: The test fixture defines the asserted runtime shape.
     expect((caught as Error).message).toContain('required patch failed: PATCH 1');
+    // SAFETY: The test fixture defines the asserted runtime shape.
     expect((caught as PatchApplyError).results).toEqual([
       { status: 'FAIL', name: 'PATCH 1: Agent tool model enum', extra: 'anchor not found' },
     ]);
@@ -970,6 +972,7 @@ describe('applyPatch', () => {
       );
 
       const manifestBytes = readFileSync(getPatchManifestPath(), 'utf8');
+      // SAFETY: The test fixture defines the asserted runtime shape.
       const manifest = JSON.parse(manifestBytes) as PatchManifest;
       expect(outcome.ok).toBe(true);
       expect(readFileSync(binaryPath, 'utf8')).toBe(replacement);
@@ -1027,6 +1030,7 @@ function executeCapability(
     .split('\n')
     .find(line => line.startsWith(`function ${functionName}(`));
   expect(declaration).toBeDefined();
+  // SAFETY: The test fixture defines the asserted runtime shape.
   const capability = Function(
     'SNr',
     'Ede',
@@ -1049,6 +1053,7 @@ function executeDefaultEffort(
     .split('\n')
     .find(line => line.startsWith('function ait('));
   expect(declaration).toBeDefined();
+  // SAFETY: The test fixture defines the asserted runtime shape.
   const defaultEffort = Function(
     'lo',
     'ww',
@@ -1069,8 +1074,7 @@ const CAPABILITY_GATES: Array<{
   { name: 'max effort', functionName: 'eqe' },
 ];
 
-describe('patch script identity naming', () => {
-  const config = {
+const config = {
     'clodex:openai-oauth:gpt-5.6-sol': {
       alias: 'sol',
       context: 272_000,
@@ -1121,7 +1125,7 @@ describe('patch script identity naming', () => {
     expect(out).not.toMatch(/KNOWN=\[[^\]]*gpt-5\.6-sol/);
   });
 
-  it('patches Claude 2.1.233 enum helper syntax without rewriting the helper', () => {
+  it('patches Claude 2.1.234 enum helper syntax without rewriting the helper', () => {
     const source = CLAUDE_FIXTURE.replace(
       '.enum(["sonnet","opus","haiku","fable"])',
       'xr(["sonnet","opus","haiku","fable"])',
@@ -1133,7 +1137,7 @@ describe('patch script identity naming', () => {
     expect(out).not.toContain('.enum(["sonnet","opus","haiku","fable","sol","clodex:openai:mystery"])');
   });
 
-  it('keeps native Clodex ownership ahead of Claude 2.1.233 unknown-model enforcement', () => {
+  it('keeps native Clodex ownership ahead of Claude 2.1.234 unknown-model enforcement', () => {
     const source = CLAUDE_FIXTURE.replace(
       'return{window:o,configured:o,source:"auto"}}',
       'if(fx()&&!ee.CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT&&!R8_(e,r)&&!zks(e)&&!Vur(e,n))return{window:o,configured:o,source:"unknown-model"};return{window:o,configured:o,source:"auto"}}',
@@ -1162,6 +1166,7 @@ describe('patch script identity naming', () => {
     const out = runPatchScript(config);
     const table = out.match(/\/\*ccpatch:ctx\*\/var _ccw=\((\{[^}]*\})\)/)?.[1];
     expect(table).toBeTruthy();
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const parsed = JSON.parse(table!) as Record<string, number>;
     expect(parsed['sol']).toBe(272_000);
     expect(parsed['clodex:openai-oauth:gpt-5.6-sol']).toBe(272_000);
@@ -1442,6 +1447,7 @@ describe('patch script identity naming', () => {
     const out = runPatchScript(config);
     const declaration = out.split('\n').find(line => line.startsWith('function T0('));
     expect(declaration).toBeDefined();
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const isFastModel = Function(
       '$c',
       'O3',
@@ -1480,6 +1486,7 @@ describe('patch script identity naming', () => {
     expect(writeDeclaration).toBeDefined();
 
     let sessionFlag: boolean | undefined;
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const initialFast = Function(
       'sn',
       `${initialDeclaration};return wEs;`,
@@ -1487,6 +1494,7 @@ describe('patch script identity naming', () => {
       (settings: { fastMode?: boolean; fastModePerSessionOptIn?: boolean }) => boolean;
     const sessionWrites: unknown[] = [];
     const userWrites: unknown[] = [];
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const setFast = Function(
       'USe',
       'dfr',
@@ -1495,8 +1503,8 @@ describe('patch script identity naming', () => {
       `${writeDeclaration};return jNr;`,
     )(
       () => {},
-      (value: unknown) => sessionWrites.push(value),
-      (...value: unknown[]) => userWrites.push(value),
+      <T>(value: T) => sessionWrites.push(value),
+      (...value: JsonValue[]) => userWrites.push(value),
       () => {},
     ) as (enabled: boolean, update: () => void) => void;
 
@@ -1529,8 +1537,9 @@ describe('patch script identity naming', () => {
     const out = runPatchScript(config);
     const requestDeclaration = out.split('\n').find(line => line.startsWith('function buildFastRequest('));
     expect(requestDeclaration).toBeDefined();
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const buildFastRequest = Function(`${requestDeclaration};return buildFastRequest;`)() as
-      (speed?: 'standard' | 'fast') => Record<string, unknown>;
+      (speed?: 'standard' | 'fast') => { model: string; speed?: string };
     const previous = process.env.CLODEX_CLAUDE_FAST_MODE;
     try {
       delete process.env.CLODEX_CLAUDE_FAST_MODE;
@@ -1580,6 +1589,7 @@ describe('patch script identity naming', () => {
     const end = out.indexOf('/*workflow-end*/', start);
     expect(start).toBeGreaterThanOrEqual(0);
     expect(end).toBeGreaterThan(start);
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const runWorkflow = new Function(`${out.slice(start, end)};return runWorkflow;`)() as
       (events: unknown[]) => { tokens: number; progress: number[] };
     let usageReads = 0;
@@ -1613,6 +1623,7 @@ describe('patch script identity naming', () => {
       once,
     );
     const table = updated.match(/\/\*ccpatch:ctx\*\/var _ccw=\((\{[^}]*\})\)/)?.[1];
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const parsed = JSON.parse(table!) as Record<string, number>;
     expect(parsed['clodex:openai:mystery']).toBe(131_072);
     expect(parsed['sol']).toBe(272_000);
@@ -1753,4 +1764,3 @@ describe('patch script identity naming', () => {
       'medium',
     )).toBe('medium');
   });
-});

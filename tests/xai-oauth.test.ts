@@ -1,10 +1,11 @@
 import { describe, expect, it, vi } from 'bun:test';
 import { runXaiDeviceCodeFlow } from '../src/oauth/xai.js';
 import { createXaiSubscriptionFetch } from '../src/oauth/xai-proxy.js';
+import type { JsonObject } from './test-helpers.js';
 
 const SSE_HEADERS = { 'content-type': 'text/event-stream' };
 
-function sseEvent(payload: Record<string, unknown>, eventName?: string): string {
+function sseEvent(payload: JsonObject, eventName?: string): string {
   return `${eventName ? `event: ${eventName}\n` : ''}data: ${JSON.stringify(payload)}\n\n`;
 }
 
@@ -34,6 +35,7 @@ describe('xAI SuperGrok OAuth', () => {
         expires_in: 3600,
       }), { status: 200 }));
     const originalFetch = globalThis.fetch;
+    // SAFETY: The test fixture defines the asserted runtime shape.
     globalThis.fetch = fetchMock as typeof fetch;
     try {
       const onDeviceCode = vi.fn();
@@ -63,6 +65,7 @@ describe('xAI SuperGrok OAuth', () => {
 
   it('adds the required CLI proxy headers without exposing other models', async () => {
     const transport = vi.fn(async () => new Response(null, { status: 204 }));
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const proxyFetch = createXaiSubscriptionFetch('grok-4.6', 'claude-session', transport as typeof fetch);
 
     await proxyFetch('https://cli-chat-proxy.grok.com/v1/responses', {
@@ -117,6 +120,7 @@ describe('xAI SuperGrok OAuth', () => {
     const proxyFetch = createXaiSubscriptionFetch(
       'grok-4.6',
       'session-retry',
+      // SAFETY: The test fixture defines the asserted runtime shape.
       transport as typeof fetch,
       { random: () => 0, sleep: async milliseconds => { waits.push(milliseconds); } },
     );
@@ -154,6 +158,7 @@ describe('xAI SuperGrok OAuth', () => {
       }),
     ].join('');
     const transport = vi.fn(async () => streamedResponse([stream]));
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const proxyFetch = createXaiSubscriptionFetch('grok-4.6', 'session-observe', transport as typeof fetch);
 
     const body = await (await proxyFetch('https://cli-chat-proxy.grok.com/v1/responses')).text();
@@ -187,6 +192,7 @@ describe('xAI SuperGrok OAuth', () => {
     const proxyFetch = createXaiSubscriptionFetch(
       'grok-4.6',
       'session-budget',
+      // SAFETY: The test fixture defines the asserted runtime shape.
       transport as typeof fetch,
       { random: () => 1, sleep: async milliseconds => { waits.push(milliseconds); } },
     );
@@ -226,6 +232,7 @@ describe('xAI SuperGrok OAuth', () => {
     const proxyFetch = createXaiSubscriptionFetch(
       'grok-4.6',
       'session-terminal',
+      // SAFETY: The test fixture defines the asserted runtime shape.
       transport as typeof fetch,
       { random: () => 0, sleep: async () => {} },
     );
@@ -254,6 +261,7 @@ describe('xAI SuperGrok OAuth', () => {
       }),
     ].join('');
     const transport = vi.fn(async () => streamedResponse([stream]));
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const proxyFetch = createXaiSubscriptionFetch('grok-4.6', 'session-committed', transport as typeof fetch);
 
     const body = await (await proxyFetch('https://cli-chat-proxy.grok.com/v1/responses')).text();

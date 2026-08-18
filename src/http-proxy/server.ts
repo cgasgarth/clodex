@@ -1,3 +1,4 @@
+import { isNumber, isString } from '../runtime/type-guards.js';
 import * as http from 'node:http';
 import * as https from 'node:https';
 import * as net from 'node:net';
@@ -9,21 +10,22 @@ import type {
   ProxyHandle,
   ProxyRoute,
   ProxyRouteRequestResolver,
-} from '../proxy.js';
-import { startProxyCatalog } from '../proxy.js';
-import { decodeRequestBody } from '../http-utils.js';
+} from '../proxy/index.js';
+import { startProxyCatalog } from '../proxy/index.js';
+import { decodeRequestBody } from '../transport/http-utils.js';
 import { ensureHttpProxyCertificates } from './ca.js';
-import { normalizeRouteLookupId } from '../context-model-id.js';
-import { listenTcpServer } from '../listener-ready.js';
-import { routeUnavailableMessage } from '../route-unavailable.js';
+import { normalizeRouteLookupId } from '../models/context-model-id.js';
+import { listenTcpServer } from '../transport/listener-ready.js';
+import { routeUnavailableMessage } from '../proxy/route-unavailable.js';
 import { HTTP_PROXY_MODEL_PREFIX, type ResolvedHttpProxyAlias } from './routes.js';
 import { anthropicEffortFromRequest, extractClaudeSessionId, type AnthropicRequest } from '../sdk-adapter.js';
 import {
   anthropicMessagesEndpoint,
   type AnthropicMessagesEndpoint,
-} from '../anthropic-endpoints.js';
+} from '../providers/anthropic-endpoints.js';
 import {
   getLatestMessagePreview,
+  diagnosticRecord,
   INFERENCE_PROGRESS_INTERVAL_MS,
   writeInferenceRequestLog,
   writeInferenceRouteUnavailableLog,
@@ -32,7 +34,8 @@ import {
   writeWebSocketDiagnosticRequestLog,
   type InferenceFailureSource,
   type InferenceResponsePhase,
-} from '../trace-log.js';
+} from '../observability/trace-log.js';
+import type { JsonValue } from '../oauth/responses-websocket/types.js';
 
 const ANTHROPIC_HOST = 'api.anthropic.com';
 const MAX_BODY_BYTES = 50 * 1024 * 1024;
@@ -47,8 +50,25 @@ type ResponseUsage = {
   cacheReadInputTokens?: number;
 };
 
-function numericUsage(value: unknown): number | undefined {
-  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+interface SseUsageInput {
+  input_tokens?: JsonValue;
+  output_tokens?: JsonValue;
+  cache_creation_input_tokens?: JsonValue;
+  cache_read_input_tokens?: JsonValue;
+}
+
+interface SseMessageInput {
+  usage?: SseUsageInput;
+}
+
+interface SseEventInput {
+  type?: JsonValue;
+  message?: SseMessageInput;
+  usage?: SseUsageInput;
+}
+
+function numericUsage(value: JsonValue): number | undefined {
+  return isNumber(value) && Number.isFinite(value) ? value : undefined;
 }
 
 function responseUsageFromSseBlock(block: string): ResponseUsage | undefined {
@@ -61,14 +81,14 @@ function responseUsageFromSseBlock(block: string): ResponseUsage | undefined {
   if (!data) return undefined;
 
   try {
-    const parsed = JSON.parse(data) as Record<string, unknown>;
+    const parsed: SseEventInput = JSON.parse(data);
     const type = parsed.type;
     if (type !== 'message_start' && type !== 'message_delta') return undefined;
     if (event && event !== type) return undefined;
     const message = type === 'message_start'
-      ? parsed.message as Record<string, unknown> | undefined
+      ? parsed.message
       : undefined;
-    const usage = (type === 'message_start' ? message?.usage : parsed.usage) as Record<string, unknown> | undefined;
+    const usage = type === 'message_start' ? message?.usage : parsed.usage;
     if (!usage) return undefined;
     return {
       usageStage: type,
@@ -180,12 +200,61 @@ export interface HttpProxyOptions {
   /** Optionally rewrite a translated request before it reaches the local adapter. */
   optimizeTranslatedRequest?: (context: {
     body: Buffer;
-    request: Record<string, unknown>;
+    request: AnthropicRequest;
     route: ProxyRoute;
     claudeSessionId?: string;
     claudeAgentId?: string;
     endpoint: AnthropicMessagesEndpoint;
   }) => Promise<Buffer>;
+}
+
+function nodeErrorCode(error: Error): string | undefined {
+  return 'code' in error && isString(error.code) ? error.code : undefined;
+}
+
+interface SocketEndpoint {
+  remoteAddress?: string;
+  remotePort?: number;
+}
+
+function socketIdentity(socket: SocketEndpoint): string {
+  return `${socket.remoteAddress ?? ''}:${socket.remotePort ?? 0}`;
+}
+
+function adapterNodeHeaders(
+  req: http.IncomingMessage,
+  adapterToken: string,
+  contentLength: number,
+  requestId: string | undefined,
+  launchTicket: string | undefined,
+): http.OutgoingHttpHeaders {
+  const headers: http.OutgoingHttpHeaders = {
+    'Content-Type': 'application/json',
+    'Content-Length': String(contentLength),
+    'x-api-key': adapterToken,
+  };
+  const sessionId = req.headers['x-claude-code-session-id'];
+  if (isString(sessionId)) headers['x-claude-code-session-id'] = sessionId;
+  if (requestId) headers['x-relay-request-id'] = requestId;
+  if (launchTicket) headers['x-clodex-launch-ticket'] = launchTicket;
+  return headers;
+}
+
+function adapterFetchHeaders(
+  req: http.IncomingMessage,
+  adapterToken: string,
+  requestId: string | undefined,
+  launchTicket: string | undefined,
+): Headers {
+  const headers = new Headers({
+    'Content-Type': 'application/json',
+    'x-api-key': adapterToken,
+  });
+  const sessionId = req.headers['x-claude-code-session-id'];
+  if (isString(sessionId)) headers.set('x-claude-code-session-id', sessionId);
+  if (requestId) headers.set('x-relay-request-id', requestId);
+  if (launchTicket) headers.set('x-clodex-launch-ticket', launchTicket);
+  return headers;
 }
 
 export interface HttpProxyHandle {
@@ -253,7 +322,7 @@ function copyResponse(
 ): void {
   const statusCode = upstream.statusCode ?? 502;
   const contentType = upstream.headers['content-type'];
-  if (statusCode < 400 && onResponseUsage && typeof contentType === 'string' && contentType.includes('text/event-stream')) {
+  if (statusCode < 400 && onResponseUsage && isString(contentType) && contentType.includes('text/event-stream')) {
     observeResponseUsage(upstream, upstream.headers['content-encoding'], onResponseUsage);
   }
   const errorChunks: Buffer[] = [];
@@ -361,7 +430,7 @@ function forwardRawAnthropicRequest(
             statusCode,
             phase: responsePhase(),
             durationMs: now - startedAt,
-            ...(firstByteAt !== undefined ? { timeToFirstByteMs: firstByteAt - startedAt } : {}),
+            timeToFirstByteMs: firstByteAt === undefined ? undefined : firstByteAt - startedAt,
             idleMs: now - lastActivityAt,
             bytes,
             chunks,
@@ -377,7 +446,7 @@ function forwardRawAnthropicRequest(
       settled = true;
       resolve();
     };
-    const errorType = (err: Error): string => (err as NodeJS.ErrnoException).code ?? err.name;
+    const errorType = (err: Error): string => nodeErrorCode(err) ?? err.name;
     const upstream = https.request({
       protocol: 'https:',
       hostname: origin.hostname,
@@ -423,7 +492,7 @@ function forwardRawAnthropicRequest(
           statusCode,
           phase: responsePhase(),
           durationMs: now - startedAt,
-          ...(firstByteAt !== undefined ? { timeToFirstByteMs: firstByteAt - startedAt } : {}),
+            timeToFirstByteMs: firstByteAt === undefined ? undefined : firstByteAt - startedAt,
           idleMs: now - lastActivityAt,
           bytes,
           chunks,
@@ -440,7 +509,7 @@ function forwardRawAnthropicRequest(
       writeLifecycle('response_completed', {
         statusCode,
         durationMs: now - startedAt,
-        ...(firstByteAt !== undefined ? { timeToFirstByteMs: firstByteAt - startedAt } : {}),
+            timeToFirstByteMs: firstByteAt === undefined ? undefined : firstByteAt - startedAt,
         bytes,
         chunks,
       });
@@ -454,7 +523,7 @@ function forwardRawAnthropicRequest(
         statusCode,
         phase: responsePhase(),
         durationMs: now - startedAt,
-        ...(firstByteAt !== undefined ? { timeToFirstByteMs: firstByteAt - startedAt } : {}),
+            timeToFirstByteMs: firstByteAt === undefined ? undefined : firstByteAt - startedAt,
         idleMs: now - lastActivityAt,
         bytes,
         chunks,
@@ -563,7 +632,7 @@ function forwardToAdapter(
             statusCode,
             phase: responsePhase(),
             durationMs: now - startedAt,
-            ...(firstByteAt !== undefined ? { timeToFirstByteMs: firstByteAt - startedAt } : {}),
+            timeToFirstByteMs: firstByteAt === undefined ? undefined : firstByteAt - startedAt,
             idleMs: now - lastActivityAt,
             bytes,
             chunks,
@@ -582,7 +651,7 @@ function forwardToAdapter(
       writeLifecycle('response_completed', {
         statusCode,
         durationMs: now - startedAt,
-        ...(firstByteAt !== undefined ? { timeToFirstByteMs: firstByteAt - startedAt } : {}),
+            timeToFirstByteMs: firstByteAt === undefined ? undefined : firstByteAt - startedAt,
         bytes,
         chunks,
       });
@@ -596,7 +665,7 @@ function forwardToAdapter(
         statusCode,
         phase: responsePhase(),
         durationMs: now - startedAt,
-        ...(firstByteAt !== undefined ? { timeToFirstByteMs: firstByteAt - startedAt } : {}),
+            timeToFirstByteMs: firstByteAt === undefined ? undefined : firstByteAt - startedAt,
         idleMs: now - lastActivityAt,
         bytes,
         chunks,
@@ -628,7 +697,7 @@ function forwardToAdapter(
         bytes,
         chunks,
         errorType: err.name,
-        errorCode: (err as NodeJS.ErrnoException).code,
+        errorCode: nodeErrorCode(err),
         failureSource,
         terminationSource: 'upstream_failure',
       });
@@ -643,16 +712,13 @@ function forwardToAdapter(
       method: 'POST',
       path: req.url,
       agent: adapterAgent,
-      headers: {
-        'Content-Type': 'application/json',
-        'Content-Length': String(rawBody.length),
-        'x-api-key': adapter.token,
-        ...(typeof req.headers['x-claude-code-session-id'] === 'string'
-          ? { 'x-claude-code-session-id': req.headers['x-claude-code-session-id'] }
-          : {}),
-        ...(lifecycle ? { 'x-relay-request-id': lifecycle.requestId } : {}),
-        ...(launchTicket ? { 'x-clodex-launch-ticket': launchTicket } : {}),
-      },
+      headers: adapterNodeHeaders(
+        req,
+        adapter.token,
+        rawBody.length,
+        lifecycle?.requestId,
+        launchTicket,
+      ),
     }, upstreamRes => {
       adapterResponse = upstreamRes;
       headersReceived = true;
@@ -691,12 +757,12 @@ function forwardToAdapter(
           statusCode,
           phase: responsePhase(),
           durationMs: now - startedAt,
-          ...(firstByteAt !== undefined ? { timeToFirstByteMs: firstByteAt - startedAt } : {}),
+            timeToFirstByteMs: firstByteAt === undefined ? undefined : firstByteAt - startedAt,
           idleMs: now - lastActivityAt,
           bytes,
           chunks,
           errorType: err.name,
-          errorCode: (err as NodeJS.ErrnoException).code,
+          errorCode: nodeErrorCode(err),
           failureSource,
           terminationSource: 'upstream_failure',
         });
@@ -789,7 +855,7 @@ async function forwardToAdapterWithFetch(
           statusCode,
           phase: responsePhase(),
           durationMs: now - startedAt,
-          ...(firstByteAt !== undefined ? { timeToFirstByteMs: firstByteAt - startedAt } : {}),
+            timeToFirstByteMs: firstByteAt === undefined ? undefined : firstByteAt - startedAt,
           idleMs: now - lastActivityAt,
           bytes,
           chunks,
@@ -808,7 +874,7 @@ async function forwardToAdapterWithFetch(
     writeLifecycle('response_completed', {
       statusCode,
       durationMs: now - startedAt,
-      ...(firstByteAt !== undefined ? { timeToFirstByteMs: firstByteAt - startedAt } : {}),
+            timeToFirstByteMs: firstByteAt === undefined ? undefined : firstByteAt - startedAt,
       bytes,
       chunks,
     });
@@ -822,7 +888,7 @@ async function forwardToAdapterWithFetch(
       statusCode,
       phase: responsePhase(),
       durationMs: now - startedAt,
-      ...(firstByteAt !== undefined ? { timeToFirstByteMs: firstByteAt - startedAt } : {}),
+            timeToFirstByteMs: firstByteAt === undefined ? undefined : firstByteAt - startedAt,
       idleMs: now - lastActivityAt,
       bytes,
       chunks,
@@ -839,15 +905,7 @@ async function forwardToAdapterWithFetch(
   try {
     const response = await fetch(`http://127.0.0.1:${adapter.port}${req.url ?? '/'}`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': adapter.token,
-        ...(typeof req.headers['x-claude-code-session-id'] === 'string'
-          ? { 'x-claude-code-session-id': req.headers['x-claude-code-session-id'] }
-          : {}),
-        ...(lifecycle ? { 'x-relay-request-id': lifecycle.requestId } : {}),
-        ...(launchTicket ? { 'x-clodex-launch-ticket': launchTicket } : {}),
-      },
+      headers: adapterFetchHeaders(req, adapter.token, lifecycle?.requestId, launchTicket),
       body: new Uint8Array(rawBody),
       signal: abort.signal,
     });
@@ -892,12 +950,12 @@ async function forwardToAdapterWithFetch(
       statusCode: statusCode ?? 502,
       phase: responsePhase(),
       durationMs: now - startedAt,
-      ...(firstByteAt !== undefined ? { timeToFirstByteMs: firstByteAt - startedAt } : {}),
+            timeToFirstByteMs: firstByteAt === undefined ? undefined : firstByteAt - startedAt,
       idleMs: now - lastActivityAt,
       bytes,
       chunks,
       errorType: err.name,
-      errorCode: (err as NodeJS.ErrnoException).code,
+      errorCode: nodeErrorCode(err),
       failureSource: statusCode === undefined ? 'adapter_request_error' : 'adapter_response_error',
       terminationSource: 'upstream_failure',
     });
@@ -979,11 +1037,6 @@ export async function startHttpProxy(options: HttpProxyOptions): Promise<HttpPro
   const shutdownController = new AbortController();
   const launchTicketsByClient = new Map<string, string>();
 
-  const socketIdentity = (socket: unknown): string => {
-    const endpoint = socket as { remoteAddress?: string; remotePort?: number };
-    return `${endpoint.remoteAddress ?? ''}:${endpoint.remotePort ?? 0}`;
-  };
-
   const handleMitmRequest = async (
     req: http.IncomingMessage,
     res: http.ServerResponse,
@@ -1021,10 +1074,11 @@ export async function startHttpProxy(options: HttpProxyOptions): Promise<HttpPro
       const encodedRequestBody = contentEncoding !== '' && contentEncoding !== 'identity';
       try {
         const decodedBody = decodeRequestBody(rawBody, req.headers['content-encoding']);
-        parsed = JSON.parse(decodedBody) as AnthropicRequest;
+        const request: AnthropicRequest = JSON.parse(decodedBody);
+        parsed = request;
         if (encodedRequestBody) adapterBody = Buffer.from(decodedBody);
-        if (typeof parsed.model === 'string') {
-          route = routesById.get(normalizeRouteLookupId(parsed.model));
+        if (isString(request.model)) {
+          route = routesById.get(normalizeRouteLookupId(request.model));
         }
       } catch {
         if (encodedRequestBody) {
@@ -1048,7 +1102,7 @@ export async function startHttpProxy(options: HttpProxyOptions): Promise<HttpPro
       const claudeSessionId = parsed
         ? extractClaudeSessionId(parsed, claudeSessionIdHeader)
         : undefined;
-      const requestedModel = typeof parsed?.model === 'string' ? parsed.model : undefined;
+      const requestedModel = isString(parsed?.model) ? parsed.model : undefined;
       const unresolvedRoutedModel = !route && requestedModel !== undefined && (
         normalizeRouteLookupId(requestedModel).startsWith(HTTP_PROXY_MODEL_PREFIX)
         || reservedModelIds.has(normalizeRouteLookupId(requestedModel))
@@ -1078,7 +1132,7 @@ export async function startHttpProxy(options: HttpProxyOptions): Promise<HttpPro
         writeInferenceRequestLog(options.inferenceLogPath, {
           requestId,
           claudeSessionId,
-          modelId: typeof parsed?.model === 'string' ? parsed.model : 'unknown',
+          modelId: isString(parsed?.model) ? parsed.model : 'unknown',
           effort: parsed ? anthropicEffortFromRequest(parsed) : undefined,
           provider,
           route: route ? 'translated' : 'passthrough',
@@ -1091,13 +1145,14 @@ export async function startHttpProxy(options: HttpProxyOptions): Promise<HttpPro
         const provider = route
           ? (route.providerId ?? route.aliasId.split(':')[1] ?? 'unknown')
           : 'anthropic';
+        const diagnosticBody = parsed ? diagnosticRecord(parsed) : {};
         writeWebSocketDiagnosticRequestLog(options.webSocketDiagnosticsLogPath, {
           requestId,
           claudeSessionId,
           provider,
           route: route ? 'translated' : 'passthrough',
           headers: req.headers,
-          body: parsed ? parsed as unknown as Record<string, unknown> : {},
+          body: diagnosticBody,
         });
       }
 
@@ -1105,7 +1160,7 @@ export async function startHttpProxy(options: HttpProxyOptions): Promise<HttpPro
         if (parsed && options.optimizeTranslatedRequest) {
           adapterBody = await options.optimizeTranslatedRequest({
             body: adapterBody,
-            request: parsed as unknown as Record<string, unknown>,
+            request: parsed,
             route,
             claudeSessionId,
             claudeAgentId: claudeAgentIdHeader,
@@ -1130,7 +1185,7 @@ export async function startHttpProxy(options: HttpProxyOptions): Promise<HttpPro
                 logPath: options.inferenceLogPath,
                 requestId,
                 claudeSessionId,
-                modelId: typeof parsed?.model === 'string' ? parsed.model : 'unknown',
+                modelId: isString(parsed?.model) ? parsed.model : 'unknown',
                 provider: route.providerId ?? route.aliasId.split(':')[1] ?? 'unknown',
                 progressIntervalMs: options.responseProgressIntervalMs ?? INFERENCE_PROGRESS_INTERVAL_MS,
               }
@@ -1151,7 +1206,7 @@ export async function startHttpProxy(options: HttpProxyOptions): Promise<HttpPro
         messagesEndpoint === 'messages' && options.inferenceLogPath
           ? (statusCode, errorContent) => writeInferenceResponseErrorLog(options.inferenceLogPath!, {
               requestId,
-              modelId: typeof parsed?.model === 'string' ? parsed.model : 'unknown',
+              modelId: isString(parsed?.model) ? parsed.model : 'unknown',
               provider: 'anthropic',
               route: 'passthrough',
               statusCode,
@@ -1163,7 +1218,7 @@ export async function startHttpProxy(options: HttpProxyOptions): Promise<HttpPro
               event: 'response_usage',
               requestId,
               claudeSessionId,
-              modelId: typeof parsed?.model === 'string' ? parsed.model : 'unknown',
+              modelId: isString(parsed?.model) ? parsed.model : 'unknown',
               provider: 'anthropic',
               route: 'passthrough',
               ...usage,
@@ -1174,7 +1229,7 @@ export async function startHttpProxy(options: HttpProxyOptions): Promise<HttpPro
               logPath: options.inferenceLogPath,
               requestId,
               claudeSessionId,
-              modelId: typeof parsed?.model === 'string' ? parsed.model : 'unknown',
+              modelId: isString(parsed?.model) ? parsed.model : 'unknown',
               provider: 'anthropic',
               progressIntervalMs: options.responseProgressIntervalMs ?? INFERENCE_PROGRESS_INTERVAL_MS,
             }

@@ -1,12 +1,22 @@
 // tests/outbound-proxy.test.ts
 import { describe, it, expect } from 'bun:test';
+import { getGlobalDispatcher, setGlobalDispatcher } from 'undici';
 import {
   hasOutboundProxyEnv,
+  installOutboundProxyDispatcher,
   noProxyBypasses,
   outboundProxyUrlForTarget,
-} from '../src/outbound-proxy.js';
+} from '../src/transport/outbound-proxy.js';
 
 const PROXY = 'http://127.0.0.1:8888';
+
+const restoreEnvironmentVariable = (name: string, value: string | undefined): void => {
+  if (value === undefined) {
+    delete process.env[name];
+    return;
+  }
+  process.env[name] = value;
+};
 
 describe('hasOutboundProxyEnv', () => {
   it('is false with no proxy vars or blank values', () => {
@@ -74,5 +84,60 @@ describe('noProxyBypasses', () => {
     expect(noProxyBypasses('c.test', { NO_PROXY: 'c.test:443' })).toBe(true);
     expect(noProxyBypasses('d.test', { no_proxy: 'd.test' })).toBe(true);
     expect(noProxyBypasses('e.test', {})).toBe(false);
+  });
+});
+
+describe('installOutboundProxyDispatcher', () => {
+  it('routes Bun global fetch through the configured local proxy', async () => {
+    let directRequestCount = 0;
+    let proxyRequestCount = 0;
+    const targetServer = Bun.serve({
+      port: 0,
+      fetch: () => {
+        directRequestCount += 1;
+        return new Response('direct');
+      },
+    });
+    const proxyServer = Bun.serve({
+      port: 0,
+      fetch: () => {
+        proxyRequestCount += 1;
+        return new Response('proxied');
+      },
+    });
+    const previousDispatcher = getGlobalDispatcher();
+    const previousHttpProxy = process.env.HTTP_PROXY;
+    const previousLowercaseHttpProxy = process.env.http_proxy;
+    const previousHttpsProxy = process.env.HTTPS_PROXY;
+    const previousLowercaseHttpsProxy = process.env.https_proxy;
+    const previousNoProxy = process.env.NO_PROXY;
+    const previousLowercaseNoProxy = process.env.no_proxy;
+
+    try {
+      process.env.HTTP_PROXY = `http://127.0.0.1:${proxyServer.port}`;
+      delete process.env.http_proxy;
+      delete process.env.HTTPS_PROXY;
+      delete process.env.https_proxy;
+      delete process.env.NO_PROXY;
+      delete process.env.no_proxy;
+
+      expect(await installOutboundProxyDispatcher()).toBe(true);
+      expect(getGlobalDispatcher()).not.toBe(previousDispatcher);
+
+      const response = await fetch(`http://127.0.0.1:${targetServer.port}/probe`);
+      expect(await response.text()).toBe('proxied');
+      expect(response.status).toBe(200);
+      expect(proxyRequestCount).toBe(1);
+      expect(directRequestCount).toBe(0);
+    } finally {
+      setGlobalDispatcher(previousDispatcher);
+      restoreEnvironmentVariable('HTTP_PROXY', previousHttpProxy);
+      restoreEnvironmentVariable('http_proxy', previousLowercaseHttpProxy);
+      restoreEnvironmentVariable('HTTPS_PROXY', previousHttpsProxy);
+      restoreEnvironmentVariable('https_proxy', previousLowercaseHttpsProxy);
+      restoreEnvironmentVariable('NO_PROXY', previousNoProxy);
+      restoreEnvironmentVariable('no_proxy', previousLowercaseNoProxy);
+      await Promise.all([targetServer.stop(true), proxyServer.stop(true)]);
+    }
   });
 });

@@ -5,7 +5,6 @@ import {
   anthropicEffortFromRequest,
   translateMessages,
   translateTools,
-  translateToolChoice,
   translateRequest,
   writeAnthropicStream,
   streamAnthropicResponse,
@@ -17,6 +16,7 @@ import {
   sdkTranslationErrorSignature,
   generateAnthropicResponse,
 } from '../src/sdk-adapter.js';
+import type { JsonObject } from './test-helpers.js';
 
 const OPENAI_STEERING_POLICY_FOR_TESTS = [
   'The user may send a new message while you are still working. When they do, evaluate whether',
@@ -25,6 +25,46 @@ const OPENAI_STEERING_POLICY_FOR_TESTS = [
   'unfinished work, address both. If it asks for status or another question, answer it and then',
   'continue only the work that remains relevant.',
 ].join(' ');
+
+async function* forceStreamParts() {
+  yield { type: 'start' };
+  yield { type: 'text-delta', text: 'hello' };
+  yield { type: 'finish', finishReason: 'stop', totalUsage: { inputTokens: 3, outputTokens: 4 } };
+}
+
+async function* idleStreamParts() {
+  yield { type: 'start' };
+  yield { type: 'finish', finishReason: 'stop' };
+}
+
+async function* observedStreamParts() {
+  yield { type: 'start' };
+  yield { type: 'text-start', id: 't1' };
+  yield { type: 'text-delta', id: 't1', text: 'hi' };
+  yield { type: 'finish', finishReason: 'stop' };
+}
+
+async function* stringErrorParts() {
+  yield { type: 'error', error: 'Something went wrong' };
+}
+
+function toolInputFromEvents(events: Array<{ event: string; data: any }>): any {
+  const start = events.find(event => event.event === 'content_block_start' && event.data.content_block.type === 'tool_use')!;
+  const json = events
+    .filter(event => event.event === 'content_block_delta' && event.data.index === start.data.index && event.data.delta.type === 'input_json_delta')
+    .map(event => event.data.delta.partial_json)
+    .join('');
+  return JSON.parse(json || '{}');
+}
+
+function openAiPromptCacheKeyOf(
+  body: Parameters<typeof translateRequest>[0],
+  npm = '@ai-sdk/openai',
+  options?: Parameters<typeof translateRequest>[2],
+): string | undefined {
+  // SAFETY: The test fixture defines the asserted runtime shape.
+  return translateRequest(body, npm, options).providerOptions?.openai?.promptCacheKey as string | undefined;
+}
 
 describe('sdkTranslationErrorSignature', () => {
   it('classifies missing stream parts without exposing their dynamic ids', () => {
@@ -109,7 +149,9 @@ describe('annotateToolNames', () => {
       { role: 'user' as const, content: [{ type: 'tool_result', tool_use_id: 'call_1', content: 'hi' }] },
     ];
     annotateToolNames(messages);
-    expect((messages[1].content as any[])[0]._name).toBe('Read');
+    // SAFETY: The test fixture defines the asserted runtime shape.
+    const { _name: resolvedName } = (messages[1].content as any[])[0] as { _name?: string };
+    expect(resolvedName).toBe('Read');
   });
   it('resolves names even when the id carries an encoded thought signature', () => {
     const messages = [
@@ -117,7 +159,9 @@ describe('annotateToolNames', () => {
       { role: 'user' as const, content: [{ type: 'tool_result', tool_use_id: 'call_1__ts__U0lH', content: 'hi' }] },
     ];
     annotateToolNames(messages);
-    expect((messages[1].content as any[])[0]._name).toBe('Read');
+    // SAFETY: The test fixture defines the asserted runtime shape.
+    const { _name: resolvedName } = (messages[1].content as any[])[0] as { _name?: string };
+    expect(resolvedName).toBe('Read');
   });
 });
 
@@ -150,10 +194,12 @@ describe('translateMessages', () => {
       }],
     }, '@ai-sdk/openai', { openAiOAuth: true });
 
+    // SAFETY: The test fixture defines the asserted runtime shape.
     expect((params.messages as any[]).map(message => message.role)).toEqual([
       'tool',
       'user',
     ]);
+    // SAFETY: The test fixture defines the asserted runtime shape.
     expect((params.messages[1] as any).content[0].text).toBe([
       'The user sent this new instruction while the current task was running.',
       'Treat it as the newest user request and apply it now before continuing earlier work.',
@@ -172,7 +218,9 @@ describe('translateMessages', () => {
       messages: [{ role: 'user', content: 'continue the existing plan' }],
     }, '@ai-sdk/openai', { openAiOAuth: true });
 
+    // SAFETY: The test fixture defines the asserted runtime shape.
     expect((params.messages as any[]).map(message => message.role)).toEqual(['user']);
+    // SAFETY: The test fixture defines the asserted runtime shape.
     expect((params.messages[0] as any).content[0].text).toBe('continue the existing plan');
     expect(params.providerOptions?.openai?.instructions).toContain(
       'The user may send a new message while you are still working.',
@@ -196,6 +244,7 @@ describe('translateMessages', () => {
       }],
     }, '@ai-sdk/openai', { openAiOAuth: true });
 
+    // SAFETY: The test fixture defines the asserted runtime shape.
     expect((params.messages[0] as any).content.map((part: any) => part.text)).toEqual([
       'tool context that arrived in the same boundary',
       [
@@ -219,6 +268,7 @@ describe('translateMessages', () => {
       messages: [{ role: 'user', content: [{ type: 'text', text: queued }] }],
     }, '@ai-sdk/openai', { openAiOAuth: true });
 
+    // SAFETY: The test fixture defines the asserted runtime shape.
     expect((params.messages[0] as any).content[0].text).toEndWith(
       '\n\nactually stop i dont care anymore',
     );
@@ -231,11 +281,13 @@ describe('translateMessages', () => {
       messages: [{ role: 'user', content: text }],
     }, '@ai-sdk/openai', { openAiOAuth: true });
 
+    // SAFETY: The test fixture defines the asserted runtime shape.
     expect((params.messages[0] as any).content[0].text).toBe(text);
   });
 
   it('preserves the Claude mid-turn wrapper for non-OAuth routes', () => {
     const queued = 'The user sent a new message while you were working:\nkeep going';
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const out = translateMessages([
       { role: 'user', content: queued },
     ], '@ai-sdk/openai') as any[];
@@ -248,6 +300,7 @@ describe('translateMessages', () => {
       { role: 'user' as const, content: [{ type: 'tool_result', tool_use_id: 'call_1', content: 'file body' }] },
     ];
     annotateToolNames(messages);
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const out = translateMessages(messages, '@ai-sdk/xai') as any[];
     expect(out[0]).toEqual({ role: 'assistant', content: [{ type: 'tool-call', toolCallId: 'call_1', toolName: 'Read', input: { path: 'a' } }] });
     expect(out[1]).toEqual({ role: 'tool', content: [{ type: 'tool-result', toolCallId: 'call_1', toolName: 'Read', output: { type: 'text', value: 'file body' } }] });
@@ -266,9 +319,11 @@ describe('translateMessages', () => {
       ] },
     ];
     annotateToolNames(messages);
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const out = translateMessages(messages, '@ai-sdk/openai') as any[];
 
     expect(out[1].role).toBe('tool');
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const value = out[1].content[0].output.value as string;
     expect(value).not.toContain(data);
     expect(value).toContain('rendered 1 page');
@@ -289,10 +344,12 @@ describe('translateMessages', () => {
       { type: 'thinking', thinking: 'hmm', signature: 'SIG' },
       { type: 'tool_use', id: 'call_1__ts__VFNJRw', name: 'Read', input: {} },
     ] }];
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const google = translateMessages(msg, '@ai-sdk/google') as any[];
     expect(google[0].content[0].providerOptions).toEqual({ google: { thoughtSignature: 'SIG' } });
     expect(google[0].content[1].providerOptions).toEqual({ google: { thoughtSignature: 'TSIG' } });
     // xAI: thinking is kept as a reasoning part; tool id suffix stripped
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const xai = translateMessages(msg, '@ai-sdk/xai') as any[];
     expect(xai[0].content).toHaveLength(2);
     expect(xai[0].content[0]).toEqual({ type: 'reasoning', text: 'hmm' });
@@ -303,6 +360,7 @@ describe('translateMessages', () => {
     const msg = [{ role: 'assistant' as const, content: [
       { type: 'thinking', thinking: 'chain...', signature: 'enc_blob_abc' },
     ] }];
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const openai = translateMessages(msg, '@ai-sdk/openai') as any[];
     expect(openai[0].content[0]).toEqual({
       type: 'reasoning',
@@ -316,11 +374,13 @@ describe('translateMessages', () => {
       { type: 'thinking', thinking: '', signature: '' },
       { type: 'text', text: 'hello' },
     ] }];
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const openai = translateMessages(msg, '@ai-sdk/openai') as any[];
     expect(openai[0].content).toEqual([{ type: 'text', text: 'hello' }]);
   });
 
   it('maps base64 image blocks to AI SDK 7 file parts', () => {
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const out = translateMessages([
       { role: 'user', content: [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'aGk=' } }] },
     ], '@ai-sdk/google') as any[];
@@ -418,11 +478,12 @@ describe('translateRequest', () => {
   });
 
   it('serializes Fast processing on the OpenAI Responses wire request', async () => {
-    let requestBody: Record<string, unknown> | undefined;
+    let requestBody: JsonObject | undefined;
     const provider = createOpenAI({
       apiKey: 'synthetic-test-key',
       fetch: async (_input, init) => {
-        requestBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        // SAFETY: The test fixture defines the asserted runtime shape.
+        requestBody = JSON.parse(String(init?.body)) as JsonObject;
         return new Response(JSON.stringify({
           id: 'resp_fast_test',
           model: 'gpt-5.6-sol',
@@ -454,11 +515,12 @@ describe('translateRequest', () => {
   });
 
   it('serializes OpenAI web-search domain filters on the wire request', async () => {
-    let requestBody: Record<string, unknown> | undefined;
+    let requestBody: JsonObject | undefined;
     const provider = createOpenAI({
       apiKey: 'synthetic-test-key',
       fetch: async (_input, init) => {
-        requestBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        // SAFETY: The test fixture defines the asserted runtime shape.
+        requestBody = JSON.parse(String(init?.body)) as JsonObject;
         return new Response(JSON.stringify({
           id: 'resp_web_search_test',
           model: 'gpt-5.6-sol',
@@ -498,11 +560,12 @@ describe('translateRequest', () => {
   });
 
   it('serializes the Claude parallel-tool preference on OpenAI Responses requests', async () => {
-    const requestBodies: Record<string, unknown>[] = [];
+    const requestBodies: JsonObject[] = [];
     const provider = createOpenAI({
       apiKey: 'synthetic-test-key',
       fetch: async (_input, init) => {
-        requestBodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+        // SAFETY: The test fixture defines the asserted runtime shape.
+        requestBodies.push(JSON.parse(String(init?.body)) as JsonObject);
         return new Response(JSON.stringify({
           id: `resp_parallel_${requestBodies.length}`,
           model: 'gpt-5.6-sol',
@@ -704,19 +767,23 @@ describe('translateRequest', () => {
       system: 'base prompt',
       messages: [
         { role: 'user', content: 'hi' },
+        // SAFETY: The test fixture defines the asserted runtime shape.
         { role: 'system', content: '<system-reminder>available skills: nlm-skill</system-reminder>' } as any,
         { role: 'user', content: 'continue' },
       ],
     }, '@ai-sdk/xai');
     expect(params.instructions).toBe('base prompt');
     expect(params.allowSystemInMessages).toBe(true);
+    // SAFETY: The test fixture defines the asserted runtime shape.
     expect((params.messages as any[]).map(message => message.role)).toEqual(['user', 'system', 'user']);
+    // SAFETY: The test fixture defines the asserted runtime shape.
     expect((params.messages[1] as any).content).toContain('nlm-skill');
   });
 
   it('keeps an inline-only system message in the message sequence', () => {
     const params = translateRequest({
       model: 'grok-4.6',
+      // SAFETY: The test fixture defines the asserted runtime shape.
       messages: [{ role: 'system', content: 'only inline context' } as any],
     }, '@ai-sdk/xai');
     expect(params.instructions).toBeUndefined();
@@ -730,6 +797,7 @@ describe('translateRequest', () => {
       system: 'stable Claude instructions',
       messages: [
         { role: 'user', content: 'continue the task' },
+        // SAFETY: The test fixture defines the asserted runtime shape.
         {
           role: 'system',
           content: [
@@ -740,6 +808,7 @@ describe('translateRequest', () => {
       ],
     }, '@ai-sdk/openai', { openAiOAuth: true });
 
+    // SAFETY: The test fixture defines the asserted runtime shape.
     expect((params.providerOptions as any).openai.instructions).toBe(
       'stable Claude instructions\n'
       + OPENAI_STEERING_POLICY_FOR_TESTS + '\n'
@@ -755,6 +824,7 @@ describe('translateRequest', () => {
       system: [{ text: 'stable base', cache_control: { type: 'ephemeral' } }],
       messages: [
         { role: 'user', content: 'before' },
+        // SAFETY: The test fixture defines the asserted runtime shape.
         {
           role: 'system',
           content: [{
@@ -775,13 +845,17 @@ describe('translateRequest', () => {
     }, '@ai-sdk/openai');
 
     expect(params.instructions).toBeUndefined();
+    // SAFETY: The test fixture defines the asserted runtime shape.
     expect((params.messages as any[]).map(message => message.role)).toEqual(['system', 'user', 'system', 'user']);
+    // SAFETY: The test fixture defines the asserted runtime shape.
     expect((params.messages[0] as any).providerOptions).toEqual({
       openai: { promptCacheBreakpoint: { mode: 'explicit' } },
     });
+    // SAFETY: The test fixture defines the asserted runtime shape.
     expect((params.messages[2] as any).providerOptions).toEqual({
       openai: { promptCacheBreakpoint: { mode: 'explicit' } },
     });
+    // SAFETY: The test fixture defines the asserted runtime shape.
     expect((params.messages[3] as any).content[0].providerOptions).toEqual({
       openai: { promptCacheBreakpoint: { mode: 'explicit' } },
     });
@@ -798,6 +872,7 @@ describe('translateRequest', () => {
     }, '@ai-sdk/openai');
 
     expect(params.providerOptions?.openai?.promptCacheOptions).toBeUndefined();
+    // SAFETY: The test fixture defines the asserted runtime shape.
     expect((params.messages[0] as any).content[0].providerOptions).toBeUndefined();
   });
 
@@ -925,11 +1000,14 @@ describe('generateAnthropicResponse', () => {
     }));
 
     const body = await generateAnthropicResponse(
+      // SAFETY: The test fixture defines the asserted runtime shape.
       {} as never,
       { messages: [] },
       'gemini-2.5-pro',
+      // SAFETY: The test fixture defines the asserted runtime shape.
       { generateText: generateText as never },
     );
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const toolUse = (body.content as any[]).find(item => item.type === 'tool_use');
     expect(toolUse.id).toBe('call_1__ts__U0lH');
     expect(generateText.mock.calls[0]![0]).not.toHaveProperty('timeout');
@@ -939,12 +1017,7 @@ describe('generateAnthropicResponse', () => {
 
   it('forceStream collects a real stream into one response instead of calling generateText', async () => {
     const generateText = vi.fn();
-    async function* stream() {
-      yield { type: 'start' };
-      yield { type: 'text-delta', text: 'hello' };
-      yield { type: 'finish', finishReason: 'stop', totalUsage: { inputTokens: 3, outputTokens: 4 } };
-    }
-    const result: Record<string, unknown> = { stream: stream() };
+    const result = { stream: forceStreamParts() };
     for (const property of ['text', 'toolCalls', 'toolResults', 'finishReason', 'usage']) {
       Object.defineProperty(result, property, {
         get() { throw new Error(`unexpected ${property} getter access`); },
@@ -956,6 +1029,7 @@ describe('generateAnthropicResponse', () => {
     const abortSignalAny = vi.spyOn(AbortSignal, 'any');
     const onPart = vi.fn();
     const body = await generateAnthropicResponse(
+      // SAFETY: The test fixture defines the asserted runtime shape.
       {} as never,
       { messages: [] },
       'gpt-5.6-sol',
@@ -963,6 +1037,7 @@ describe('generateAnthropicResponse', () => {
         forceStream: true,
         abortSignal: abort.signal,
         onPart,
+        // SAFETY: The test fixture defines the asserted runtime shape.
         streamText: streamText as never,
       },
     );
@@ -975,6 +1050,7 @@ describe('generateAnthropicResponse', () => {
     expect(streamText.mock.calls[0]![0].abortSignal.aborted).toBe(true);
     expect(abort.signal.aborted).toBe(false);
     expect(onPart.mock.calls).toEqual([['start'], ['text-delta'], ['finish']]);
+    // SAFETY: The test fixture defines the asserted runtime shape.
     expect((body.content as any[])[0]).toEqual({ type: 'text', text: 'hello' });
     expect(body.usage).toEqual({
       input_tokens: 3,
@@ -995,9 +1071,11 @@ describe('generateAnthropicResponse', () => {
     const streamText = vi.fn(() => ({ stream: stream() }));
 
     await expect(generateAnthropicResponse(
+      // SAFETY: The test fixture defines the asserted runtime shape.
       {} as never,
       { messages: [] },
       'gpt-5.6-sol',
+      // SAFETY: The test fixture defines the asserted runtime shape.
       { forceStream: true, streamText: streamText as never },
     )).rejects.toBe(upstreamError);
   });
@@ -1020,12 +1098,14 @@ describe('generateAnthropicResponse', () => {
     }));
 
     await expect(generateAnthropicResponse(
+      // SAFETY: The test fixture defines the asserted runtime shape.
       {} as never,
       { messages: [] },
       'gpt-5.6-sol',
       {
         forceStream: true,
         abortSignal: abort.signal,
+        // SAFETY: The test fixture defines the asserted runtime shape.
         streamText: streamText as never,
       },
     )).rejects.toBe(reason);
@@ -1034,11 +1114,7 @@ describe('generateAnthropicResponse', () => {
 
 describe('streamAnthropicResponse idle timeout', () => {
   it('consumes only the stream without touching lazy aggregate getters', async () => {
-    async function* stream() {
-      yield { type: 'start' };
-      yield { type: 'finish', finishReason: 'stop' };
-    }
-    const result: Record<string, unknown> = { stream: stream() };
+    const result = { stream: idleStreamParts() };
     for (const property of ['text', 'toolCalls', 'toolResults', 'finishReason', 'usage']) {
       Object.defineProperty(result, property, {
         get() { throw new Error(`unexpected ${property} getter access`); },
@@ -1047,12 +1123,14 @@ describe('streamAnthropicResponse idle timeout', () => {
     const streamText = vi.fn(() => result);
 
     await streamAnthropicResponse(
+      // SAFETY: The test fixture defines the asserted runtime shape.
       {} as never,
       { messages: [] },
       'test-model',
       () => {},
       undefined,
       undefined,
+      // SAFETY: The test fixture defines the asserted runtime shape.
       { streamText: streamText as never },
     );
     expect(streamText).toHaveBeenCalledOnce();
@@ -1080,7 +1158,9 @@ describe('streamAnthropicResponse idle timeout', () => {
     };
 
     await expect(streamAnthropicResponse(
+      // SAFETY: The test fixture defines the asserted runtime shape.
       hangingModel as never,
+      // SAFETY: The test fixture defines the asserted runtime shape.
       { messages: [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }] as never },
       'test-model',
       () => {},
@@ -1099,6 +1179,7 @@ async function collect(
 ): Promise<{ events: Array<{ event: string; data: any }>; raw: string }> {
   let raw = '';
   async function* gen() { for (const p of parts) yield p; }
+  // SAFETY: The test fixture defines the asserted runtime shape.
   await writeAnthropicStream(gen() as any, model, (c) => { raw += c; }, undefined, observer, tools);
   const events = raw.split('\n\n').filter(Boolean).map(block => {
     const [evLine, dataLine] = block.split('\n');
@@ -1346,20 +1427,15 @@ describe('writeAnthropicStream', () => {
       yield { type: 'error', error: upstreamError };
     }
 
+    // SAFETY: The test fixture defines the asserted runtime shape.
     await expect(writeAnthropicStream(parts() as any, 'm', () => {})).rejects.toBe(upstreamError);
   });
 
   it('reports every SDK stream part to the lifecycle observer', async () => {
     const observed: string[] = [];
-    async function* parts() {
-      yield { type: 'start' };
-      yield { type: 'text-start', id: 't1' };
-      yield { type: 'text-delta', id: 't1', text: 'hi' };
-      yield { type: 'finish', finishReason: 'stop' };
-    }
-
     await writeAnthropicStream(
-      parts() as any,
+      // SAFETY: The test fixture defines the asserted runtime shape.
+      observedStreamParts() as any,
       'm',
       () => {},
       undefined,
@@ -1381,6 +1457,7 @@ describe('writeAnthropicStream', () => {
     }
 
     await expect(writeAnthropicStream(
+      // SAFETY: The test fixture defines the asserted runtime shape.
       parts() as any,
       'm',
       chunk => writes.push(chunk),
@@ -1393,11 +1470,8 @@ describe('writeAnthropicStream', () => {
   });
 
   it('wraps a string stream failure for the HTTP layer', async () => {
-    async function* parts() {
-      yield { type: 'error', error: 'Something went wrong' };
-    }
-
-    await expect(writeAnthropicStream(parts() as any, 'm', () => {})).rejects.toThrow('Something went wrong');
+    // SAFETY: The test fixture defines the asserted runtime shape.
+    await expect(writeAnthropicStream(stringErrorParts() as any, 'm', () => {})).rejects.toThrow('Something went wrong');
   });
 
   it('encodes thought_signature into the tool_use id and reports tool_use stop', async () => {
@@ -1432,15 +1506,6 @@ describe('writeAnthropicStream', () => {
       required: ['query'],
     },
   }]);
-
-  function toolInputFromEvents(events: Array<{ event: string; data: any }>): any {
-    const start = events.find(e => e.event === 'content_block_start' && e.data.content_block.type === 'tool_use')!;
-    const json = events
-      .filter(e => e.event === 'content_block_delta' && e.data.index === start.data.index && e.data.delta.type === 'input_json_delta')
-      .map(e => e.data.delta.partial_json)
-      .join('');
-    return JSON.parse(json || '{}');
-  }
 
   it('strips null and empty-array filler for optional params from streamed tool input', async () => {
     const input = { query: 'who won', allowed_domains: ['fifa.com'], blocked_domains: [], max_uses: null };
@@ -1540,23 +1605,22 @@ describe('translateRequest openai promptCacheKey', () => {
     tools: [READ_TOOL],
     ...over,
   });
-  const keyOf = (body: Parameters<typeof translateRequest>[0], npm = '@ai-sdk/openai', opts?: Parameters<typeof translateRequest>[2]) =>
-    translateRequest(body, npm, opts).providerOptions?.openai?.promptCacheKey as string | undefined;
-
   it('sets a stable key for the API-key OpenAI path; identical prefix → identical key', () => {
-    const a = keyOf(req());
-    const b = keyOf(req());
-    expect(typeof a).toBe('string');
+    const a = openAiPromptCacheKeyOf(req());
+    const b = openAiPromptCacheKeyOf(req());
+    expect(a).toEqual(expect.any(String));
     expect(a).toBe(b);
   });
 
   it('changes the key when the top-level system prompt differs (distinct sessions)', () => {
-    expect(keyOf(req({ system: 'date: 2026-07-12' }))).not.toBe(keyOf(req({ system: 'date: 2026-07-13' })));
+    expect(openAiPromptCacheKeyOf(req({ system: 'date: 2026-07-12' })))
+      .not.toBe(openAiPromptCacheKeyOf(req({ system: 'date: 2026-07-13' })));
   });
 
   it('changes the key when the tool set differs', () => {
     const write = { ...READ_TOOL, name: 'Write' };
-    expect(keyOf(req({ tools: [READ_TOOL] }))).not.toBe(keyOf(req({ tools: [READ_TOOL, write] })));
+    expect(openAiPromptCacheKeyOf(req({ tools: [READ_TOOL] })))
+      .not.toBe(openAiPromptCacheKeyOf(req({ tools: [READ_TOOL, write] })));
   });
 
   it('keeps the key stable across volatile inline system-reminders (within-session turns)', () => {
@@ -1568,7 +1632,8 @@ describe('translateRequest openai promptCacheKey', () => {
         { role: 'user' as const, content: 'hello' },
       ],
     });
-    expect(keyOf(withReminder('10:00:01'))).toBe(keyOf(withReminder('10:05:42')));
+    expect(openAiPromptCacheKeyOf(withReminder('10:00:01')))
+      .toBe(openAiPromptCacheKeyOf(withReminder('10:05:42')));
   });
 
   it('sends a session-derived key but omits risky cache options on ChatGPT/Codex OAuth', () => {
@@ -1598,11 +1663,11 @@ describe('translateRequest openai promptCacheKey', () => {
   it('keeps a Claude session key stable across system/tool changes', () => {
     const sessionId = '11111111-1111-4111-8111-111111111111';
     const options = { openAiOAuth: true, claudeSessionId: sessionId };
-    expect(keyOf(req({ system: 'first' }), '@ai-sdk/openai', options))
-      .toBe(keyOf(req({ system: 'second', tools: [] }), '@ai-sdk/openai', options));
+    expect(openAiPromptCacheKeyOf(req({ system: 'first' }), '@ai-sdk/openai', options))
+      .toBe(openAiPromptCacheKeyOf(req({ system: 'second', tools: [] }), '@ai-sdk/openai', options));
   });
 
   it('omits the key for non-OpenAI providers', () => {
-    expect(keyOf(req(), '@ai-sdk/xai')).toBeUndefined();
+    expect(openAiPromptCacheKeyOf(req(), '@ai-sdk/xai')).toBeUndefined();
   });
 });

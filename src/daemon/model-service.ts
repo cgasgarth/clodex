@@ -1,14 +1,14 @@
-import { loadPreferences, savePreferences } from '../config.js';
+import { loadPreferences, savePreferences } from '../config/config.js';
 import { MAX_MODEL_CATALOG } from '../constants.js';
-import { addFavorite, removeFavorite } from '../favorites.js';
+import { addFavorite, removeFavorite } from '../models/favorites.js';
 import {
   liveProxyModelAliases,
   loadHttpProxyRoutes,
   type LoadedHttpProxyRoutes,
 } from '../http-proxy/index.js';
-import { normalizeModelAliases } from '../model-aliases.js';
-import { runPatchCommand } from '../patcher.js';
-import type { ProxyHandle } from '../proxy.js';
+import { normalizeModelAliases } from '../models/aliases.js';
+import { runPatchCommand } from '../patcher/index.js';
+import type { ProxyHandle } from '../proxy/index.js';
 import { loadRegistry } from '../registry/io.js';
 import type { FavoriteModel, UserPreferences } from '../types.js';
 
@@ -58,9 +58,12 @@ function defaultDependencies(endpoint: ProxyHandle): ModelServiceDependencies {
 }
 
 export class DaemonClaudeModelService {
+  private readonly dependencies: ModelServiceDependencies;
   private mutationTail = Promise.resolve();
 
-  constructor(private readonly dependencies: ModelServiceDependencies) {}
+  constructor(dependencies: ModelServiceDependencies) {
+    this.dependencies = dependencies;
+  }
 
   snapshot(): DaemonClaudeModelSnapshot {
     const preferences = this.dependencies.loadPreferences();

@@ -1,5 +1,6 @@
 // src/registry/refresh-models.ts — user-initiated model list refresh per modelSource
 
+import { isBoolean, isNumber, isObject, isString } from '../runtime/type-guards.js';
 import { isDeepStrictEqual } from 'node:util';
 import { fetchAnthropicModels } from './custom-endpoint.js';
 import { fetchTemplateModels } from './fetch-template-models.js';
@@ -28,11 +29,14 @@ import {
 } from '../data/openai-oauth-models.js';
 import { buildXaiOAuthModels } from '../data/xai-oauth-models.js';
 import { modelPrefersResponsesApi } from '../provider-factory.js';
-import { deriveBrand } from '../models.js';
-import { resolveContextWindow } from '../context-window.js';
-import { getInstalledClaudeVersion } from '../launch.js';
-import { classifyFreeStatus, isFreeStatus } from '../free-models.js';
-import { PROVIDER_METADATA_TIMEOUT_MS } from '../timeouts.js';
+import { deriveBrand } from '../models/types.js';
+import { resolveContextWindow } from '../models/context-window.js';
+import { getInstalledClaudeVersion } from '../runtime/launch.js';
+import { classifyFreeStatus, isFreeStatus } from '../models/free-models.js';
+import { PROVIDER_METADATA_TIMEOUT_MS } from '../config/timeouts.js';
+import { diagnosticRecord } from '../observability/trace-log.js';
+import type { DiagnosticRecord } from '../observability/trace-log.js';
+import type { DiagnosticValue } from '../observability/trace-log.js';
 
 export interface RefreshProviderResult {
   id: string;
@@ -75,48 +79,59 @@ interface OpenAiModelEntry {
   preferWebSockets?: boolean;
 }
 
+interface OpenAiModelPayload {
+  value: unknown;
+}
+
+function optionalBoolean(value: DiagnosticValue): boolean | undefined {
+  return isBoolean(value) ? value : undefined;
+}
+
+function optionalString(record: DiagnosticRecord, key: string): string | undefined {
+  const value = record[key];
+  return isString(value) ? value : undefined;
+}
+
+function optionalFiniteNumber(record: DiagnosticRecord, key: string): number | undefined {
+  const value = record[key];
+  return isNumber(value) && Number.isFinite(value) ? value : undefined;
+}
+
 /** Read the Responses-Lite / WebSocket capability flags off a raw model entry. */
-function readCapabilityFlags(m: Record<string, unknown>): Pick<OpenAiModelEntry, 'useResponsesLite' | 'preferWebSockets'> {
-  const bool = (v: unknown): boolean | undefined => (typeof v === 'boolean' ? v : undefined);
+function readCapabilityFlags(m: DiagnosticRecord): Pick<OpenAiModelEntry, 'useResponsesLite' | 'preferWebSockets'> {
   return {
-    useResponsesLite: bool(m['use_responses_lite']),
-    preferWebSockets: bool(m['prefer_websockets']),
+    useResponsesLite: optionalBoolean(m['use_responses_lite']),
+    preferWebSockets: optionalBoolean(m['prefer_websockets']),
   };
 }
 
 /** Parse model entries from OpenAI-standard or ChatGPT-internal response shapes. */
-function parseOpenAiModelEntries(body: unknown): OpenAiModelEntry[] {
-  if (!body || typeof body !== 'object') return [];
-  const b = body as Record<string, unknown>;
-  const stringField = (record: Record<string, unknown>, key: string): string | undefined => {
-    const value = record[key];
-    return typeof value === 'string' ? value : undefined;
-  };
-  const numberField = (record: Record<string, unknown>, key: string): number | undefined => {
-    const value = record[key];
-    return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
-  };
+function parseOpenAiModelEntries(body: OpenAiModelPayload['value']): OpenAiModelEntry[] {
+  if (!body || !isObject(body)) return [];
+  const b = diagnosticRecord(body);
 
   // ChatGPT backend format: { models: [{ slug, title }] }
   if (Array.isArray(b.models)) {
-    return (b.models as Array<Record<string, unknown>>)
-      .map(m => ({
-        id: stringField(m, 'slug') ?? '',
-        name: stringField(m, 'title') ?? stringField(m, 'name') ?? stringField(m, 'slug') ?? '',
-        context_window: numberField(m, 'context_window'),
-        ...readCapabilityFlags(m),
-      }))
+    return b.models
+      .filter(isObject)
+      .map(diagnosticRecord)
+      .map(m => Object.assign({
+        id: optionalString(m, 'slug') ?? '',
+        name: optionalString(m, 'title') ?? optionalString(m, 'name') ?? optionalString(m, 'slug') ?? '',
+        context_window: optionalFiniteNumber(m, 'context_window'),
+      }, readCapabilityFlags(m)))
       .filter(m => m.id.length > 0);
   }
   // Standard OpenAI format: { data: [{ id, name }] }
   if (Array.isArray(b.data)) {
-    return (b.data as Array<Record<string, unknown>>)
-      .map(m => ({
-        id: stringField(m, 'id') ?? '',
-        name: stringField(m, 'name') ?? stringField(m, 'id') ?? '',
-        context_window: numberField(m, 'context_window'),
-        ...readCapabilityFlags(m),
-      }))
+    return b.data
+      .filter(isObject)
+      .map(diagnosticRecord)
+      .map(m => Object.assign({
+        id: optionalString(m, 'id') ?? '',
+        name: optionalString(m, 'name') ?? optionalString(m, 'id') ?? '',
+        context_window: optionalFiniteNumber(m, 'context_window'),
+      }, readCapabilityFlags(m)))
       .filter(m => m.id.length > 0);
   }
   return [];
@@ -293,10 +308,7 @@ async function refreshApiListProvider(
   }
 
   return {
-    models: usableModels.map(m => ({
-      ...m,
-      apiUrl: fetched.baseUrl,
-    })),
+    models: usableModels.map(m => Object.assign({}, m, { apiUrl: fetched.baseUrl })),
     baseUrl: fetched.baseUrl,
   };
 }

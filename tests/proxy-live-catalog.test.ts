@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import { startProxyCatalog, type ProxyRoute } from '../src/proxy.js';
+import { startProxyCatalog, type ProxyRoute } from '../src/proxy/index.js';
 
 function route(modelId: string): ProxyRoute {
   return {

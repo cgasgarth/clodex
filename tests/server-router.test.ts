@@ -1,5 +1,5 @@
 import { importActual } from './bun-import-actual.js';
-import { createServer, type Server } from 'node:http';
+import { createServer } from 'node:http';
 import { afterEach, describe, expect, it, vi } from 'bun:test';
 import { APICallError } from 'ai';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
@@ -9,11 +9,11 @@ import { createGatewayModelCatalog, type ServerModelInfo } from '../src/server/m
 import { startServer, type ServerHandle } from '../src/server/router.js';
 import { createLanguageModel } from '../src/provider-factory.js';
 import { generateAnthropicResponse, streamAnthropicResponse } from '../src/sdk-adapter.js';
-import { generateOpenAiResponse, streamOpenAiResponse } from '../src/openai-adapter.js';
-import { resolveProviderCredential } from '../src/env.js';
+import { generateOpenAiResponse, streamOpenAiResponse } from '../src/providers/openai-adapter.js';
+import { resolveProviderCredential } from '../src/config/environment.js';
 import { withResponsesWebSocketDiagnosticContext } from '../src/oauth/responses-websocket.js';
-import { flushTraceLogs } from '../src/trace-log.js';
-import { asMocked, waitForCondition } from './test-helpers.js';
+import { flushTraceLogs } from '../src/observability/trace-log.js';
+import { asMocked, requireTcpAddress, waitForCondition } from './test-helpers.js';
 
 async function readFlushedLog(path: string): Promise<string> {
   await flushTraceLogs(path);
@@ -24,9 +24,19 @@ const TEST_HELPER_REF = `helper:v1:${'a'.repeat(64)}:oauth:provider:oauth-provid
 const ORIGINAL_COMPACTION_FLAG = process.env.CLODEX_OPENAI_COMPACTION;
 const ORIGINAL_COMPACTION_THRESHOLD = process.env.CLODEX_OPENAI_COMPACT_THRESHOLD;
 
-vi.mock('../src/env.js', () => {
-  const importOriginal = <T>() => importActual<T>('../src/env.js', import.meta.url);
-  const actual = importOriginal<typeof import('../src/env.js')>();
+function rateLimitApiError(retryAfter: string): APICallError {
+  return new APICallError({
+    message: 'rate limited',
+    url: 'https://upstream/v1/responses',
+    requestBodyValues: {},
+    statusCode: 429,
+    responseHeaders: { 'retry-after': retryAfter },
+    responseBody: JSON.stringify({ error: { message: 'rate limited' } }),
+  });
+}
+
+vi.mock('../src/config/environment.js', () => {
+  const actual = importActual<typeof import('../src/config/environment.js')>('../src/config/environment.js', import.meta.url);
   return {
     ...actual,
     resolveProviderCredential: vi.fn(),
@@ -34,17 +44,15 @@ vi.mock('../src/env.js', () => {
 });
 
 vi.mock('../src/provider-factory.js', () => {
-  const importOriginal = <T>() => importActual<T>('../src/provider-factory.js', import.meta.url);
-  const actual = importOriginal<typeof import('../src/provider-factory.js')>();
+  const actual = importActual<typeof import('../src/provider-factory.js')>('../src/provider-factory.js', import.meta.url);
   return {
     ...actual,
-    createLanguageModel: vi.fn(async (spec: unknown) => ({ spec })),
+    createLanguageModel: vi.fn(async (spec: Parameters<typeof createLanguageModel>[0]) => ({ spec })),
   };
 });
 
 vi.mock('../src/oauth/responses-websocket.js', () => {
-  const importOriginal = <T>() => importActual<T>('../src/oauth/responses-websocket.js', import.meta.url);
-  const actual = importOriginal<typeof import('../src/oauth/responses-websocket.js')>();
+  const actual = importActual<typeof import('../src/oauth/responses-websocket.js')>('../src/oauth/responses-websocket.js', import.meta.url);
   return {
     ...actual,
     withResponsesWebSocketDiagnosticContext: vi.fn(
@@ -54,12 +62,15 @@ vi.mock('../src/oauth/responses-websocket.js', () => {
 });
 
 vi.mock('../src/sdk-adapter.js', () => {
-  const importOriginal = <T>() => importActual<T>('../src/sdk-adapter.js', import.meta.url);
-  const actual = importOriginal<typeof import('../src/sdk-adapter.js')>();
+  const actual = importActual<typeof import('../src/sdk-adapter.js')>('../src/sdk-adapter.js', import.meta.url);
   return {
     ...actual,
     streamAnthropicResponse: vi.fn(async () => {}),
-    generateAnthropicResponse: vi.fn(async (_model: unknown, _params: unknown, modelId: string) => ({
+    generateAnthropicResponse: vi.fn(async (
+      _model: Parameters<typeof generateAnthropicResponse>[0],
+      _params: Parameters<typeof generateAnthropicResponse>[1],
+      modelId: string,
+    ) => ({
       id: 'msg-test',
       type: 'message',
       role: 'assistant',
@@ -71,13 +82,16 @@ vi.mock('../src/sdk-adapter.js', () => {
   };
 });
 
-vi.mock('../src/openai-adapter.js', () => {
-  const importOriginal = <T>() => importActual<T>('../src/openai-adapter.js', import.meta.url);
-  const actual = importOriginal<typeof import('../src/openai-adapter.js')>();
+vi.mock('../src/providers/openai-adapter.js', () => {
+  const actual = importActual<typeof import('../src/providers/openai-adapter.js')>('../src/providers/openai-adapter.js', import.meta.url);
   return {
     ...actual,
     streamOpenAiResponse: vi.fn(async () => {}),
-    generateOpenAiResponse: vi.fn(async (_model: unknown, _params: unknown, modelId: string) => ({
+    generateOpenAiResponse: vi.fn(async (
+      _model: Parameters<typeof generateOpenAiResponse>[0],
+      _params: Parameters<typeof generateOpenAiResponse>[1],
+      modelId: string,
+    ) => ({
       id: 'chatcmpl-test',
       object: 'chat.completion',
       model: modelId,
@@ -126,8 +140,7 @@ async function startUpstream(responseBody: any): Promise<{ baseUrl: string; requ
   });
 
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
-  const address = server.address();
-  if (!address || typeof address === 'string') throw new Error('missing upstream address');
+  const address = requireTcpAddress(server.address(), 'missing upstream address');
 
   return {
     baseUrl: `http://127.0.0.1:${address.port}`,
@@ -155,8 +168,7 @@ async function startSequencedUpstream(
   });
 
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
-  const address = server.address();
-  if (!address || typeof address === 'string') throw new Error('missing upstream address');
+  const address = requireTcpAddress(server.address(), 'missing upstream address');
   return {
     baseUrl: `http://127.0.0.1:${address.port}`,
     requests,
@@ -237,8 +249,7 @@ afterEach(async () => {
   }
 });
 
-describe('server router', () => {
-  it('logs inference routing metadata without request content', async () => {
+it('logs inference routing metadata without request content', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'clodex-server-audit-'));
     const inferenceLogPath = join(dir, 'requests.jsonl');
     const auditUpstream = await startUpstream({
@@ -702,6 +713,7 @@ describe('server router', () => {
     });
 
     expect(response.status).toBe(400);
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const body = await response.json() as {
       type: string;
       error: { type: string; message: string };
@@ -725,18 +737,10 @@ describe('server router', () => {
       npm: '@ai-sdk/openai',
       apiKey: 'provider-key',
     }]);
-    const rateLimitError = (retryAfter: string) => new APICallError({
-      message: 'rate limited',
-      url: 'https://upstream/v1/responses',
-      requestBodyValues: {},
-      statusCode: 429,
-      responseHeaders: { 'retry-after': retryAfter },
-      responseBody: JSON.stringify({ error: { message: 'rate limited' } }),
-    });
     const server = await startTestServer({ catalog: sdkCatalog });
 
     // Anthropic-format endpoint: an oversized upstream hint comes out clamped.
-    asMocked(generateAnthropicResponse).mockRejectedValueOnce(rateLimitError('3600'));
+    asMocked(generateAnthropicResponse).mockRejectedValueOnce(rateLimitApiError('3600'));
     const anthropicResponse = await fetch(`${server.url}/anthropic/v1/messages`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -749,7 +753,7 @@ describe('server router', () => {
     expect(anthropicResponse.headers.get('retry-after')).toBe('60');
 
     // OpenAI-format endpoint: an in-range hint is forwarded as-is.
-    asMocked(generateOpenAiResponse).mockRejectedValueOnce(rateLimitError('7'));
+    asMocked(generateOpenAiResponse).mockRejectedValueOnce(rateLimitApiError('7'));
     const openAiResponse = await fetch(`${server.url}/openai/v1/chat/completions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -896,6 +900,7 @@ describe('server router', () => {
     );
     expect(createLanguageModel).toHaveBeenCalledTimes(2);
     expect(
+      // SAFETY: The test fixture defines the asserted runtime shape.
       asMocked(createLanguageModel).mock.calls.map(call => (call[0] as any).apiKey),
     ).toEqual(['oauth-token-a', 'oauth-token-b']);
   });
@@ -983,6 +988,7 @@ describe('server router', () => {
       { rejectedAccessToken: 'rejected-token' },
     );
     expect(
+      // SAFETY: The test fixture defines the asserted runtime shape.
       asMocked(createLanguageModel).mock.calls.map(call => (call[0] as any).apiKey),
     ).toEqual(['rejected-token', 'refreshed-token']);
   });
@@ -1114,6 +1120,7 @@ describe('server router', () => {
       { rejectedAccessToken: 'rejected-token' },
     );
     expect(
+      // SAFETY: The test fixture defines the asserted runtime shape.
       asMocked(createLanguageModel).mock.calls.map(call => (call[0] as any).apiKey),
     ).toEqual(['rejected-token', 'refreshed-token']);
   });
@@ -1271,6 +1278,7 @@ describe('server router', () => {
     }
 
     expect(asMocked(createLanguageModel)).toHaveBeenCalledTimes(2);
+    // SAFETY: The test fixture defines the asserted runtime shape.
     expect(asMocked(createLanguageModel).mock.calls.map(call => (call[0] as any).providerId)).toEqual([
       'openai',
       'openrouter',
@@ -1475,8 +1483,8 @@ describe('server router', () => {
 
       const listing = await fetch(`${server.url}/anthropic/v1/models`);
       expect(listing.status).toBe(200);
+      // SAFETY: The test fixture defines the asserted runtime shape.
       const payload = await listing.json() as { data: Array<{ id: string }> };
       expect(payload.data.map(entry => entry.id)).toEqual(['anthropic-htuao-ianepo__anul-6.5-tpg']);
     });
   });
-});

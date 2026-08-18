@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import { anthropicErrorType, clampRetryAfterSeconds } from '../../upstream-error.js';
+import { isFunction, isObject, isString } from '../../runtime/type-guards.js';
+import { anthropicErrorType, clampRetryAfterSeconds } from '../../transport/upstream-error.js';
 import { deleteStoredResponsesCheckpoint } from '../responses-checkpoint-store.js';
 import { resolveOpenAiCompactionRearmThreshold } from '../responses-compaction.js';
 import {
@@ -9,11 +10,13 @@ import {
 } from './types.js';
 import type {
   JsonObject,
+  JsonValue,
   RawData,
   ResponsesWebSocket,
   RequestContext,
   ConnectionEntry,
 } from './types.js';
+import type { HeaderRecord, PromptFieldHashes } from './fingerprint.js';
 import {
   compactionCheckpoints,
   allocateConnectionDebugId,
@@ -117,7 +120,7 @@ export function failContext(
   entry: ConnectionEntry,
   ctx: RequestContext,
   message: string,
-  diagnosticDetails: Record<string, unknown>,
+  diagnosticDetails: JsonObject,
   statusCode?: number,
   retryAfterSeconds?: number,
 ): void {
@@ -128,16 +131,17 @@ export function failContext(
     ...diagnosticTextFingerprint('errorMessage', message),
   });
   flushPending(ctx);
+  const error: JsonObject = {
+    type: statusCode === undefined ? 'transport_error' : anthropicErrorType(statusCode),
+    code: statusCode === undefined ? 'websocket_transport_error' : String(statusCode),
+    message,
+    param: null,
+  };
+  if (retryAfterSeconds !== undefined) error.retry_after_seconds = retryAfterSeconds;
   encodeSse(ctx, {
     type: 'error',
     sequence_number: ctx.frameCount,
-    error: {
-      type: statusCode === undefined ? 'transport_error' : anthropicErrorType(statusCode),
-      code: statusCode === undefined ? 'websocket_transport_error' : String(statusCode),
-      message,
-      param: null,
-      ...(retryAfterSeconds !== undefined ? { retry_after_seconds: retryAfterSeconds } : {}),
-    },
+    error,
   });
   // A rebased request replaces its source head only after successful
   // completion. On failure the source is still the last valid continuation.
@@ -148,7 +152,7 @@ export function failContext(
 function retryTransportFailure(
   entry: ConnectionEntry,
   ctx: RequestContext,
-  diagnosticDetails: Record<string, unknown>,
+  diagnosticDetails: JsonObject,
 ): boolean {
   const contextIsClosed = () => ctx.closed;
   if (
@@ -199,7 +203,7 @@ function handleTransportFailure(
   entry: ConnectionEntry,
   ctx: RequestContext,
   message: string,
-  diagnosticDetails: Record<string, unknown>,
+  diagnosticDetails: JsonObject,
 ): void {
   if (ctx.overflowRecoveryPending && !ctx.closed && entry.current === ctx) {
     emitContextDiagnostic(entry, ctx, {
@@ -223,8 +227,8 @@ function handleTransportFailure(
   failContext(entry, ctx, message, diagnosticDetails);
 }
 
-export function cleanupExpiredConnections(now: number): Array<Record<string, unknown>> {
-  const evictions: Array<Record<string, unknown>> = [];
+export function cleanupExpiredConnections(now: number): JsonObject[] {
+  const evictions: JsonObject[] = [];
   for (const entry of connectionEntries()) {
     if (entry.inFlight) continue;
     const idleTtlMs = entry.generation === 'nursery'
@@ -274,11 +278,11 @@ export function evictOldestIdleGeneration(
   generation: 'nursery' | 'established',
   maxConnections: number,
   reason: 'nursery_lru_cap' | 'established_lru_cap',
-): Array<Record<string, unknown>> {
-  const evictions: Array<Record<string, unknown>> = [];
+): JsonObject[] {
+  const evictions: JsonObject[] = [];
   const idle = connectionEntries()
     .filter(entry => !entry.inFlight && entry.generation === generation)
-    .sort((left, right) => left.lastUsedAt - right.lastUsedAt);
+    .toSorted((left, right) => left.lastUsedAt - right.lastUsedAt);
   while (connectionCountByGeneration(generation) >= maxConnections && idle.length) {
     const oldest = idle.shift();
     if (oldest) {
@@ -300,7 +304,7 @@ function reusableNurseryHead(
   if (!key) return undefined;
   const idleNursery = connectionEntries(key)
     .filter(entry => !entry.inFlight && entry.generation === 'nursery')
-    .sort((left, right) => left.lastUsedAt - right.lastUsedAt);
+    .toSorted((left, right) => left.lastUsedAt - right.lastUsedAt);
   return idleNursery.length >= RESPONSES_WS_WARM_NURSERY_CONNECTIONS_PER_PARTITION
     ? idleNursery[0]
     : undefined;
@@ -309,7 +313,7 @@ function reusableNurseryHead(
 export function reusableCacheAffinityHead(
   key: string | undefined,
   claudeAgentId: string | undefined,
-  promptFieldHashes: Record<string, string>,
+  promptFieldHashes: PromptFieldHashes,
 ): ConnectionEntry | undefined {
   return reusableNurseryHead(key)
     ?? connectionEntries(key)
@@ -320,7 +324,7 @@ export function reusableCacheAffinityHead(
         && entry.claudeAgentId !== claudeAgentId
         && changedPromptFields(entry.promptFieldHashes, promptFieldHashes).length === 0
       ))
-      .sort((left, right) => left.lastUsedAt - right.lastUsedAt)[0];
+      .toSorted((left, right) => left.lastUsedAt - right.lastUsedAt)[0];
 }
 
 function isModelDataEvent(type: string | undefined): boolean {
@@ -337,12 +341,16 @@ export function outgoingPayload(payload: JsonObject): string {
 
 export type WebSocketConstructor = new (
   url: string,
-  options: { headers: Record<string, string>; proxy?: string },
+  options: { headers: HeaderRecord; proxy?: string },
 ) => ResponsesWebSocket;
+
+function systemErrorCode(error: Error): string | undefined {
+  return 'code' in error && isString(error.code) ? error.code : undefined;
+}
 
 function sendContext(entry: ConnectionEntry, ctx: RequestContext): void {
   const outgoing = outgoingPayload(ctx.sendPayload);
-  const serviceTier = typeof ctx.sendPayload.service_tier === 'string'
+  const serviceTier = isString(ctx.sendPayload.service_tier)
     ? ctx.sendPayload.service_tier
     : undefined;
   entry.debug(
@@ -357,7 +365,7 @@ function sendContext(entry: ConnectionEntry, ctx: RequestContext): void {
         source: 'socket_send',
         failureMode: 'callback',
         socketErrorName: boundedDiagnosticIdentifier(error.name),
-        socketErrorCode: boundedDiagnosticIdentifier((error as NodeJS.ErrnoException).code),
+        socketErrorCode: boundedDiagnosticIdentifier(systemErrorCode(error)),
         ...diagnosticTextFingerprint('errorMessage', error.message),
       });
     });
@@ -367,7 +375,7 @@ function sendContext(entry: ConnectionEntry, ctx: RequestContext): void {
       source: 'socket_send',
       failureMode: 'synchronous',
       socketErrorName: boundedDiagnosticIdentifier(failure.name),
-      socketErrorCode: boundedDiagnosticIdentifier((failure as NodeJS.ErrnoException).code),
+      socketErrorCode: boundedDiagnosticIdentifier(systemErrorCode(failure)),
       ...diagnosticTextFingerprint('errorMessage', failure.message),
     });
   }
@@ -409,7 +417,11 @@ function handleSocketMessage(entry: ConnectionEntry, data: RawData): void {
   const ctx = entry.current;
   if (!ctx || ctx.closed) return;
   if (ctx.overflowRecoveryPending) return;
-  const text = Array.isArray(data) ? Buffer.concat(data).toString('utf8') : data.toString('utf8');
+  const text = Array.isArray(data)
+    ? Buffer.concat(data).toString('utf8')
+    : data instanceof ArrayBuffer
+      ? Buffer.from(new Uint8Array(data)).toString('utf8')
+      : data.toString('utf8');
   ctx.frameCount += 1;
   if (ctx.transportRetryPending) {
     ctx.transportRetryPending = false;
@@ -419,7 +431,7 @@ function handleSocketMessage(entry: ConnectionEntry, data: RawData): void {
       outcome: 'recovered',
     });
   }
-  let event: unknown;
+  let event: JsonValue;
   try {
     event = JSON.parse(text);
   } catch {
@@ -506,7 +518,8 @@ function handleSocketMessage(entry: ConnectionEntry, data: RawData): void {
   }
   if (willRecoverOverflow) {
     ctx.overflowRecoveryPending = true;
-    void ctx.recoverContextOverflow!(entry, ctx);
+    const recoverContextOverflow = ctx.recoverContextOverflow;
+    if (recoverContextOverflow) void recoverContextOverflow(entry, ctx);
     return;
   }
   if (willRetry) {
@@ -550,7 +563,7 @@ function handleSocketMessage(entry: ConnectionEntry, data: RawData): void {
         // only because it has just been compared `===` to a known constant.
         errorCode: boundedDiagnosticIdentifier(errorCode),
         mappedStatusCode: errorStatus,
-        ...(retryAfterSeconds !== undefined ? { retryAfterSeconds } : {}),
+        retryAfterSeconds,
       },
       errorStatus,
       retryAfterSeconds,
@@ -634,7 +647,7 @@ function handleSocketMessage(entry: ConnectionEntry, data: RawData): void {
 
 function numericRetryAfterHeader(value: string | string[] | undefined): number | undefined {
   const single = Array.isArray(value) ? value[0] : value;
-  return typeof single === 'string' && /^\d+$/.test(single.trim())
+  return isString(single) && /^\d+$/.test(single.trim())
     ? Number(single.trim())
     : undefined;
 }
@@ -642,7 +655,7 @@ function numericRetryAfterHeader(value: string | string[] | undefined): number |
 export function createConnection(
   WebSocket: WebSocketConstructor,
   wsUrl: string,
-  headers: Record<string, string>,
+  headers: HeaderRecord,
   persistent: boolean,
   key: string | undefined,
   checkpointKey: string | undefined,
@@ -681,7 +694,10 @@ export function createConnection(
     entry.open = true;
     debug(`connection=${entry.debugId} opened`);
     // Persistent cache sockets must not keep a finished clodex CLI process alive.
-    (socket as unknown as { _socket?: { unref?: () => void } })._socket?.unref?.();
+    const nativeSocket = Object.getOwnPropertyDescriptor(socket, '_socket')?.value;
+    if (isObject(nativeSocket) && 'unref' in nativeSocket && isFunction(nativeSocket.unref)) {
+      nativeSocket.unref();
+    }
     const ctx = entry.current;
     if (ctx && !ctx.closed) sendContext(entry, ctx);
   });
@@ -731,7 +747,7 @@ export function createConnection(
       const details = {
         source: 'socket_error',
         socketErrorName: boundedDiagnosticIdentifier(error.name),
-        socketErrorCode: boundedDiagnosticIdentifier((error as NodeJS.ErrnoException).code),
+        socketErrorCode: boundedDiagnosticIdentifier(systemErrorCode(error)),
         ...diagnosticTextFingerprint('errorMessage', error.message),
       };
       handleTransportFailure(entry, ctx, error.message, details);

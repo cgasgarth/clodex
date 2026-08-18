@@ -1,6 +1,6 @@
 // pkce.ts — shared PKCE helpers for OAuth device/browser flows
 
-export function positiveSecondsToMs(value: unknown, defaultMs: number): number {
+export function positiveSecondsToMs<Value>(value: Value, defaultMs: number): number {
   const seconds = Number(value);
   return Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : defaultMs;
 }

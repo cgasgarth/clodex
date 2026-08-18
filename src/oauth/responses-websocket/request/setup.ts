@@ -1,6 +1,8 @@
 import { CODEX_RESPONSES_WEBSOCKETS_BETA } from '../../../constants.js';
+import { isObject } from '../../../runtime/type-guards.js';
 import type {
   JsonObject,
+  JsonValue,
   ResponsesWebSocketFetchOptions,
 } from '../types.js';
 import {
@@ -11,7 +13,7 @@ import {
   RESPONSES_WS_NURSERY_IDLE_TTL_MS,
 } from '../types.js';
 import {
-  applyResponsesLiteShape,
+  applyResponsesLiteContract,
   authorizationHeaderFingerprint,
   bodyToString,
   hasResponsesLiteHeader,
@@ -22,6 +24,11 @@ import {
   responsesWebSocketPromptFingerprint,
   toHeaderRecord,
 } from '../fingerprint.js';
+import type { HeaderRecord } from '../fingerprint.js';
+
+function isJsonObject<Value>(value: Value): value is Value & JsonObject {
+  return isObject(value) && !Array.isArray(value);
+}
 
 export function resolveWebSocketOptions(options: ResponsesWebSocketFetchOptions) {
   return {
@@ -49,13 +56,11 @@ export function checkpointStoreDirectory(
 function hasNativeWebSearch(payload: JsonObject): boolean {
   return Array.isArray(payload.tools)
     && payload.tools.some(tool => (
-      tool !== null
-      && typeof tool === 'object'
-      && (tool as JsonObject).type === 'web_search'
+      isJsonObject(tool) && tool.type === 'web_search'
     ));
 }
 
-function deleteHeader(headers: Record<string, string>, name: string): void {
+function deleteHeader(headers: HeaderRecord, name: string): void {
   const key = Object.keys(headers).find(candidate => candidate.toLowerCase() === name);
   if (key) delete headers[key];
 }
@@ -70,7 +75,8 @@ export function prepareResponsesRequest(
 
   let payload: JsonObject;
   try {
-    payload = JSON.parse(bodyToString(init?.body)) as JsonObject;
+    const parsed: JsonValue = JSON.parse(bodyToString(init?.body));
+    payload = isJsonObject(parsed) ? parsed : {};
   } catch {
     payload = {};
   }
@@ -84,7 +90,7 @@ export function prepareResponsesRequest(
     deleteHeader(headers, 'x-openai-internal-codex-responses-lite');
     deleteHeader(headers, 'version');
   } else if (hasResponsesLiteHeader(headers)) {
-    payload = applyResponsesLiteShape(payload);
+    payload = applyResponsesLiteContract(payload);
   }
 
   const authorizationFingerprint = authorizationHeaderFingerprint(headers);

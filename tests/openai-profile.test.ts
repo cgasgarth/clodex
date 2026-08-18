@@ -14,6 +14,7 @@ describe('OpenAI profile identity fetcher', () => {
       });
     });
     await expect(fetchOpenAiProfileEmail('secret-token', {
+      // SAFETY: The test fixture defines the asserted runtime shape.
       fetch: request as typeof fetch,
     })).resolves.toBe('person@example.com');
   });

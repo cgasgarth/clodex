@@ -1,14 +1,14 @@
 // src/registry/materialize.ts — registry entries → LocalProvider runtime shape
 
-import { shouldHideModel, type CompatibilityAgent } from '../model-compatibility.js';
-import { deriveBrand } from '../models.js';
-import { resolveContextWindow } from '../context-window.js';
+import { shouldHideModel, type CompatibilityAgent } from '../models/compatibility.js';
+import { deriveBrand } from '../models/types.js';
+import { resolveContextWindow } from '../models/context-window.js';
 import type { LocalProvider, LocalProviderModel } from '../types.js';
 import { normalizeGoogleDisplayName, normalizeGoogleModelId } from './google-model-id.js';
 import { findModelsDevModel } from './models-dev.js';
 import type { CachedModel, ProviderRegistry, RegistryProvider } from './types.js';
 import { isValidProviderId } from './validate.js';
-import { classifyFreeStatus, isFreeStatus } from '../free-models.js';
+import { classifyFreeStatus, isFreeStatus } from '../models/free-models.js';
 
 export type CredentialResolver = (provider: RegistryProvider) => string | null;
 

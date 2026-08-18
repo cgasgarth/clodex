@@ -14,8 +14,8 @@ import {
   setAppPathOverride,
   setSavedServerPassword,
   setServerListenMode,
-} from '../src/config.js';
-import { getAppHome, getConfigPath } from '../src/paths.js';
+} from '../src/config/config.js';
+import { getAppHome, getConfigPath } from '../src/config/paths.js';
 
 let tempHome: string;
 let previousHome: string | undefined;

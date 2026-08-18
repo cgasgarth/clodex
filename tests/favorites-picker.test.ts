@@ -4,8 +4,8 @@ import {
   filterGlobalFavoriteIndex,
   globalFavoritePickKey,
   globalFavoriteSelectOption,
-} from '../src/favorites-picker.js';
-import { favoriteProviderDisplayName } from '../src/favorite-provider-display.js';
+} from '../src/models/favorites-picker.js';
+import { favoriteProviderDisplayName } from '../src/models/favorite-provider-display.js';
 import type { LocalProvider } from '../src/types.js';
 
 const providers: LocalProvider[] = [
@@ -151,7 +151,8 @@ describe('filterGlobalFavoriteIndex', () => {
 });
 
 describe('globalFavoriteSelectOption', () => {
-  const stripAnsi = (s: string) => s.replace(/\u001b\[[0-9;]*m/g, '');
+  const ansiEscape = String.fromCharCode(27);
+  const stripAnsi = (s: string) => s.replace(new RegExp(`${ansiEscape}\\[[0-9;]*m`, 'g'), '');
 
   it('puts a bright bracketed provider tag on the label', () => {
     const index = buildGlobalFavoriteIndex(providers);
@@ -188,8 +189,7 @@ describe('globalFavoriteSelectOption', () => {
       }],
     }];
 
-    const index = buildGlobalFavoriteIndex(oauthProviders.map(provider => ({
-      ...provider,
+    const index = buildGlobalFavoriteIndex(oauthProviders.map(provider => Object.assign({}, provider, {
       name: favoriteProviderDisplayName(provider),
     })));
     expect(index.map(e => e.providerName)).toEqual([

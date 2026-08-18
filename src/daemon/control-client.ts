@@ -1,4 +1,5 @@
-import { getDaemonControlSocketPath } from '../paths.js';
+import { isObject, isString } from '../runtime/type-guards.js';
+import { getDaemonControlSocketPath } from '../config/paths.js';
 import { normalizeControlRoute } from './control-diagnostics.js';
 
 export interface DaemonControlRequestOptions {
@@ -33,24 +34,26 @@ export async function daemonControlRequest<T>(
         `Clodex daemon request timed out after ${elapsedMs}ms`
         + ` (budget ${timeoutMs}ms): ${method}`
         + ` ${normalizeControlRoute(`http://clodex.local${path}`)}`,
+        { cause: error },
       );
     }
     throw error;
   }
 
   const raw = await response.text();
-  let parsed: unknown = null;
+  let parsed: T;
   try {
     parsed = raw ? JSON.parse(raw) : null;
   } catch {
     throw new Error(`Invalid daemon response (${response.status})`);
   }
   if (!response.ok) {
-    const message = parsed && typeof parsed === 'object'
-      && typeof (parsed as { error?: unknown }).error === 'string'
-      ? (parsed as { error: string }).error
+    const message = parsed && isObject(parsed)
+      && 'error' in parsed
+      && isString(parsed.error)
+      ? parsed.error
       : `Daemon request failed (${response.status})`;
     throw new Error(message);
   }
-  return parsed as T;
+  return parsed;
 }

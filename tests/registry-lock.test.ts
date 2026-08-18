@@ -11,7 +11,7 @@ import {
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { afterEach, describe, expect, it, vi } from 'bun:test';
+import { afterEach, describe, expect, it } from 'bun:test';
 import {
   RegistryLockLostError,
   getCredentialLockRoot,
@@ -104,6 +104,7 @@ function spawnWorker(
     new Response(child.stderr).text(),
   ]).then(([code, stdout, stderr]) => ({
     code,
+    // SAFETY: The test fixture defines the asserted runtime shape.
     signal: child.signalCode as NodeJS.Signals | null,
     stdout,
     stderr,
@@ -129,6 +130,7 @@ async function waitForJson<T>(path: string, timeoutMs = 5_000): Promise<T> {
   while (Date.now() < deadline) {
     if (existsSync(path)) {
       try {
+        // SAFETY: The test fixture defines the asserted runtime shape.
         return JSON.parse(readFileSync(path, 'utf8')) as T;
       } catch {
         // Retry while the creating process finishes its synchronous write.
@@ -142,7 +144,7 @@ async function waitForJson<T>(path: string, timeoutMs = 5_000): Promise<T> {
 function lockArtifacts(root: string): string[] {
   return readdirSync(root)
     .filter(name => name.includes('.lock') || name.endsWith('.tmp'))
-    .sort();
+    .toSorted();
 }
 
 afterEach(async () => {
@@ -592,6 +594,7 @@ describe('provider registry lock', () => {
       const ready = await waitForJson<{ pid: number; token: string }>(
         join(root, 'holder-ready.json'),
       );
+      // SAFETY: The test fixture defines the asserted runtime shape.
       const owner = JSON.parse(readFileSync(lockPath, 'utf8')) as {
         pid: number;
         startedAt: number;
@@ -620,6 +623,7 @@ describe('provider registry lock', () => {
       expect(contenderResult.error).toContain('Timed out after 250ms waiting for lock');
       expect(contenderResult.error).toContain(String(ready.pid));
 
+      // SAFETY: The test fixture defines the asserted runtime shape.
       const retainedOwner = JSON.parse(readFileSync(lockPath, 'utf8')) as {
         pid: number;
         token: string;

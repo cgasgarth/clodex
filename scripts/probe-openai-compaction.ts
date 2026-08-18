@@ -11,6 +11,7 @@ import {
 import { extractOpenAiAccountId } from '../src/oauth/openai.js';
 import { compactResponsesWindow } from '../src/oauth/responses-compaction.js';
 import { createResponsesWebSocketFetch } from '../src/oauth/responses-websocket.js';
+import type { ResponsesWebSocketDiagnosticEvent } from '../src/oauth/responses-websocket.js';
 import { loadRegistryProviders } from '../src/registry/index.js';
 import type { LocalProvider, LocalProviderModel } from '../src/types.js';
 
@@ -54,9 +55,68 @@ interface WireSummary {
   upstreamErrorMessageHash?: string;
 }
 
+interface WireUsage {
+  input_tokens?: number;
+  input_tokens_details?: { cached_tokens?: number; cache_write_tokens?: number };
+  output_tokens?: number;
+}
+
+interface WireEvent {
+  type?: string;
+  delta?: string;
+  item?: { type?: string };
+  response?: { usage?: WireUsage };
+  error?: { code?: string; message?: string };
+}
+
+interface ProbeHeaders {
+  [key: string]: string;
+  Authorization: string;
+  originator: string;
+}
+
+type SyntheticInputItem = {
+  role: 'user';
+  content: Array<{ type: 'input_text'; text: string }>;
+};
+
+type ProbeValue =
+  | string
+  | number
+  | boolean
+  | null
+  | undefined
+  | ProbeValue[]
+  | ProbeRecord;
+
+interface ProbeRecord {
+  [key: string]: ProbeValue;
+}
+
+function isString<Value>(value: Value): value is Value & string {
+  return typeof value === 'string';
+}
+
+function isNumber<Value>(value: Value): value is Value & number {
+  return typeof value === 'number';
+}
+
+function isRecord<Value>(value: Value): value is Value & ProbeRecord {
+  return Boolean(value) && typeof value === 'object';
+}
+
+function errorType<Value>(error: Value): string {
+  return error instanceof Error ? error.name : 'UnknownError';
+}
+
+function errorStatusCode<Value>(error: Value): number | undefined {
+  if (!isRecord(error) || !('statusCode' in error)) return undefined;
+  return isNumber(error.statusCode) ? error.statusCode : undefined;
+}
+
 function summarizeWire(wire: string): WireSummary {
   const eventTypes: string[] = [];
-  const outputItemTypes: string[] = [];
+  const itemTypes: string[] = [];
   let assistantText = '';
   let completed = false;
   let usage: WireSummary['usage'];
@@ -65,33 +125,31 @@ function summarizeWire(wire: string): WireSummary {
   let upstreamErrorMessageHash: string | undefined;
   for (const line of wire.split(/\r?\n/)) {
     if (!line.startsWith('data: ')) continue;
-    const event = JSON.parse(line.slice(6)) as Record<string, unknown>;
-    if (typeof event.type === 'string') eventTypes.push(event.type);
-    if (event.type === 'response.output_text.delta' && typeof event.delta === 'string') {
+    // SAFETY: Each SSE `data` field is an OpenAI response event envelope.
+    const event = JSON.parse(line.slice(6)) as WireEvent;
+    if (isString(event.type)) eventTypes.push(event.type);
+    if (event.type === 'response.output_text.delta' && isString(event.delta)) {
       assistantText += event.delta;
     }
     if (
       event.type === 'response.output_item.done'
-      && event.item
-      && typeof event.item === 'object'
-      && typeof (event.item as Record<string, unknown>).type === 'string'
+      && isString(event.item?.type)
     ) {
-      outputItemTypes.push(String((event.item as Record<string, unknown>).type));
+      itemTypes.push(event.item.type);
     }
     if (
       event.type === 'response.completed'
       && event.response
-      && typeof event.response === 'object'
     ) {
       completed = true;
-      usage = (event.response as Record<string, unknown>).usage as typeof usage;
+      usage = event.response.usage;
     }
-    if (event.error && typeof event.error === 'object') {
-      const upstreamError = event.error as Record<string, unknown>;
-      if (typeof upstreamError.code === 'string') {
+    if (event.error) {
+      const upstreamError = event.error;
+      if (isString(upstreamError.code)) {
         upstreamErrorCode = upstreamError.code;
       }
-      if (typeof upstreamError.message === 'string') {
+      if (isString(upstreamError.message)) {
         const lower = upstreamError.message.toLowerCase();
         upstreamErrorCategory = lower.includes('context_management')
           ? 'context_management_rejected'
@@ -110,7 +168,7 @@ function summarizeWire(wire: string): WireSummary {
   return {
     wireBytes: Buffer.byteLength(wire),
     eventTypes: [...new Set(eventTypes)],
-    outputItemTypes,
+    outputItemTypes: itemTypes,
     assistantText,
     completed,
     usage,
@@ -122,8 +180,8 @@ function summarizeWire(wire: string): WireSummary {
 
 function outputItemTypes(output: unknown[]): string[] {
   return output.map(item => (
-    item && typeof item === 'object' && typeof (item as Record<string, unknown>).type === 'string'
-      ? String((item as Record<string, unknown>).type)
+    isRecord(item) && 'type' in item && isString(item.type)
+      ? item.type
       : 'unknown'
   ));
 }
@@ -151,23 +209,22 @@ function targetModels(provider: LocalProvider): LocalProviderModel[] {
   return models;
 }
 
-function probeHeaders(provider: LocalProvider, model: LocalProviderModel): Record<string, string> {
+function probeHeaders(provider: LocalProvider, model: LocalProviderModel): ProbeHeaders {
   const accountId = extractOpenAiAccountId({ access_token: provider.apiKey })?.trim()
     || provider.oauthAccountId?.trim();
-  return {
+  const headers: ProbeHeaders = {
     Authorization: `Bearer ${provider.apiKey}`,
-    ...(accountId ? { 'ChatGPT-Account-Id': accountId } : {}),
     originator: 'clodex-compaction-probe',
-    ...(model.useResponsesLite
-      ? {
-          version: CODEX_RESPONSES_LITE_VERSION,
-          'x-openai-internal-codex-responses-lite': 'true',
-        }
-      : {}),
   };
+  if (accountId) headers['ChatGPT-Account-Id'] = accountId;
+  if (model.useResponsesLite) {
+    headers.version = CODEX_RESPONSES_LITE_VERSION;
+    headers['x-openai-internal-codex-responses-lite'] = 'true';
+  }
+  return headers;
 }
 
-function syntheticInput(paragraphs = 180): unknown[] {
+function syntheticInput(paragraphs = 180): [SyntheticInputItem] {
   const stableParagraph = [
     'This is synthetic cache-validation context for a local transport test.',
     'It contains no user files, prompts, account data, or conversation history.',
@@ -196,7 +253,7 @@ async function probeModel(
     instructions: 'Compact the synthetic conversation state. Do not execute tools.',
     tools: [],
     parallel_tool_calls: false,
-    reasoning: { effort: 'medium', ...(model.useResponsesLite ? { context: 'all_turns' } : {}) },
+    reasoning: { effort: 'medium', context: model.useResponsesLite ? 'all_turns' : undefined },
     prompt_cache_key: promptCacheKey,
     text: { verbosity: 'low' },
   };
@@ -230,11 +287,8 @@ async function probeModel(
         model: model.upstreamModelId,
         attempt,
         ok: false,
-        errorType: error instanceof Error ? error.name : typeof error,
-        statusCode: error && typeof error === 'object' && 'statusCode' in error
-          && typeof error.statusCode === 'number'
-          ? error.statusCode
-          : undefined,
+        errorType: errorType(error),
+        statusCode: errorStatusCode(error),
       });
       break;
     }
@@ -260,28 +314,27 @@ async function probeContextManagement(
   // unrefs idle sockets, so this standalone probe needs its own bounded handle.
   const keepAlive = setInterval(() => {}, 1_000);
   try {
-    const headers = probeHeaders(provider, model);
-    delete headers.Authorization;
+    const { Authorization: _authorization, ...headers } = probeHeaders(provider, model);
     const openai = createOpenAI({
       apiKey: provider.apiKey,
       baseURL: 'https://chatgpt.com/backend-api/codex',
       headers,
       fetch: wsFetch,
     });
-    const synthetic = syntheticInput()[0] as {
-      content: Array<{ text: string }>;
-    };
+    const synthetic = syntheticInput()[0];
+    const syntheticText = synthetic.content[0]?.text;
+    if (!syntheticText) throw new Error('Synthetic compaction input is empty');
     const generated = streamText({
       model: openai.responses(model.upstreamModelId),
       system: 'Use native context management, then reply with the word OK.',
-      prompt: synthetic.content[0]!.text,
+      prompt: syntheticText,
       maxRetries: 0,
       providerOptions: {
         openai: {
           store: false,
           promptCacheKey: `clodex-context-management-probe-${randomUUID()}`,
           reasoningEffort: 'medium',
-          ...(model.useResponsesLite ? { reasoningContext: 'all_turns' as const } : {}),
+          reasoningContext: model.useResponsesLite ? 'all_turns' : undefined,
           contextManagement: [{ type: 'compaction', compactThreshold: 1 }],
         } satisfies OpenAILanguageModelResponsesOptions,
       },
@@ -319,11 +372,8 @@ async function probeContextManagement(
       model: model.upstreamModelId,
       attempt: 1,
       ok: false,
-      errorType: error instanceof Error ? error.name : typeof error,
-      statusCode: error && typeof error === 'object' && 'statusCode' in error
-        && typeof error.statusCode === 'number'
-        ? error.statusCode
-        : undefined,
+      errorType: errorType(error),
+      statusCode: errorStatusCode(error),
     };
   } finally {
     clearInterval(keepAlive);
@@ -334,7 +384,7 @@ async function probeIntegratedCompaction(
   provider: LocalProvider,
   model: LocalProviderModel,
 ): Promise<ProbeResult> {
-  const diagnostics: Record<string, unknown>[] = [];
+  const diagnostics: ResponsesWebSocketDiagnosticEvent[] = [];
   const wsFetch = createResponsesWebSocketFetch(
     CODEX_RESPONSES_LITE_WS_URL,
     process.env.CLODEX_LIVE_COMPACTION_DEBUG === '1'
@@ -355,7 +405,7 @@ async function probeIntegratedCompaction(
     instructions: 'Reply with the word OK.',
     tools: [],
     parallel_tool_calls: false,
-    reasoning: { effort: 'medium', ...(model.useResponsesLite ? { context: 'all_turns' } : {}) },
+    reasoning: { effort: 'medium', context: model.useResponsesLite ? 'all_turns' : undefined },
     prompt_cache_key: promptCacheKey,
     store: false,
   };
@@ -398,16 +448,12 @@ async function probeIntegratedCompaction(
       }),
     });
     const secondSummary = summarizeWire(await second.text());
-    const compaction = [...diagnostics].reverse().find(event => (
+    const compaction = diagnostics.toReversed().find(event => (
       event.event === 'ws_compaction' && event.outcome === 'completed'
     ));
-    const inputTokens = typeof compaction?.inputTokens === 'number'
-      ? compaction.inputTokens
-      : undefined;
-    const cachedTokens = typeof compaction?.cachedTokens === 'number'
-      ? compaction.cachedTokens
-      : 0;
-    const decision = [...diagnostics].reverse().find(event => (
+    const inputTokens = isNumber(compaction?.inputTokens) ? compaction.inputTokens : undefined;
+    const cachedTokens = isNumber(compaction?.cachedTokens) ? compaction.cachedTokens : 0;
+    const decision = diagnostics.toReversed().find(event => (
       event.event === 'ws_head_decision'
     ));
     return {
@@ -420,25 +466,25 @@ async function probeIntegratedCompaction(
       outputItemTypes: secondSummary.outputItemTypes,
       inputTokens,
       cachedTokens,
-      cacheWriteTokens: typeof compaction?.cacheWriteTokens === 'number'
+      cacheWriteTokens: isNumber(compaction?.cacheWriteTokens)
         ? compaction.cacheWriteTokens
         : 0,
-      outputTokens: typeof compaction?.outputTokens === 'number'
+      outputTokens: isNumber(compaction?.outputTokens)
         ? compaction.outputTokens
         : undefined,
       cacheReadRatio: inputTokens
         ? Number((cachedTokens / inputTokens).toFixed(4))
         : undefined,
       responseWireBytes: secondSummary.wireBytes,
-      triggerWireBytes: typeof compaction?.triggerWireBytes === 'number'
+      triggerWireBytes: isNumber(compaction?.triggerWireBytes)
         ? compaction.triggerWireBytes
         : undefined,
       eventTypes: secondSummary.eventTypes,
       upstreamErrorCode: secondSummary.upstreamErrorCode,
       upstreamErrorCategory: secondSummary.upstreamErrorCategory,
       upstreamErrorMessageHash: secondSummary.upstreamErrorMessageHash,
-      transportDecision: typeof decision?.decision === 'string' ? decision.decision : undefined,
-      incrementalInputItems: typeof decision?.incrementalInputItems === 'number'
+      transportDecision: isString(decision?.decision) ? decision.decision : undefined,
+      incrementalInputItems: isNumber(decision?.incrementalInputItems)
         ? decision.incrementalInputItems
         : undefined,
     };
@@ -448,11 +494,8 @@ async function probeIntegratedCompaction(
       model: model.upstreamModelId,
       attempt: 1,
       ok: false,
-      errorType: error instanceof Error ? error.name : typeof error,
-      statusCode: error && typeof error === 'object' && 'statusCode' in error
-        && typeof error.statusCode === 'number'
-        ? error.statusCode
-        : undefined,
+      errorType: errorType(error),
+      statusCode: errorStatusCode(error),
     };
   } finally {
     clearInterval(keepAlive);

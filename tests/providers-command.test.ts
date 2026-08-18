@@ -11,7 +11,7 @@ import {
   runProvidersAuth,
   runProvidersRemove,
   runProvidersCommand,
-} from '../src/providers-command.js';
+} from '../src/cli/providers-command.js';
 import {
   removeProviderFromRegistry,
   toggleProviderEnabled,
@@ -24,7 +24,7 @@ import {
 } from '../src/registry/credential-cleanup-journal.js';
 import { providerAuthHelpText } from '../src/registry/provider-auth.js';
 import type { RegistryProvider } from '../src/registry/types.js';
-import * as env from '../src/env.js';
+import * as env from '../src/config/environment.js';
 import { createHoisted } from './test-helpers.js';
 
 const selectMock = createHoisted(() => vi.fn());
@@ -40,8 +40,7 @@ const TEST_HELPER_ID = 'a'.repeat(64);
 const helperRef = (account: string): string => `helper:v1:${TEST_HELPER_ID}:${account}`;
 
 vi.mock('@clack/prompts', () => {
-  const importOriginal = <T>() => importActual<T>('@clack/prompts', import.meta.url);
-  const actual = importOriginal<typeof import('@clack/prompts')>();
+  const actual = importActual<typeof import('@clack/prompts')>('@clack/prompts', import.meta.url);
   return {
     ...actual,
     select: selectMock,
@@ -60,8 +59,7 @@ vi.mock('@clack/prompts', () => {
 });
 
 vi.mock('../src/registry/provider-auth.js', () => {
-  const importOriginal = <T>() => importActual<T>('../src/registry/provider-auth.js', import.meta.url);
-  const actual = importOriginal<typeof import('../src/registry/provider-auth.js')>();
+  const actual = importActual<typeof import('../src/registry/provider-auth.js')>('../src/registry/provider-auth.js', import.meta.url);
   return {
     ...actual,
     authenticateProvider: authenticateProviderMock,
@@ -69,8 +67,7 @@ vi.mock('../src/registry/provider-auth.js', () => {
 });
 
 vi.mock('../src/registry/add-template.js', () => {
-  const importOriginal = <T>() => importActual<T>('../src/registry/add-template.js', import.meta.url);
-  const actual = importOriginal<typeof import('../src/registry/add-template.js')>();
+  const actual = importActual<typeof import('../src/registry/add-template.js')>('../src/registry/add-template.js', import.meta.url);
   return {
     ...actual,
     addProviderFromTemplate: addTemplateMock,
@@ -78,8 +75,7 @@ vi.mock('../src/registry/add-template.js', () => {
 });
 
 vi.mock('../src/registry/provider-auth.js', () => {
-  const importOriginal = <T>() => importActual<T>('../src/registry/provider-auth.js', import.meta.url);
-  const actual = importOriginal<typeof import('../src/registry/provider-auth.js')>();
+  const actual = importActual<typeof import('../src/registry/provider-auth.js')>('../src/registry/provider-auth.js', import.meta.url);
   return {
     ...actual,
     authenticateProvider: authenticateProviderMock,
@@ -360,6 +356,7 @@ describe('provider command cleanup reconciliation', () => {
     expect(warnMock).toHaveBeenCalledWith(
       'Credential cleanup is pending and will be retried by the next provider command.',
     );
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const persisted = JSON.parse(
       readFileSync(join(home, 'credential-cleanup.json'), 'utf8'),
     ) as { pendingCredentialDeletes?: string[] };

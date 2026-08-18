@@ -3,6 +3,11 @@
 
 const GOOGLE_MODEL_PREFIX = 'models/';
 
+export interface NormalizedGoogleModelId {
+  id: string;
+  upstreamModelId: string;
+}
+
 export function stripGoogleModelPrefix(id: string): string {
   return id.startsWith(GOOGLE_MODEL_PREFIX) ? id.slice(GOOGLE_MODEL_PREFIX.length) : id;
 }
@@ -10,7 +15,7 @@ export function stripGoogleModelPrefix(id: string): string {
 export function normalizeGoogleModelId(
   rawId: string,
   npm?: string,
-): { id: string; upstreamModelId: string } {
+): NormalizedGoogleModelId {
   if (npm !== '@ai-sdk/google') {
     return { id: rawId, upstreamModelId: rawId };
   }

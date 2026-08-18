@@ -6,7 +6,7 @@ const mocks = createHoisted(() => ({
   refreshCredential: vi.fn(),
   writeCredential: vi.fn(),
   withCredentialMutationLock: vi.fn(
-    async (_authRef: string, operation: () => Promise<unknown>) => {
+    async <T>(_authRef: string, operation: () => Promise<T>): Promise<T> => {
       lockState.active = true;
       try {
         return await operation();
@@ -17,7 +17,7 @@ const mocks = createHoisted(() => ({
   ),
 }));
 
-vi.mock('../src/credential-helper.js', () => ({
+vi.mock('../src/credentials/helper.js', () => ({
   credentialAccountBase: (account: string) => account,
   deleteCredentialHelperAccount: vi.fn(),
   isCredentialAccountInstance: vi.fn(() => false),
@@ -35,7 +35,7 @@ vi.mock('../src/registry/lock.js', () => ({
   withCredentialMutationLock: mocks.withCredentialMutationLock,
 }));
 
-import { resolveProviderCredential } from '../src/env.js';
+import { resolveProviderCredential } from '../src/config/environment.js';
 import { createHoisted } from './test-helpers.js';
 
 const HELPER_ID = 'a'.repeat(64);

@@ -18,6 +18,7 @@ import type {
   HydratedCompactionCheckpoint,
 } from './types.js';
 import { conversationItemKind, conversationItemHash } from './continuation.js';
+import { isString } from '../../runtime/type-guards.js';
 
 // A Claude session partition can have multiple valid conversation heads at
 // once: rewinds/branches, hidden title-generation requests, and stop hooks can
@@ -54,7 +55,9 @@ export function allocateLineageDebugId(): number {
 }
 
 export function connectionEntries(key?: string): ConnectionEntry[] {
-  return key ? [...(connections.get(key) ?? [])] : [...connections.values()].flatMap(entries => [...entries]);
+  return key
+    ? [...(connections.get(key) ?? [])]
+    : [...connections.values()].flatMap(entries => Array.from(entries));
 }
 
 export function connectionCount(): number {
@@ -124,7 +127,7 @@ function upsertCompactionCheckpoint(
 
   while (checkpointEntries().length > MAX_COMPACTION_CHECKPOINTS) {
     const oldest = checkpointEntries()
-      .sort((left, right) => left.lastUsedAt - right.lastUsedAt)[0];
+      .toSorted((left, right) => left.lastUsedAt - right.lastUsedAt)[0];
     if (!oldest) break;
     const entries = (compactionCheckpoints.get(oldest.key) ?? [])
       .filter(candidate => candidate !== oldest);
@@ -133,7 +136,7 @@ function upsertCompactionCheckpoint(
   }
   const hydratedDurable = checkpointEntries()
     .filter(candidate => candidate.checkpointStoreDir && candidate.compactedInput)
-    .sort((left, right) => right.lastUsedAt - left.lastUsedAt);
+    .toSorted((left, right) => right.lastUsedAt - left.lastUsedAt);
   for (const candidate of hydratedDurable.slice(MAX_HYDRATED_DURABLE_CHECKPOINTS)) {
     candidate.compactedInput = undefined;
   }
@@ -296,7 +299,7 @@ export function syntheticClaudeCompactionResponse(
   text: string,
   usage: ResponsesCompactionUsage | undefined,
 ): Response {
-  const itemId = String(assistantItem.id);
+  const itemId = isString(assistantItem.id) ? assistantItem.id : '';
   const normalizedUsage = {
     input_tokens: usage?.inputTokens ?? 0,
     input_tokens_details: {
@@ -448,16 +451,17 @@ export function debugKey(key: string | undefined): string {
 
 export function emitDiagnostic(
   options: ResponsesWebSocketFetchOptions,
-  event: { event: string } & Record<string, unknown>,
+  event: { event: string } & JsonObject,
   correlation = diagnosticContext.getStore(),
 ): void {
   if (!options.onDiagnostic) return;
   try {
-    options.onDiagnostic({
+    const diagnostic = {
       ...event,
-      ...(correlation?.requestId ? { requestId: correlation.requestId } : {}),
-      ...(correlation?.claudeSessionId ? { claudeSessionId: correlation.claudeSessionId } : {}),
-    });
+      requestId: correlation?.requestId,
+      claudeSessionId: correlation?.claudeSessionId,
+    };
+    options.onDiagnostic(diagnostic);
   } catch {
     // Diagnostics must never alter inference behavior.
   }

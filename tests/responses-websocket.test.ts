@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'bun:test';
+import { it, expect, vi, beforeEach } from 'bun:test';
 import { createHash, randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import {
@@ -16,6 +16,7 @@ import { createOpenAI } from '@ai-sdk/openai';
 import { streamText } from 'ai';
 
 // Fake `ws` WebSocket that records constructor args and lets tests drive events.
+// SAFETY: The test fixture defines the asserted runtime shape.
 const { fakeSockets } = createHoisted(() => ({ fakeSockets: [] as FakeWebSocket[] }));
 
 class FakeWebSocket extends EventEmitter {
@@ -42,8 +43,13 @@ import {
   type ResponsesWebSocketDiagnosticEvent,
 } from '../src/oauth/responses-websocket.js';
 import { saveStoredResponsesCheckpoint } from '../src/oauth/responses-checkpoint-store.js';
-import { sdkUpstreamErrorDetails } from '../src/upstream-error.js';
-import { createHoisted, waitForCondition } from './test-helpers.js';
+import { sdkUpstreamErrorDetails } from '../src/transport/upstream-error.js';
+import {
+  createHoisted,
+  waitForCondition,
+  type JsonObject,
+  type JsonValue,
+} from './test-helpers.js';
 
 const WS_URL = 'wss://chatgpt.com/backend-api/codex/responses';
 
@@ -53,6 +59,7 @@ const createResponsesWebSocketFetch: typeof createResponsesWebSocketFetchBase = 
   options = {},
 ) => createResponsesWebSocketFetchBase(url, log, {
   ...options,
+  // SAFETY: The test fixture defines the asserted runtime shape.
   webSocketConstructor: FakeWebSocket as never,
 });
 
@@ -72,7 +79,16 @@ function lastSocket(): FakeWebSocket {
   return fakeSockets[fakeSockets.length - 1]!;
 }
 
-const sessionPayload = (input: unknown[], extra: Record<string, unknown> = {}) => ({
+function canonicalizeCheckpointValue(input: JsonValue): JsonValue {
+  if (Array.isArray(input)) return input.map(canonicalizeCheckpointValue);
+  if (!(input instanceof Object)) return input;
+  return Object.fromEntries(Object.keys(input)
+    .toSorted()
+    .map(key => [key, canonicalizeCheckpointValue(input[key]!)])
+  );
+}
+
+const sessionPayload = (input: JsonValue[], extra: JsonObject = {}) => ({
   model: 'gpt-5.6-sol',
   prompt_cache_key: 'relay-session-abc',
   instructions: 'You are a coding assistant.',
@@ -83,16 +99,8 @@ const sessionPayload = (input: unknown[], extra: Record<string, unknown> = {}) =
   ...extra,
 });
 
-function checkpointItemHash(value: unknown): string {
-  const canonicalize = (input: unknown): unknown => {
-    if (Array.isArray(input)) return input.map(canonicalize);
-    if (!input || typeof input !== 'object') return input;
-    return Object.fromEntries(Object.keys(input as Record<string, unknown>)
-      .sort()
-      .filter(key => (input as Record<string, unknown>)[key] !== undefined)
-      .map(key => [key, canonicalize((input as Record<string, unknown>)[key])]));
-  };
-  return createHash('sha256').update(JSON.stringify(canonicalize(value))).digest('hex').slice(0, 16);
+function checkpointItemHash(value: JsonValue): string {
+  return createHash('sha256').update(JSON.stringify(canonicalizeCheckpointValue(value))).digest('hex').slice(0, 16);
 }
 
 /** Drive a failed WebSocket upgrade by emitting `unexpected-response`. */
@@ -115,7 +123,7 @@ function rejectUpgrade(
 async function readErrorFrame(res: Response): Promise<{
   type: string;
   sequence_number: number;
-  error: Record<string, unknown>;
+  error: JsonObject;
 }> {
   const body = await readAll(res);
   return JSON.parse(body.replace(/^data: /, '').trim());
@@ -169,39 +177,6 @@ function emitTextResponse(
   })));
   socket.emit('message', Buffer.from(JSON.stringify({
     type: 'response.completed', response: { id: responseId, usage },
-  })));
-}
-
-function emitAssistantMessagesResponse(
-  socket: FakeWebSocket,
-  responseId: string,
-  texts: string[],
-): void {
-  socket.emit('message', Buffer.from(JSON.stringify({
-    type: 'response.created',
-    response: { id: responseId },
-  })));
-  texts.forEach((text, outputIndex) => {
-    const itemId = `msg_${responseId}_${outputIndex}`;
-    socket.emit('message', Buffer.from(JSON.stringify({
-      type: 'response.output_item.added',
-      output_index: outputIndex,
-      item: { type: 'message', id: itemId },
-    })));
-    socket.emit('message', Buffer.from(JSON.stringify({
-      type: 'response.output_text.delta',
-      item_id: itemId,
-      delta: text,
-    })));
-    socket.emit('message', Buffer.from(JSON.stringify({
-      type: 'response.output_item.done',
-      output_index: outputIndex,
-      item: { type: 'message', id: itemId },
-    })));
-  });
-  socket.emit('message', Buffer.from(JSON.stringify({
-    type: 'response.completed',
-    response: { id: responseId },
   })));
 }
 
@@ -267,8 +242,7 @@ function emitToolCallResponse(
   })));
 }
 
-describe('createResponsesWebSocketFetch', () => {
-  beforeEach(() => {
+beforeEach(() => {
     resetResponsesWebSocketConnectionsForTests();
     fakeSockets.length = 0;
   });
@@ -311,6 +285,7 @@ describe('createResponsesWebSocketFetch', () => {
     const socket = lastSocket();
     socket.emit('open');
     expect(socket.send).toHaveBeenCalledTimes(1);
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const sent = JSON.parse(socket.send.mock.calls[0]![0] as string);
     // Must be a `response.create` event with the Responses fields at top level.
     expect(sent.type).toBe('response.create');
@@ -329,6 +304,7 @@ describe('createResponsesWebSocketFetch', () => {
     });
     const socket = lastSocket();
     socket.emit('open');
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const sent = JSON.parse(socket.send.mock.calls[0]![0] as string);
     // Still wrapped in the response.create envelope, but no Responses-Lite fields added.
     expect(sent).toEqual({ type: 'response.create', model: 'gpt-5.6-sol' });
@@ -353,6 +329,7 @@ describe('createResponsesWebSocketFetch', () => {
     expect(socket.options.headers).not.toHaveProperty('version');
     expect(socket.options.headers).not.toHaveProperty('x-openai-internal-codex-responses-lite');
     socket.emit('open');
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const sent = JSON.parse(socket.send.mock.calls[0]![0] as string);
     expect(sent).toEqual({
       type: 'response.create',
@@ -454,6 +431,7 @@ describe('createResponsesWebSocketFetch', () => {
     expect(socket.close).toHaveBeenCalledOnce();
     const replacement = lastSocket();
     replacement.emit('open');
+    // SAFETY: The test fixture defines the asserted runtime shape.
     expect(JSON.parse(replacement.send.mock.calls[0]![0] as string)).toEqual({
       type: 'response.create',
       ...payload,
@@ -553,6 +531,7 @@ describe('createResponsesWebSocketFetch', () => {
     expect(fakeSockets).toHaveLength(2);
     const replacement = lastSocket();
     replacement.emit('open');
+    // SAFETY: The test fixture defines the asserted runtime shape.
     expect(JSON.parse(replacement.send.mock.calls[0]![0] as string)).toEqual({
       type: 'response.create',
       ...payload,
@@ -737,6 +716,7 @@ describe('createResponsesWebSocketFetch', () => {
       headers: {},
       body: JSON.stringify(sessionPayload(fullInput)),
     });
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const incremental = JSON.parse(socket.send.mock.calls[1]![0] as string);
     expect(incremental.previous_response_id).toBe('resp_transport_base');
     expect(incremental.input).toEqual([fullInput[2]]);
@@ -748,6 +728,7 @@ describe('createResponsesWebSocketFetch', () => {
     expect(fakeSockets).toHaveLength(2);
     const replacement = lastSocket();
     replacement.emit('open');
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const replay = JSON.parse(replacement.send.mock.calls[0]![0] as string);
     expect(replay.previous_response_id).toBeUndefined();
     expect(replay.input).toEqual(fullInput);
@@ -804,6 +785,7 @@ describe('createResponsesWebSocketFetch', () => {
     });
     expect(fakeSockets).toHaveLength(3);
     const nextAuxiliarySocket = auxiliaryReplacement;
+    // SAFETY: The test fixture defines the asserted runtime shape.
     expect(JSON.parse(nextAuxiliarySocket.send.mock.calls[1]![0] as string)).toMatchObject({
       previous_response_id: 'resp_auxiliary',
       input: [nextAuxiliaryInput.at(-1)],
@@ -1578,6 +1560,7 @@ describe('createResponsesWebSocketFetch', () => {
 
     expect(fakeSockets).toHaveLength(1);
     expect(socket.send).toHaveBeenCalledTimes(2);
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const sent = JSON.parse(socket.send.mock.calls[1]![0] as string);
     expect(sent.previous_response_id).toBe('resp_1');
     expect(sent.input).toEqual([nextUser]);
@@ -1592,6 +1575,7 @@ describe('createResponsesWebSocketFetch', () => {
     const compactFetch = vi.fn();
     const wsFetch = createResponsesWebSocketFetch(WS_URL, undefined, {
       accountId: 'acct-compaction-disabled',
+      // SAFETY: The test fixture defines the asserted runtime shape.
       compactFetch: compactFetch as typeof fetch,
     });
     const firstUser = {
@@ -1687,6 +1671,7 @@ describe('createResponsesWebSocketFetch', () => {
     const replacement = lastSocket();
     expect(replacement).not.toBe(originalSocket);
     replacement.emit('open');
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const sent = JSON.parse(replacement.send.mock.calls[0]![0] as string);
     expect(sent.input).toEqual(sameHistory);
     expect(sent.input).not.toContainEqual({ type: 'compaction_trigger' });
@@ -1703,6 +1688,7 @@ describe('createResponsesWebSocketFetch', () => {
       accountId: 'acct-native-compact',
       compactThreshold: 900,
       contextWindow: 1_000_000,
+      // SAFETY: The test fixture defines the asserted runtime shape.
       compactFetch: compactFetch as typeof fetch,
       onDiagnostic: event => diagnostics.push(event),
     });
@@ -1734,6 +1720,7 @@ describe('createResponsesWebSocketFetch', () => {
     });
 
     await waitForCondition(() => expect(originalSocket.send).toHaveBeenCalledTimes(2));
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const trigger = JSON.parse(originalSocket.send.mock.calls[1]![0] as string);
     expect(trigger.previous_response_id).toBe('resp_before_compact');
     expect(trigger.input).toEqual([secondUser, { type: 'compaction_trigger' }]);
@@ -1748,6 +1735,7 @@ describe('createResponsesWebSocketFetch', () => {
     expect(fakeSockets).toHaveLength(2);
     const compactedSocket = lastSocket();
     compactedSocket.emit('open');
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const compactedHead = JSON.parse(compactedSocket.send.mock.calls[0]![0] as string);
     expect(compactedHead.previous_response_id).toBeUndefined();
     expect(compactedHead.input).toEqual([firstUser, secondUser, ...canonical]);
@@ -1773,6 +1761,7 @@ describe('createResponsesWebSocketFetch', () => {
     });
     expect(compactFetch).not.toHaveBeenCalled();
     expect(fakeSockets).toHaveLength(2);
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const continued = JSON.parse(compactedSocket.send.mock.calls[1]![0] as string);
     expect(continued.previous_response_id).toBe('resp_compacted');
     expect(continued.input).toEqual([thirdUser]);
@@ -1783,6 +1772,7 @@ describe('createResponsesWebSocketFetch', () => {
     expect(fakeSockets).toHaveLength(3);
     const restoredSocket = lastSocket();
     restoredSocket.emit('open');
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const restored = JSON.parse(restoredSocket.send.mock.calls[0]![0] as string);
     expect(restored.previous_response_id).toBeUndefined();
     expect(restored.input).toEqual([
@@ -1850,6 +1840,7 @@ describe('createResponsesWebSocketFetch', () => {
       compactThreshold: 900,
       contextWindow: 2_000,
       checkpointStoreDir,
+      // SAFETY: The test fixture defines the asserted runtime shape.
       compactFetch: compactFetch as typeof fetch,
       onDiagnostic: event => diagnostics.push(event),
     };
@@ -1927,6 +1918,7 @@ describe('createResponsesWebSocketFetch', () => {
     );
 
     await waitForCondition(() => expect(compactedSocket.send).toHaveBeenCalledTimes(2));
+    // SAFETY: The test fixture defines the asserted runtime shape.
     expect(JSON.parse(compactedSocket.send.mock.calls[1]![0] as string)).toMatchObject({
       previous_response_id: 'resp_anchor_compacted',
       input: [compactInstruction, { type: 'compaction_trigger' }],
@@ -1947,6 +1939,7 @@ describe('createResponsesWebSocketFetch', () => {
       .split('\n\n')
       .filter(Boolean)
       .map(frame => JSON.parse(frame.replace(/^data: /, '')));
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const syntheticText = compactFrames
       .find(event => event.type === 'response.output_text.delta')?.delta as string;
     expect(syntheticText).toMatch(
@@ -1995,6 +1988,7 @@ describe('createResponsesWebSocketFetch', () => {
     });
     const mismatchedSocket = lastSocket();
     mismatchedSocket.emit('open');
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const mismatchedSent = JSON.parse(mismatchedSocket.send.mock.calls[0]![0] as string);
     expect(mismatchedSent.previous_response_id).toBeUndefined();
     expect(mismatchedSent.input).toEqual([mismatchedUser]);
@@ -2032,6 +2026,7 @@ describe('createResponsesWebSocketFetch', () => {
     });
     const duplicatedSocket = lastSocket();
     duplicatedSocket.emit('open');
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const duplicatedSent = JSON.parse(duplicatedSocket.send.mock.calls[0]![0] as string);
     expect(duplicatedSent.previous_response_id).toBeUndefined();
     expect(duplicatedSent.input).toEqual([duplicatedUser]);
@@ -2051,6 +2046,7 @@ describe('createResponsesWebSocketFetch', () => {
 
     const anchoredSocket = lastSocket();
     anchoredSocket.emit('open');
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const sent = JSON.parse(anchoredSocket.send.mock.calls[0]![0] as string);
     expect(sent.previous_response_id).toBeUndefined();
     expect(sent.input).toEqual(expect.arrayContaining([
@@ -2086,6 +2082,7 @@ describe('createResponsesWebSocketFetch', () => {
     });
     const durableSocket = lastSocket();
     durableSocket.emit('open');
+    // SAFETY: The test fixture defines the asserted runtime shape.
     expect(JSON.parse(durableSocket.send.mock.calls[0]![0] as string).input).toEqual(
       expect.arrayContaining([expect.objectContaining({ type: 'compaction' })]),
     );
@@ -2149,6 +2146,7 @@ describe('createResponsesWebSocketFetch', () => {
     expect(JSON.stringify(compactBodies)).not.toContain('stale-account:');
     const handedOffSocket = lastSocket();
     handedOffSocket.emit('open');
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const handedOffPayload = JSON.parse(handedOffSocket.send.mock.calls[0]![0] as string);
     expect(handedOffPayload.previous_response_id).toBeUndefined();
     expect(handedOffPayload.input).toEqual(expect.arrayContaining([
@@ -2226,6 +2224,7 @@ describe('createResponsesWebSocketFetch', () => {
       }),
     );
     await waitForCondition(() => expect(compactedSocket.send).toHaveBeenCalledTimes(2));
+    // SAFETY: The test fixture defines the asserted runtime shape.
     expect(JSON.parse(compactedSocket.send.mock.calls[1]![0] as string).input)
       .toEqual([compactInstruction, { type: 'compaction_trigger' }]);
     emitCompactionResponse(
@@ -2262,6 +2261,7 @@ describe('createResponsesWebSocketFetch', () => {
     const fallbackSocket = lastSocket();
     expect(fallbackSocket).not.toBe(compactedSocket);
     fallbackSocket.emit('open');
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const sent = JSON.parse(fallbackSocket.send.mock.calls[0]![0] as string);
     expect(sent.previous_response_id).toBeUndefined();
     expect(sent.input).toEqual([rewrittenUser]);
@@ -2270,11 +2270,14 @@ describe('createResponsesWebSocketFetch', () => {
   });
 
   it.each([
+    // SAFETY: The test fixture defines the asserted runtime shape.
     { label: 'parent orchestrator', claudeAgentId: undefined, prefix: [] as unknown[] },
+    // SAFETY: The test fixture defines the asserted runtime shape.
     { label: 'ordinary subagent', claudeAgentId: 'subagent-compact', prefix: [] as unknown[] },
     {
       label: 'dynamic workflow agent',
       claudeAgentId: 'workflow-compact',
+      // SAFETY: The test fixture defines the asserted runtime shape.
       prefix: [{
         role: 'developer',
         content: [{ type: 'input_text', text: 'workflow phase context' }],
@@ -2312,6 +2315,7 @@ describe('createResponsesWebSocketFetch', () => {
       const compactingFetch = createResponsesWebSocketFetch(WS_URL, undefined, {
         accountId,
         compactThreshold: 100,
+        // SAFETY: The test fixture defines the asserted runtime shape.
         compactFetch: compactFetch as typeof fetch,
         checkpointStoreDir,
       });
@@ -2327,6 +2331,7 @@ describe('createResponsesWebSocketFetch', () => {
         .split('\n\n')
         .filter(Boolean)
         .map(frame => JSON.parse(frame.replace(/^data: /, '')));
+      // SAFETY: The test fixture defines the asserted runtime shape.
       const summaryText = compactEvents
         .find(event => event.type === 'response.output_text.delta').delta as string;
       const summaryBody = summaryText.match(/<summary>([\s\S]*)<\/summary>/)![1]!;
@@ -2345,6 +2350,7 @@ describe('createResponsesWebSocketFetch', () => {
       const resumedFetch = createResponsesWebSocketFetch(WS_URL, undefined, {
         accountId,
         compactThreshold: 100,
+        // SAFETY: The test fixture defines the asserted runtime shape.
         compactFetch: compactAfterRestart as typeof fetch,
         checkpointStoreDir,
       });
@@ -2373,6 +2379,7 @@ describe('createResponsesWebSocketFetch', () => {
       );
       const socket = lastSocket();
       socket.emit('open');
+      // SAFETY: The test fixture defines the asserted runtime shape.
       const sent = JSON.parse(socket.send.mock.calls[0]![0] as string);
       expect(sent.previous_response_id).toBeUndefined();
       expect(sent.input).toEqual(expect.arrayContaining([
@@ -2404,6 +2411,7 @@ describe('createResponsesWebSocketFetch', () => {
     const wsFetch = createResponsesWebSocketFetch(WS_URL, undefined, {
       accountId: 'acct-compact-retention-budget',
       compactThreshold: 100,
+      // SAFETY: The test fixture defines the asserted runtime shape.
       compactFetch: compactFetch as typeof fetch,
     });
     const hugeUser = {
@@ -2439,6 +2447,7 @@ describe('createResponsesWebSocketFetch', () => {
 
     const rebasedSocket = lastSocket();
     rebasedSocket.emit('open');
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const rebased = JSON.parse(rebasedSocket.send.mock.calls[0]![0] as string);
     expect(rebased.input).toHaveLength(3);
     expect(rebased.input[1]).toEqual(latestUser);
@@ -2446,6 +2455,7 @@ describe('createResponsesWebSocketFetch', () => {
       type: 'compaction',
       encrypted_content: 'bounded-summary',
     });
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const truncatedText = rebased.input[0].content[0].text as string;
     expect(truncatedText).toContain('retained text truncated');
     expect(truncatedText.length).toBeLessThan(hugeUser.content[0]!.text.length);
@@ -2503,8 +2513,10 @@ describe('createResponsesWebSocketFetch', () => {
     const second = await secondPromise;
     const rebasedSocket = lastSocket();
     rebasedSocket.emit('open');
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const rebased = JSON.parse(rebasedSocket.send.mock.calls[0]![0] as string);
     expect(rebased.input[0].content[0]).toEqual(imagePart);
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const retainedText = rebased.input[0].content[1].text as string;
     expect(Buffer.byteLength(retainedText, 'utf8')).toBeGreaterThan(240_000);
     expect(Buffer.byteLength(retainedText, 'utf8')).toBeLessThanOrEqual(250_000);
@@ -2523,6 +2535,7 @@ describe('createResponsesWebSocketFetch', () => {
     const wsFetch = createResponsesWebSocketFetch(WS_URL, undefined, {
       accountId: 'acct-compact-fallback',
       compactThreshold: 100,
+      // SAFETY: The test fixture defines the asserted runtime shape.
       compactFetch: compactFetch as typeof fetch,
       onDiagnostic: event => diagnostics.push(event),
     });
@@ -2549,6 +2562,7 @@ describe('createResponsesWebSocketFetch', () => {
     });
 
     await waitForCondition(() => expect(socket.send).toHaveBeenCalledTimes(2));
+    // SAFETY: The test fixture defines the asserted runtime shape.
     expect(JSON.parse(socket.send.mock.calls[1]![0] as string)).toMatchObject({
       previous_response_id: 'resp_fallback_base',
       input: [nextUser, { type: 'compaction_trigger' }],
@@ -2562,6 +2576,7 @@ describe('createResponsesWebSocketFetch', () => {
     expect(fakeSockets).toHaveLength(2);
     const replacement = lastSocket();
     replacement.emit('open');
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const sent = JSON.parse(replacement.send.mock.calls[0]![0] as string);
     expect(sent.previous_response_id).toBeUndefined();
     expect(sent.input).toEqual(fullInput);
@@ -2598,6 +2613,7 @@ describe('createResponsesWebSocketFetch', () => {
       accountId: 'acct-trigger-timeout',
       compactThreshold: 100,
       compactTimeoutMs: 5,
+      // SAFETY: The test fixture defines the asserted runtime shape.
       compactFetch: compactFetch as typeof fetch,
       onDiagnostic: event => diagnostics.push(event),
     });
@@ -2642,6 +2658,7 @@ describe('createResponsesWebSocketFetch', () => {
 
     const replacement = lastSocket();
     replacement.emit('open');
+    // SAFETY: The test fixture defines the asserted runtime shape.
     expect(JSON.parse(replacement.send.mock.calls[0]![0] as string).input).toEqual(canonical);
     emitTextResponse(replacement, 'resp_timeout_recovered', 'done');
     await readAll(second);
@@ -2669,6 +2686,7 @@ describe('createResponsesWebSocketFetch', () => {
     const wsFetch = createResponsesWebSocketFetch(WS_URL, undefined, {
       accountId: `acct-compact-endpoint-fallback-${terminalType}`,
       compactThreshold: 100,
+      // SAFETY: The test fixture defines the asserted runtime shape.
       compactFetch: compactFetch as typeof fetch,
       onDiagnostic: event => diagnostics.push(event),
     });
@@ -2717,6 +2735,7 @@ describe('createResponsesWebSocketFetch', () => {
     expect(compactFetch).toHaveBeenCalledOnce();
     const replacement = lastSocket();
     replacement.emit('open');
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const sent = JSON.parse(replacement.send.mock.calls[0]![0] as string);
     expect(sent.previous_response_id).toBeUndefined();
     expect(sent.input).toEqual(canonical);
@@ -2770,6 +2789,7 @@ describe('createResponsesWebSocketFetch', () => {
       accountId: 'acct-recompact-http-fallback',
       compactThreshold: 100,
       contextWindow: 40_000,
+      // SAFETY: The test fixture defines the asserted runtime shape.
       compactFetch: compactFetch as typeof fetch,
     });
     const firstUser = { role: 'user', content: [{ type: 'input_text', text: 'first' }] };
@@ -2824,6 +2844,7 @@ describe('createResponsesWebSocketFetch', () => {
     expect(compactFetch).toHaveBeenCalledOnce();
     const recompactedSocket = lastSocket();
     recompactedSocket.emit('open');
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const sent = JSON.parse(recompactedSocket.send.mock.calls[0]![0] as string);
     expect(sent.previous_response_id).toBeUndefined();
     expect(sent.input).toEqual(secondCanonical);
@@ -2838,6 +2859,7 @@ describe('createResponsesWebSocketFetch', () => {
     const wsFetch = createResponsesWebSocketFetch(WS_URL, undefined, {
       accountId: 'acct-compact-retry',
       compactThreshold: 100,
+      // SAFETY: The test fixture defines the asserted runtime shape.
       compactFetch: compactFetch as typeof fetch,
     });
     const firstUser = { role: 'user', content: [{ type: 'input_text', text: 'first' }] };
@@ -2867,6 +2889,7 @@ describe('createResponsesWebSocketFetch', () => {
     const compactedSocket = lastSocket();
     compactedSocket.emit('open');
     const compactedInput = [firstUser, nextUser, ...canonical];
+    // SAFETY: The test fixture defines the asserted runtime shape.
     expect(JSON.parse(compactedSocket.send.mock.calls[0]![0] as string).input)
       .toEqual(compactedInput);
 
@@ -2876,6 +2899,7 @@ describe('createResponsesWebSocketFetch', () => {
     );
     const replacement = lastSocket();
     replacement.emit('open');
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const replay = JSON.parse(replacement.send.mock.calls[0]![0] as string);
     expect(replay.previous_response_id).toBeUndefined();
     expect(replay.input).toEqual(compactedInput);
@@ -2899,6 +2923,7 @@ describe('createResponsesWebSocketFetch', () => {
     const wsFetch = createResponsesWebSocketFetch(WS_URL, undefined, {
       accountId: 'acct-compact-failure-loop',
       compactThreshold: 100,
+      // SAFETY: The test fixture defines the asserted runtime shape.
       compactFetch: compactFetch as typeof fetch,
     });
     const fetchWithEstimate = (input: unknown[], estimatedInputTokens: number) =>
@@ -2949,6 +2974,7 @@ describe('createResponsesWebSocketFetch', () => {
     expect(originalSocket.send).toHaveBeenCalledTimes(2);
     const retrySocket = lastSocket();
     retrySocket.emit('open');
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const retryFrame = JSON.parse(retrySocket.send.mock.calls[0]![0] as string);
     expect(retryFrame.previous_response_id).toBeUndefined();
     expect(retryFrame.input).toEqual(retryCanonical);
@@ -2970,6 +2996,7 @@ describe('createResponsesWebSocketFetch', () => {
     const recovered = await fetchWithEstimate(recoveredInput, 150);
     expect(compactFetch).toHaveBeenCalledOnce();
     expect(retrySocket.send).toHaveBeenCalledTimes(2);
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const recoveredFrame = JSON.parse(retrySocket.send.mock.calls[1]![0] as string);
     expect(recoveredFrame.previous_response_id).toBe('resp_failure_loop_recovered');
     expect(recoveredFrame.input).toEqual([finalUser]);
@@ -2983,6 +3010,7 @@ describe('createResponsesWebSocketFetch', () => {
     const wsFetch = createResponsesWebSocketFetch(WS_URL, undefined, {
       accountId: 'acct-compact-checkpoint',
       compactThreshold: 100,
+      // SAFETY: The test fixture defines the asserted runtime shape.
       compactFetch: compactFetch as typeof fetch,
     });
     const firstUser = { role: 'user', content: [{ type: 'input_text', text: 'first' }] };
@@ -3031,6 +3059,7 @@ describe('createResponsesWebSocketFetch', () => {
 
     const restoredSocket = lastSocket();
     restoredSocket.emit('open');
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const restored = JSON.parse(restoredSocket.send.mock.calls[0]![0] as string);
     expect(restored.previous_response_id).toBeUndefined();
     expect(restored.input).toEqual([
@@ -3073,6 +3102,7 @@ describe('createResponsesWebSocketFetch', () => {
     const initialFetch = createResponsesWebSocketFetch(WS_URL, undefined, {
       accountId: 'acct-restart-recovery',
       compactThreshold: 258_000,
+      // SAFETY: The test fixture defines the asserted runtime shape.
       compactFetch: compactFetch as typeof fetch,
       checkpointStoreDir,
       onDiagnostic: event => diagnostics.push(event),
@@ -3117,6 +3147,7 @@ describe('createResponsesWebSocketFetch', () => {
     const resumedFetch = createResponsesWebSocketFetch(WS_URL, undefined, {
       accountId: 'acct-restart-recovery',
       compactThreshold: 258_000,
+      // SAFETY: The test fixture defines the asserted runtime shape.
       compactFetch: compactAfterRestart as typeof fetch,
       checkpointStoreDir,
       onDiagnostic: event => diagnostics.push(event),
@@ -3144,6 +3175,7 @@ describe('createResponsesWebSocketFetch', () => {
     );
     const restoredSocket = lastSocket();
     restoredSocket.emit('open');
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const restoredPayload = JSON.parse(restoredSocket.send.mock.calls[0]![0] as string);
     expect(restoredPayload.previous_response_id).toBeUndefined();
     expect(restoredPayload.input).toEqual([
@@ -3182,6 +3214,7 @@ describe('createResponsesWebSocketFetch', () => {
     const wsFetch = createResponsesWebSocketFetch(WS_URL, undefined, {
       accountId: 'acct-compaction-usage',
       compactThreshold: 100,
+      // SAFETY: The test fixture defines the asserted runtime shape.
       compactFetch: compactFetch as typeof fetch,
     });
     const response = await withResponsesWebSocketDiagnosticContext(
@@ -3229,6 +3262,7 @@ describe('createResponsesWebSocketFetch', () => {
     const wsFetch = createResponsesWebSocketFetch(WS_URL, undefined, {
       accountId: 'acct-sdk-compaction-usage',
       compactThreshold: 100,
+      // SAFETY: The test fixture defines the asserted runtime shape.
       compactFetch: compactFetch as typeof fetch,
     });
     const provider = createOpenAI({ apiKey: 'test-only', fetch: wsFetch });
@@ -3270,16 +3304,19 @@ describe('createResponsesWebSocketFetch', () => {
     {
       label: 'parent orchestrator',
       diagnostic: {},
+      // SAFETY: The test fixture defines the asserted runtime shape.
       prefix: [] as unknown[],
     },
     {
       label: 'ordinary subagent',
       diagnostic: { claudeAgentId: 'subagent-1' },
+      // SAFETY: The test fixture defines the asserted runtime shape.
       prefix: [] as unknown[],
     },
     {
       label: 'dynamic workflow agent',
       diagnostic: { claudeAgentId: 'workflow-agent-1' },
+      // SAFETY: The test fixture defines the asserted runtime shape.
       prefix: [{
         role: 'developer',
         content: [{ type: 'input_text', text: 'workflow phase one' }],
@@ -3310,6 +3347,7 @@ describe('createResponsesWebSocketFetch', () => {
       const wsFetch = createResponsesWebSocketFetch(WS_URL, undefined, {
         accountId: `acct-${label.replaceAll(' ', '-')}`,
         compactThreshold: 100,
+        // SAFETY: The test fixture defines the asserted runtime shape.
         compactFetch: compactFetch as typeof fetch,
       });
       const first = await withResponsesWebSocketDiagnosticContext(
@@ -3361,6 +3399,7 @@ describe('createResponsesWebSocketFetch', () => {
           ])),
         }),
       );
+      // SAFETY: The test fixture defines the asserted runtime shape.
       const secondPayload = JSON.parse(socket.send.mock.calls[1]![0] as string);
       expect(secondPayload.previous_response_id).toBe(`resp_${label}`);
       expect(secondPayload.input).toEqual([nextUser]);
@@ -3404,6 +3443,7 @@ describe('createResponsesWebSocketFetch', () => {
     const wsFetch = createResponsesWebSocketFetch(WS_URL, undefined, {
       accountId: 'acct-recycled-checkpoints',
       compactThreshold: 100,
+      // SAFETY: The test fixture defines the asserted runtime shape.
       compactFetch: compactFetch as typeof fetch,
     });
 
@@ -3436,6 +3476,7 @@ describe('createResponsesWebSocketFetch', () => {
       }),
     );
     expect(fakeSockets).toHaveLength(1);
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const agentBRootPayload = JSON.parse(recycledSocket.send.mock.calls[1]![0] as string);
     expect(agentBRootPayload.previous_response_id).toBeUndefined();
     emitTextResponse(recycledSocket, 'resp_agent_b', 'agent B answer', {
@@ -3498,6 +3539,7 @@ describe('createResponsesWebSocketFetch', () => {
     );
     const restoredAgentASocket = lastSocket();
     restoredAgentASocket.emit('open');
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const restoredAgentA = JSON.parse(restoredAgentASocket.send.mock.calls[0]![0] as string);
     expect(restoredAgentA.previous_response_id).toBeUndefined();
     expect(restoredAgentA.input).toEqual([
@@ -3527,6 +3569,7 @@ describe('createResponsesWebSocketFetch', () => {
     const wsFetch = createResponsesWebSocketFetch(WS_URL, undefined, {
       accountId: 'acct-subagent-tool-compaction',
       compactThreshold: 100,
+      // SAFETY: The test fixture defines the asserted runtime shape.
       compactFetch: compactFetch as typeof fetch,
     });
     const first = await withResponsesWebSocketDiagnosticContext(
@@ -3574,6 +3617,7 @@ describe('createResponsesWebSocketFetch', () => {
         body: JSON.stringify(sessionPayload([user, echoedCall, toolOutput])),
       }),
     );
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const continued = JSON.parse(socket.send.mock.calls[1]![0] as string);
     expect(continued.previous_response_id).toBe('resp_subagent_tool');
     expect(continued.input).toEqual([toolOutput]);
@@ -3600,7 +3644,7 @@ describe('createResponsesWebSocketFetch', () => {
     const checkpointStoreDir = mkdtempSync(join(process.env.CLODEX_HOME!, 'workflow-checkpoints-'));
     const compactFetch = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
       const body = JSON.parse(String(init?.body));
-      const lastUser = [...body.input].reverse().find(
+      const lastUser = body.input.toReversed().find(
         (item: { role?: string }) => item.role === 'user',
       );
       return new Response(JSON.stringify({
@@ -3624,6 +3668,7 @@ describe('createResponsesWebSocketFetch', () => {
     const workflowFetch = createResponsesWebSocketFetch(WS_URL, undefined, {
       accountId: 'acct-workflow-restart',
       compactThreshold: 258_000,
+      // SAFETY: The test fixture defines the asserted runtime shape.
       compactFetch: compactFetch as typeof fetch,
       checkpointStoreDir,
     });
@@ -3671,6 +3716,7 @@ describe('createResponsesWebSocketFetch', () => {
     const resumedFetch = createResponsesWebSocketFetch(WS_URL, undefined, {
       accountId: 'acct-workflow-restart',
       compactThreshold: 258_000,
+      // SAFETY: The test fixture defines the asserted runtime shape.
       compactFetch: compactAfterRestart as typeof fetch,
       checkpointStoreDir,
     });
@@ -3698,6 +3744,7 @@ describe('createResponsesWebSocketFetch', () => {
       );
       const socket = lastSocket();
       socket.emit('open');
+      // SAFETY: The test fixture defines the asserted runtime shape.
       const sent = JSON.parse(socket.send.mock.calls[0]![0] as string);
       expect(sent.previous_response_id).toBeUndefined();
       expect(sent.input).toEqual([
@@ -3810,6 +3857,7 @@ describe('createResponsesWebSocketFetch', () => {
     });
     const resumedSocket = lastSocket();
     resumedSocket.emit('open');
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const sent = JSON.parse(resumedSocket.send.mock.calls[0]![0] as string);
     expect(sent.previous_response_id).toBeUndefined();
     expect(sent.input).toEqual([...compactedInput, nextUser]);
@@ -3847,9 +3895,10 @@ describe('createResponsesWebSocketFetch', () => {
       lineageKey: randomUUID(),
       requestInputHashes: requestInput.map(checkpointItemHash),
       requestInputKinds: requestInput.map(item => (
-        item && typeof item === 'object' && 'type' in item
+        item instanceof Object && 'type' in item
           ? String(item.type)
-          : String((item as { role?: unknown }).role)
+          // SAFETY: The test fixture defines the asserted runtime shape.
+          : String((/* SAFETY: Request items without a type use the role field. */ item as { role?: unknown }).role)
       )),
       expectedAssistantHashes: expectedAssistant.map(checkpointItemHash),
       expectedAssistantKinds: expectedAssistant.map(item => String(item.type)),
@@ -3884,6 +3933,7 @@ describe('createResponsesWebSocketFetch', () => {
     });
     const socket = lastSocket();
     socket.emit('open');
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const sent = JSON.parse(socket.send.mock.calls[0]![0] as string);
     expect(sent.previous_response_id).toBeUndefined();
     expect(sent.input).toEqual([...compactedInput, nextUser]);
@@ -3945,6 +3995,7 @@ describe('createResponsesWebSocketFetch', () => {
     });
     const socket = lastSocket();
     socket.emit('open');
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const sent = JSON.parse(socket.send.mock.calls[0]![0] as string);
     expect(sent.input).toEqual(fullInput);
     expect(sent.input).not.toContainEqual(expect.objectContaining({
@@ -3968,6 +4019,7 @@ describe('createResponsesWebSocketFetch', () => {
     const wsFetch = createResponsesWebSocketFetch(WS_URL, undefined, {
       accountId,
       compactThreshold: 100,
+      // SAFETY: The test fixture defines the asserted runtime shape.
       compactFetch: compactFetch as typeof fetch,
       checkpointStoreDir,
       now: () => now,
@@ -4016,6 +4068,7 @@ describe('createResponsesWebSocketFetch', () => {
     });
     const resumedSocket = lastSocket();
     resumedSocket.emit('open');
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const sent = JSON.parse(resumedSocket.send.mock.calls[0]![0] as string);
     expect(sent.input).toContainEqual(expect.objectContaining({
       encrypted_content: 'newer-memory-state',
@@ -4046,6 +4099,7 @@ describe('createResponsesWebSocketFetch', () => {
     const wsFetch = createResponsesWebSocketFetch(WS_URL, undefined, {
       accountId: 'acct-concurrent-workflow-compaction',
       compactThreshold: 258_000,
+      // SAFETY: The test fixture defines the asserted runtime shape.
       compactFetch: compactFetch as typeof fetch,
       onDiagnostic: event => diagnostics.push(event),
     });
@@ -4097,6 +4151,7 @@ describe('createResponsesWebSocketFetch', () => {
     const wsFetch = createResponsesWebSocketFetch(WS_URL, undefined, {
       accountId: 'acct-checkpoint-ttl',
       compactThreshold: 100,
+      // SAFETY: The test fixture defines the asserted runtime shape.
       compactFetch: compactFetch as typeof fetch,
       now: () => now,
       onDiagnostic: event => diagnostics.push(event),
@@ -4135,6 +4190,7 @@ describe('createResponsesWebSocketFetch', () => {
     });
     const replacement = lastSocket();
     replacement.emit('open');
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const sent = JSON.parse(replacement.send.mock.calls[0]![0] as string);
     expect(sent.previous_response_id).toBeUndefined();
     expect(sent.input).toEqual(fullInput);
@@ -4159,6 +4215,7 @@ describe('createResponsesWebSocketFetch', () => {
       const compactFetch = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
         const body = JSON.parse(String(init?.body));
         const user = body.input[0];
+        // SAFETY: The test fixture defines the asserted runtime shape.
         const label = user.content[0].text as string;
         return new Response(JSON.stringify({
           output: [user, { type: 'compaction', encrypted_content: `summary-${label}` }],
@@ -4170,6 +4227,7 @@ describe('createResponsesWebSocketFetch', () => {
       const wsFetch = createResponsesWebSocketFetch(WS_URL, undefined, {
         accountId: `acct-checkpoint-cap-${partitionKeys.length}`,
         compactThreshold: 100,
+        // SAFETY: The test fixture defines the asserted runtime shape.
         compactFetch: compactFetch as typeof fetch,
         now: () => now,
       });
@@ -4237,6 +4295,7 @@ describe('createResponsesWebSocketFetch', () => {
         });
         const socket = lastSocket();
         socket.emit('open');
+        // SAFETY: The test fixture defines the asserted runtime shape.
         const sent = JSON.parse(socket.send.mock.calls[0]![0] as string);
         emitTextResponse(socket, `resp_${suffix}`, 'done');
         await readAll(response);
@@ -4440,6 +4499,7 @@ describe('createResponsesWebSocketFetch', () => {
     const second = await wsFetch('https://x', {
       method: 'POST', headers: {}, body: JSON.stringify(sessionPayload([...input, echoedCall, toolOutput])),
     });
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const sent = JSON.parse(socket.send.mock.calls[1]![0] as string);
     expect(sent.previous_response_id).toBe('resp_tool');
     expect(sent.input).toEqual([toolOutput]);
@@ -4498,6 +4558,7 @@ describe('createResponsesWebSocketFetch', () => {
       }),
     );
     expect(fakeSockets).toHaveLength(1);
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const sent = JSON.parse(socket.send.mock.calls[2]![0] as string);
     expect(sent.previous_response_id).toBeUndefined();
     expect(sent.input).toEqual(secondRoot);
@@ -4567,6 +4628,7 @@ describe('createResponsesWebSocketFetch', () => {
     const second = await wsFetch('https://x', {
       method: 'POST', headers: {}, body: JSON.stringify(sessionPayload([...input, reasoning, assistant, nextUser])),
     });
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const sent = JSON.parse(socket.send.mock.calls[1]![0] as string);
     expect(sent.previous_response_id).toBe('resp_reason');
     expect(sent.input).toEqual([nextUser]);
@@ -4613,6 +4675,7 @@ describe('createResponsesWebSocketFetch', () => {
     });
 
     expect(fakeSockets).toHaveLength(1);
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const sent = JSON.parse(socket.send.mock.calls[1]![0] as string);
     expect(sent.previous_response_id).toBe('resp_reason_tool');
     expect(sent.input).toEqual([toolOutput]);
@@ -4660,6 +4723,7 @@ describe('createResponsesWebSocketFetch', () => {
     });
 
     expect(fakeSockets).toHaveLength(1);
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const sent = JSON.parse(socket.send.mock.calls[1]![0] as string);
     expect(sent.previous_response_id).toBe('resp_reason_text');
     expect(sent.input).toEqual([nextUser]);
@@ -4726,6 +4790,7 @@ describe('createResponsesWebSocketFetch', () => {
       ])),
     });
     expect(lastSocket()).toBe(auxiliarySocket); // no new socket was constructed
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const sent = JSON.parse(mainSocket.send.mock.calls[1]![0] as string);
     expect(sent.previous_response_id).toBe('resp_main');
     expect(sent.input).toEqual([nextUser]);
@@ -4744,6 +4809,7 @@ describe('createResponsesWebSocketFetch', () => {
       ])),
     });
     expect(fakeSockets).toHaveLength(2);
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const auxiliarySent = JSON.parse(auxiliarySocket.send.mock.calls[1]![0] as string);
     expect(auxiliarySent.previous_response_id).toBe('resp_aux');
     expect(auxiliarySent.input).toEqual([nextAuxiliaryUser]);
@@ -4784,6 +4850,7 @@ describe('createResponsesWebSocketFetch', () => {
           nextUser,
         ])),
       });
+      // SAFETY: The test fixture defines the asserted runtime shape.
       const sent = JSON.parse(fakeSockets[index]!.send.mock.calls[1]![0] as string);
       expect(sent.previous_response_id).toBe(`resp_agent_${index}`);
       expect(sent.input).toEqual([nextUser]);
@@ -4865,6 +4932,7 @@ describe('createResponsesWebSocketFetch', () => {
         toolOutput,
       ])),
     });
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const sent = JSON.parse(socket.send.mock.calls[1]![0] as string);
     expect(sent.previous_response_id).toBe('resp_workflow_reasoning');
     expect(sent.input).toEqual([toolOutput]);
@@ -4926,6 +4994,7 @@ describe('createResponsesWebSocketFetch', () => {
         nextUser,
       ])),
     });
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const sent = JSON.parse(fakeSockets[15]!.send.mock.calls[1]![0] as string);
     expect(sent.previous_response_id).toBe('resp_full_width_15');
     expect(sent.input).toEqual([nextUser]);
@@ -4973,6 +5042,7 @@ describe('createResponsesWebSocketFetch', () => {
     expect(fakeSockets).toHaveLength(3);
     const reusedNursery = fakeSockets.find(socket => socket.send.mock.calls.length === 2);
     expect(reusedNursery).toBeDefined();
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const sent = JSON.parse(reusedNursery!.send.mock.calls[1]![0] as string);
     expect(sent.previous_response_id).toBeUndefined();
     emitTextResponse(reusedNursery!, 'resp_overflow_next', 'done');
@@ -5000,6 +5070,7 @@ describe('createResponsesWebSocketFetch', () => {
         (candidate, socketIndex) => candidate.send.mock.calls.length > (sendCounts[socketIndex] ?? 0),
       ) ?? lastSocket();
       if (index < 2) socket.emit('open');
+      // SAFETY: The test fixture defines the asserted runtime shape.
       const sent = JSON.parse(socket.send.mock.calls.at(-1)![0] as string);
       expect(sent.previous_response_id).toBeUndefined();
       expect(sent.input).toEqual(roots[index]);
@@ -5096,6 +5167,7 @@ describe('createResponsesWebSocketFetch', () => {
     });
 
     expect(fakeSockets).toHaveLength(2);
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const sent = JSON.parse(mainSocket.send.mock.calls[1]![0] as string);
     expect(sent.previous_response_id).toBe('resp_main');
     expect(sent.input).toEqual([nextUser]);
@@ -5130,6 +5202,7 @@ describe('createResponsesWebSocketFetch', () => {
     expect(fakeSockets).toHaveLength(2);
     const replacement = lastSocket();
     replacement.emit('open');
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const retried = JSON.parse(replacement.send.mock.calls[0]![0] as string);
     expect(retried.previous_response_id).toBeUndefined();
     expect(retried.input).toEqual(fullNextInput);
@@ -5201,6 +5274,7 @@ describe('createResponsesWebSocketFetch', () => {
     expect(fakeSockets).toHaveLength(2);
     const branchSocket = lastSocket();
     branchSocket.emit('open');
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const reset = JSON.parse(branchSocket.send.mock.calls[0]![0] as string);
     expect(reset.previous_response_id).toBeUndefined();
     expect(reset.input).toEqual(branchInput);
@@ -5215,6 +5289,7 @@ describe('createResponsesWebSocketFetch', () => {
         nextUser,
       ])),
     });
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const continued = JSON.parse(branchSocket.send.mock.calls[1]![0] as string);
     expect(continued.previous_response_id).toBe('resp_branch');
     expect(continued.input).toEqual([nextUser]);
@@ -5243,6 +5318,7 @@ describe('createResponsesWebSocketFetch', () => {
     expect(fakeSockets).toHaveLength(2);
     const replacement = lastSocket();
     replacement.emit('open');
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const sent = JSON.parse(replacement.send.mock.calls[0]![0] as string);
     expect(sent.previous_response_id).toBeUndefined();
     expect(sent.input).toEqual(full);
@@ -5297,6 +5373,7 @@ describe('createResponsesWebSocketFetch', () => {
     });
 
     expect(fakeSockets).toHaveLength(1);
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const sent = JSON.parse(socket.send.mock.calls[2]![0] as string);
     expect(sent.previous_response_id).toBe('resp_pause_2');
   });
@@ -5343,6 +5420,7 @@ describe('createResponsesWebSocketFetch', () => {
       method: 'POST', headers: {}, body: JSON.stringify(sessionPayload(thirdInput)),
     });
     expect(fakeSockets).toHaveLength(1);
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const sent = JSON.parse(socket.send.mock.calls[2]![0] as string);
     expect(sent.previous_response_id).toBe('resp_gen_2');
   });
@@ -5524,6 +5602,7 @@ describe('createResponsesWebSocketFetch', () => {
       accountId: 'acct-overflow',
       compactThreshold: 115_200,
       contextWindow: 128_000,
+      // SAFETY: The test fixture defines the asserted runtime shape.
       compactFetch: compactFetch as typeof fetch,
       onDiagnostic: event => diagnostics.push(event),
     });
@@ -5575,6 +5654,7 @@ describe('createResponsesWebSocketFetch', () => {
     const replacement = lastSocket();
     expect(replacement).not.toBe(original);
     replacement.emit('open');
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const sent = JSON.parse(replacement.send.mock.calls[0]![0] as string);
     expect(sent.previous_response_id).toBeUndefined();
     expect(sent.input[0]).toEqual(canonical[0]);
@@ -5622,6 +5702,7 @@ describe('createResponsesWebSocketFetch', () => {
     );
     expect(compactFetch).toHaveBeenCalledOnce();
     expect(replacement.send).toHaveBeenCalledTimes(2);
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const continued = JSON.parse(replacement.send.mock.calls[1]![0] as string);
     expect(continued.previous_response_id).toBe('resp_overflow_recovered');
     expect(continued.input).toEqual([nextUser]);
@@ -5645,6 +5726,7 @@ describe('createResponsesWebSocketFetch', () => {
       accountId: 'acct-overflow-rejected-candidate',
       compactThreshold: 115_200,
       contextWindow: 128_000,
+      // SAFETY: The test fixture defines the asserted runtime shape.
       compactFetch: compactFetch as typeof fetch,
     });
     const input = [
@@ -5679,6 +5761,7 @@ describe('createResponsesWebSocketFetch', () => {
   it('commits only a later accepted candidate and replaces the original logical head', async () => {
     const compactBodies: unknown[][] = [];
     const compactFetch = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      // SAFETY: The test fixture defines the asserted runtime shape.
       const body = JSON.parse(String(init?.body)) as { input: unknown[] };
       compactBodies.push(body.input);
       const first = compactBodies.length === 1;
@@ -5694,6 +5777,7 @@ describe('createResponsesWebSocketFetch', () => {
       accountId: 'acct-overflow-later-candidate',
       compactThreshold: 115_200,
       contextWindow: 128_000,
+      // SAFETY: The test fixture defines the asserted runtime shape.
       compactFetch: compactFetch as typeof fetch,
     });
     const root = [
@@ -5735,6 +5819,7 @@ describe('createResponsesWebSocketFetch', () => {
     expect(compactBodies.length).toBeGreaterThanOrEqual(2);
     const replacement = lastSocket();
     replacement.emit('open');
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const sent = JSON.parse(replacement.send.mock.calls[0]![0] as string);
     expect(sent.input[0]).toMatchObject({ encrypted_content: 'accepted' });
     expect(sent.input[0]).not.toMatchObject({ encrypted_content: 'rejected' });
@@ -5754,6 +5839,7 @@ describe('createResponsesWebSocketFetch', () => {
     });
     const continuationSocket = lastSocket();
     const continuationPayload = JSON.parse(
+      // SAFETY: The test fixture defines the asserted runtime shape.
       continuationSocket.send.mock.calls.at(-1)![0] as string,
     );
     expect(continuationPayload.previous_response_id).toBe('resp_later_candidate_recovered');
@@ -5790,6 +5876,7 @@ describe('createResponsesWebSocketFetch', () => {
       accountId: 'acct-compact-400-recovery',
       compactThreshold: 115_200,
       contextWindow: 128_000,
+      // SAFETY: The test fixture defines the asserted runtime shape.
       compactFetch: compactFetch as typeof fetch,
     });
     const root = [
@@ -5845,6 +5932,7 @@ describe('createResponsesWebSocketFetch', () => {
     expect(compactBodies[1]).toEqual(root);
     const replacement = lastSocket();
     replacement.emit('open');
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const sent = JSON.parse(replacement.send.mock.calls[0]![0] as string);
     expect(sent.input[0]).toEqual(canonical[0]);
     expect(sent.input.at(-1)).toEqual(toolOutput);
@@ -5869,6 +5957,7 @@ describe('createResponsesWebSocketFetch', () => {
     ]).flat();
     const compactBodies: unknown[][] = [];
     const compactFetch = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      // SAFETY: The test fixture defines the asserted runtime shape.
       const body = JSON.parse(String(init?.body)) as { input: unknown[] };
       compactBodies.push(body.input);
       if (compactBodies.length === 1) {
@@ -5901,6 +5990,7 @@ describe('createResponsesWebSocketFetch', () => {
       compactThreshold: 70_000,
       contextWindow: 250_000,
       overflowRecoveryMaxCompactCalls: 8,
+      // SAFETY: The test fixture defines the asserted runtime shape.
       compactFetch: compactFetch as typeof fetch,
       onDiagnostic: event => diagnostics.push(event),
     });
@@ -5926,6 +6016,7 @@ describe('createResponsesWebSocketFetch', () => {
 
     const initialReplacement = lastSocket();
     initialReplacement.emit('open');
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const sent = JSON.parse(initialReplacement.send.mock.calls[0]![0] as string);
     expect(sent.previous_response_id).toBeUndefined();
     expect(sent.input.length).toBeLessThan(successfulBodies.at(-1)!.length);
@@ -5962,16 +6053,19 @@ describe('createResponsesWebSocketFetch', () => {
       input_tokens_details: { cached_tokens: 55_000 },
     });
     const compactStages = compactBodies.length - 1;
-    const completedStages = diagnostics.filter(event => (
-      event.event === 'ws_overflow_recovery'
-      && event.outcome === 'stage_accepted'
-      && typeof event.stage === 'number'
-      && event.stage > 0
-    ));
+    const completedStages = diagnostics.filter(event => {
+      // SAFETY: Accepted stage diagnostics carry a numeric stage.
+      const stage = event.stage as number | undefined;
+      return event.event === 'ws_overflow_recovery'
+        && event.outcome === 'stage_accepted'
+        && Number.isFinite(stage)
+        && stage! > 0;
+    });
     expect(completedStages.length).toBe(compactStages - 1);
     expect(completedStages.map(event => event.stage)).toEqual(
       Array.from({ length: compactStages - 1 }, (_, index) => index + 1),
     );
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const rebasedItemCounts = completedStages.map(event => event.inputItems as number);
     for (let index = 1; index < rebasedItemCounts.length; index += 1) {
       expect(rebasedItemCounts[index]).toBeLessThan(rebasedItemCounts[index - 1]!);
@@ -5991,6 +6085,7 @@ describe('createResponsesWebSocketFetch', () => {
       accountId: 'acct-second-recovery-success',
       compactThreshold: 115_200,
       contextWindow: 128_000,
+      // SAFETY: The test fixture defines the asserted runtime shape.
       compactFetch: compactFetch as typeof fetch,
     });
     const root = [
@@ -6069,6 +6164,7 @@ describe('createResponsesWebSocketFetch', () => {
       accountId: 'acct-second-recovery-exhausted',
       compactThreshold: 115_200,
       contextWindow: 128_000,
+      // SAFETY: The test fixture defines the asserted runtime shape.
       compactFetch: compactFetch as typeof fetch,
       overflowRecoveryMaxContextRejections: 1,
     });
@@ -6131,6 +6227,7 @@ describe('createResponsesWebSocketFetch', () => {
     );
     expect(fakeSockets).toHaveLength(2);
     expect(original.send).toHaveBeenCalledTimes(2);
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const continuationPayload = JSON.parse(original.send.mock.calls.at(-1)![0] as string);
     expect(continuationPayload.previous_response_id).toBe('resp_second_recovery_preserved');
     emitTextResponse(original, 'resp_preserved_continuation', 'continued');
@@ -6150,6 +6247,7 @@ describe('createResponsesWebSocketFetch', () => {
       accountId: 'acct-final-create-reserve',
       compactThreshold: 115_200,
       contextWindow: 128_000,
+      // SAFETY: The test fixture defines the asserted runtime shape.
       compactFetch: compactFetch as typeof fetch,
       overflowRecoveryDeadlineMs: 1_000,
       overflowRecoveryFinalCreateReserveMs: 100,
@@ -6202,6 +6300,7 @@ describe('createResponsesWebSocketFetch', () => {
       accountId: 'acct-overflow-auth-failure',
       compactThreshold: 115_200,
       contextWindow: 128_000,
+      // SAFETY: The test fixture defines the asserted runtime shape.
       compactFetch: compactFetch as typeof fetch,
     });
     const response = await withResponsesWebSocketDiagnosticContext(
@@ -6243,6 +6342,7 @@ describe('createResponsesWebSocketFetch', () => {
       accountId: 'acct-response-overflow',
       compactThreshold: 115_200,
       contextWindow: 128_000,
+      // SAFETY: The test fixture defines the asserted runtime shape.
       compactFetch: compactFetch as typeof fetch,
     });
     const root = [{ role: 'user', content: [{ type: 'input_text', text: 'first' }] }];
@@ -6297,6 +6397,7 @@ describe('createResponsesWebSocketFetch', () => {
       accountId: 'acct-response-overflow-no-replay',
       compactThreshold: 115_200,
       contextWindow: 128_000,
+      // SAFETY: The test fixture defines the asserted runtime shape.
       compactFetch: compactFetch as typeof fetch,
     });
     const terminal = await withResponsesWebSocketDiagnosticContext(
@@ -6347,6 +6448,7 @@ describe('createResponsesWebSocketFetch', () => {
       compactThreshold: 265_000,
       contextWindow: 1_000_000,
       checkpointStoreDir,
+      // SAFETY: The test fixture defines the asserted runtime shape.
       compactFetch: compactFetch as typeof fetch,
     };
     const root = [{
@@ -6418,6 +6520,7 @@ describe('createResponsesWebSocketFetch', () => {
     expect(compactBodies).toHaveLength(1);
     const resumedSocket = lastSocket();
     resumedSocket.emit('open');
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const sent = JSON.parse(resumedSocket.send.mock.calls[0]![0] as string);
     expect(sent.previous_response_id).toBeUndefined();
     expect(sent.input).toEqual([canonical[0], echoedCall, toolOutput]);
@@ -6450,6 +6553,7 @@ describe('createResponsesWebSocketFetch', () => {
       compactThreshold: 115_200,
       contextWindow: 128_000,
       checkpointStoreDir,
+      // SAFETY: The test fixture defines the asserted runtime shape.
       compactFetch: compactFetch as typeof fetch,
     };
     const root = [{
@@ -6529,6 +6633,7 @@ describe('createResponsesWebSocketFetch', () => {
     expect(compactBodies[1]).toEqual(firstCanonical);
     const recoveredSocket = lastSocket();
     recoveredSocket.emit('open');
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const sent = JSON.parse(recoveredSocket.send.mock.calls[0]![0] as string);
     expect(sent.previous_response_id).toBeUndefined();
     expect(sent.input).toEqual([
@@ -6556,6 +6661,7 @@ describe('createResponsesWebSocketFetch', () => {
         nextUser,
       ], { model: 'gpt-5.4' })),
     });
+    // SAFETY: The test fixture defines the asserted runtime shape.
     const continuationPayload = JSON.parse(recoveredSocket.send.mock.calls.at(-1)![0] as string);
     expect(continuationPayload.previous_response_id).toBe('resp_overflow_after_restart');
     expect(continuationPayload.input).toEqual([nextUser]);
@@ -6563,4 +6669,3 @@ describe('createResponsesWebSocketFetch', () => {
     await readAll(continued);
     rmSync(checkpointStoreDir, { recursive: true, force: true });
   });
-});

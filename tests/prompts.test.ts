@@ -5,7 +5,7 @@ import {
   sliceModelPage,
   MODEL_SEARCH_THRESHOLD,
   MODEL_PAGE_SIZE,
-} from '../src/prompts.js';
+} from '../src/cli/prompts.js';
 
 describe('filterModelsBySearch', () => {
   const models = [

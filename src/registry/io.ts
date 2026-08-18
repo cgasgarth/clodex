@@ -1,5 +1,6 @@
 // src/registry/io.ts — load/save providers.json with secure permissions
 
+import { isBoolean, isNumber, isObject, isString } from '../runtime/type-guards.js';
 import { randomUUID } from 'node:crypto';
 import {
   chmodSync,
@@ -15,8 +16,8 @@ import {
   writeSync,
 } from 'node:fs';
 import { dirname } from 'node:path';
-import { getAppHome, getProvidersPath } from '../paths.js';
-import type { ProviderRegistry, RegistryProvider } from './types.js';
+import { getAppHome, getProvidersPath } from '../config/paths.js';
+import type { CachedModel, ProviderRegistry, RegistryProvider } from './types.js';
 import { REGISTRY_SCHEMA_VERSION } from './types.js';
 import {
   assertRegistryWriteOwnership,
@@ -24,6 +25,9 @@ import {
 } from './lock.js';
 import { migrateOAuthOpenAiProvider } from './migrate.js';
 import { isValidProviderId } from './validate.js';
+import { diagnosticRecord } from '../observability/trace-log.js';
+import type { DiagnosticRecord } from '../observability/trace-log.js';
+import type { DiagnosticValue } from '../observability/trace-log.js';
 
 const DIR_MODE = 0o700;
 const FILE_MODE = 0o600;
@@ -69,24 +73,56 @@ export function syncParentDirectory(path: string): void {
     fd = openSync(dirname(path), 'r');
     fsyncSync(fd);
   } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
+    const code = isObject(error) && 'code' in error && isString(error.code)
+      ? error.code
+      : undefined;
     if (code !== 'EINVAL' && code !== 'ENOTSUP' && code !== 'EPERM') throw error;
   } finally {
     if (fd !== undefined) closeSync(fd);
   }
 }
 
-function parseProvider(raw: unknown): RegistryProvider | null {
-  if (!raw || typeof raw !== 'object') return null;
-  const p = raw as Record<string, unknown>;
-  if (typeof p.id !== 'string' || !isValidProviderId(p.id)) return null;
-  if (typeof p.templateId !== 'string' || !p.templateId) return null;
-  if (typeof p.name !== 'string' || !p.name) return null;
-  if (typeof p.enabled !== 'boolean') return null;
-  if (typeof p.authRef !== 'string' || !p.authRef) return null;
-  if (typeof p.addedAt !== 'string' || !p.addedAt) return null;
+function parseCachedModel(value: DiagnosticValue): CachedModel | null {
+  if (!value || !isObject(value) || Array.isArray(value)) return null;
+  const fields = diagnosticRecord(value);
+  if (!isString(fields.id) || !isString(fields.name)) return null;
+  if (
+    fields.modelFormat !== 'anthropic'
+    && fields.modelFormat !== 'openai'
+    && fields.modelFormat !== 'cloud-code'
+  ) return null;
+  const model: CachedModel = {
+    id: fields.id,
+    name: fields.name,
+    modelFormat: fields.modelFormat,
+  };
+  Object.assign(model, fields);
+  return model;
+}
+
+function parseProvider(raw: DiagnosticValue): RegistryProvider | null {
+  if (!raw || !isObject(raw)) return null;
+  const p = diagnosticRecord(raw);
+  if (!isString(p.id) || !isValidProviderId(p.id)) return null;
+  if (!isString(p.templateId) || !p.templateId) return null;
+  if (!isString(p.name) || !p.name) return null;
+  if (!isBoolean(p.enabled)) return null;
+  if (!isString(p.authRef) || !p.authRef) return null;
+  if (!isString(p.addedAt) || !p.addedAt) return null;
   const api = p.api;
-  if (!api || typeof api !== 'object') return null;
+  if (!api || !isObject(api)) return null;
+  const apiFields = diagnosticRecord(api);
+  const providerApi: RegistryProvider['api'] = {};
+  if (isString(apiFields.npm)) providerApi.npm = apiFields.npm;
+  if (isString(apiFields.url)) providerApi.url = apiFields.url;
+  if (isString(apiFields.id)) providerApi.id = apiFields.id;
+  if (apiFields.headers && isObject(apiFields.headers)) {
+    const headers: Record<string, string> = {};
+    for (const [key, value] of Object.entries(apiFields.headers)) {
+      if (isString(value)) headers[key] = value;
+    }
+    providerApi.headers = headers;
+  }
 
   const provider: RegistryProvider = {
     id: p.id,
@@ -94,7 +130,7 @@ function parseProvider(raw: unknown): RegistryProvider | null {
     name: p.name,
     enabled: p.enabled,
     authRef: p.authRef,
-    api: api,
+    api: providerApi,
     addedAt: p.addedAt,
   };
 
@@ -104,28 +140,31 @@ function parseProvider(raw: unknown): RegistryProvider | null {
   if (p.authType === 'api' || p.authType === 'oauth' || p.authType === 'none') {
     provider.authType = p.authType;
   }
-  if (typeof p.refreshedAt === 'string') provider.refreshedAt = p.refreshedAt;
-  if (p.modelsCache && typeof p.modelsCache === 'object') {
-    const cache = p.modelsCache as { fetchedAt?: string; models?: unknown[] };
-    if (typeof cache.fetchedAt === 'string' && Array.isArray(cache.models)) {
+  if (isString(p.refreshedAt)) provider.refreshedAt = p.refreshedAt;
+  if (p.modelsCache && isObject(p.modelsCache)) {
+    const cache = diagnosticRecord(p.modelsCache);
+    if (isString(cache.fetchedAt) && Array.isArray(cache.models)) {
+      const models: CachedModel[] = [];
+      for (const model of cache.models) {
+        const parsedModel = parseCachedModel(model);
+        if (parsedModel) models.push(parsedModel);
+      }
       provider.modelsCache = {
         fetchedAt: cache.fetchedAt,
-        models: cache.models.filter(m => m && typeof m === 'object') as RegistryProvider['modelsCache'] extends infer C
-          ? C extends { models: infer M } ? M : never
-          : never,
+        models,
       };
     }
   }
   return provider;
 }
 
-function hasOwn(record: Record<string, unknown>, key: string): boolean {
+function hasOwn(record: DiagnosticRecord, key: string): boolean {
   return Object.prototype.hasOwnProperty.call(record, key);
 }
 
-function hasValidStrictProviderFields(raw: unknown): boolean {
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return false;
-  const provider = raw as Record<string, unknown>;
+function hasValidStrictProviderFields(raw: DiagnosticValue): boolean {
+  if (!raw || !isObject(raw) || Array.isArray(raw)) return false;
+  const provider = diagnosticRecord(raw);
   if (hasOwn(provider, 'subscriptionFilter') && provider.subscriptionFilter !== 'free') {
     return false;
   }
@@ -137,27 +176,27 @@ function hasValidStrictProviderFields(raw: unknown): boolean {
   ) {
     return false;
   }
-  if (hasOwn(provider, 'refreshedAt') && typeof provider.refreshedAt !== 'string') {
+  if (hasOwn(provider, 'refreshedAt') && !isString(provider.refreshedAt)) {
     return false;
   }
   if (hasOwn(provider, 'modelsCache')) {
     const cache = provider.modelsCache;
-    if (!cache || typeof cache !== 'object' || Array.isArray(cache)) return false;
-    const fields = cache as Record<string, unknown>;
-    if (typeof fields.fetchedAt !== 'string' || !Array.isArray(fields.models)) {
+    if (!cache || !isObject(cache) || Array.isArray(cache)) return false;
+    const fields = diagnosticRecord(cache);
+    if (!isString(fields.fetchedAt) || !Array.isArray(fields.models)) {
       return false;
     }
-    if (fields.models.some(model => !model || typeof model !== 'object' || Array.isArray(model))) {
+    if (fields.models.some(model => !model || !isObject(model) || Array.isArray(model))) {
       return false;
     }
   }
   return true;
 }
 
-function parseRegistry(raw: unknown): ProviderRegistry {
+function parseRegistry(raw: DiagnosticValue): ProviderRegistry {
   const empty: ProviderRegistry = { schemaVersion: REGISTRY_SCHEMA_VERSION, providers: [] };
-  if (!raw || typeof raw !== 'object') return empty;
-  const data = raw as Record<string, unknown>;
+  if (!raw || !isObject(raw)) return empty;
+  const data = diagnosticRecord(raw);
   const providers: RegistryProvider[] = [];
   if (Array.isArray(data.providers)) {
     for (const entry of data.providers) {
@@ -167,19 +206,19 @@ function parseRegistry(raw: unknown): ProviderRegistry {
   }
   const registry: ProviderRegistry = {
     schemaVersion:
-      typeof data.schemaVersion === 'number' ? data.schemaVersion : REGISTRY_SCHEMA_VERSION,
+      isNumber(data.schemaVersion) ? data.schemaVersion : REGISTRY_SCHEMA_VERSION,
     providers,
   };
-  if (typeof data.importedAt === 'string') registry.importedAt = data.importedAt;
-  if (typeof data.pricingCacheAt === 'string') registry.pricingCacheAt = data.pricingCacheAt;
+  if (isString(data.importedAt)) registry.importedAt = data.importedAt;
+  if (isString(data.pricingCacheAt)) registry.pricingCacheAt = data.pricingCacheAt;
   return registry;
 }
 
-function parseRegistryStrict(raw: unknown): ProviderRegistry {
-  if (!raw || typeof raw !== 'object') {
+function parseRegistryStrict(raw: DiagnosticValue): ProviderRegistry {
+  if (!raw || !isObject(raw)) {
     throw new Error('Provider registry must be a JSON object.');
   }
-  const data = raw as Record<string, unknown>;
+  const data = diagnosticRecord(raw);
   if (data.schemaVersion !== REGISTRY_SCHEMA_VERSION) {
     throw new Error('Provider registry has an unsupported schema version.');
   }
@@ -195,7 +234,8 @@ function parseRegistryStrict(raw: unknown): ProviderRegistry {
 }
 
 function readRegistryStrict(path: string): ProviderRegistry {
-  return parseRegistryStrict(JSON.parse(readFileSync(path, 'utf8')));
+  const raw: DiagnosticValue = JSON.parse(readFileSync(path, 'utf8'));
+  return parseRegistryStrict(raw);
 }
 
 export function loadRegistry(path = getProvidersPath()): ProviderRegistry {
@@ -203,7 +243,7 @@ export function loadRegistry(path = getProvidersPath()): ProviderRegistry {
     return { schemaVersion: REGISTRY_SCHEMA_VERSION, providers: [] };
   }
   try {
-    const raw = JSON.parse(readFileSync(path, 'utf8'));
+    const raw: DiagnosticValue = JSON.parse(readFileSync(path, 'utf8'));
     const registry = parseRegistry(raw);
     const migrated = migrateOAuthOpenAiProvider(registry);
     if (migrated) {
@@ -260,11 +300,15 @@ export function saveRegistry(
     renameSync(tmp, path);
     syncParentDirectory(path);
   } finally {
-    try {
-      unlinkSync(tmp);
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
-    }
+    removeTemporaryRegistryFile(tmp);
+  }
+}
+
+function removeTemporaryRegistryFile(path: string): void {
+  try {
+    unlinkSync(path);
+  } catch (error) {
+    if (!isObject(error) || !('code' in error) || error.code !== 'ENOENT') throw error;
   }
 }
 
