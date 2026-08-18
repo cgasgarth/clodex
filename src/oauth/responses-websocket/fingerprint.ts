@@ -53,7 +53,7 @@ export function applyResponsesLiteContract(payload: JsonObject): JsonObject {
     ? { ...payload.reasoning }
     : {};
   reasoning.context = 'all_turns';
-  return { ...payload, reasoning, store: false };
+  return { ...payload, reasoning, store: false, parallel_tool_calls: false };
 }
 
 function canonicalize(value: JsonValue): JsonValue {

@@ -611,12 +611,12 @@ export function translateMessages(
 
 /**
  * Strip filler values GPT-family models emit for optional params instead of
- * omitting them: top-level `null` always, and empty arrays for properties the
- * tool's schema does not require. Claude Code forwards some tool inputs
- * verbatim into server-side API calls (e.g. WebSearch domain lists become the
- * `web_search` tool config, where an empty list is a 400), so filler must be
- * removed here. Required properties keep their empty arrays — there an empty
- * array is an intentional value (e.g. TodoWrite's `todos: []` clears the list).
+ * omitting them: top-level `null` always, and empty strings or arrays for
+ * properties the tool's schema does not require. Claude Code forwards some
+ * tool inputs verbatim into server-side API calls (e.g. WebSearch domain lists
+ * become the `web_search` tool config, where an empty list is a 400), so filler
+ * must be removed here. Required properties keep empty values — there they are
+ * intentional (e.g. TodoWrite's `todos: []` clears the list).
  */
 function sanitizeToolInput(
   input: ToolInput,
@@ -625,7 +625,7 @@ function sanitizeToolInput(
   const out: ToolInput = {};
   for (const [k, v] of Object.entries(input)) {
     if (v === null) continue;
-    if (Array.isArray(v) && v.length === 0 && !requiredProps?.has(k)) continue;
+    if ((v === '' || (Array.isArray(v) && v.length === 0)) && !requiredProps?.has(k)) continue;
     out[k] = v;
   }
   return out;
@@ -812,7 +812,7 @@ export function translateRequest(
         : openAiPromptCacheKey(baseSystem, upstreamTools),
     };
     if (upstreamTools.length > 0) {
-      openAiOptions.parallelToolCalls = body.tool_choice?.disable_parallel_tool_use !== true;
+      openAiOptions.parallelToolCalls = true;
     }
     if (supportsExplicitOpenAiCaching) {
       openAiOptions.promptCacheOptions = { mode: 'implicit', ttl: '30m' };
