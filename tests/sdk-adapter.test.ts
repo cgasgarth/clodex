@@ -349,6 +349,26 @@ describe('translateRequest', () => {
     });
   });
 
+  it('enables OpenAI parallel tool calls unless the client disables them', () => {
+    const request = {
+      model: 'gpt-5.6-sol',
+      messages: [{ role: 'user' as const, content: 'inspect both files' }],
+      tools: [
+        { name: 'Read', input_schema: { type: 'object', properties: {} } },
+        { name: 'Glob', input_schema: { type: 'object', properties: {} } },
+      ],
+      tool_choice: { type: 'auto' as const },
+    };
+    const enabled = translateRequest(request, '@ai-sdk/openai');
+    const disabled = translateRequest({
+      ...request,
+      tool_choice: { type: 'auto' as const, disable_parallel_tool_use: true },
+    }, '@ai-sdk/openai');
+
+    expect(enabled.providerOptions?.openai?.parallelToolCalls).toBe(true);
+    expect(disabled.providerOptions?.openai?.parallelToolCalls).toBe(false);
+  });
+
   it('sends instructions via providerOptions and omits system/max_tokens for OpenAI OAuth', () => {
     const params = translateRequest({
       model: 'gpt-5.5',
@@ -424,6 +444,52 @@ describe('translateRequest', () => {
     );
 
     expect(requestBody?.service_tier).toBe('priority');
+  });
+
+  it('serializes the Claude parallel-tool preference on OpenAI Responses requests', async () => {
+    const requestBodies: Record<string, unknown>[] = [];
+    const provider = createOpenAI({
+      apiKey: 'synthetic-test-key',
+      fetch: async (_input, init) => {
+        requestBodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+        return new Response(JSON.stringify({
+          id: `resp_parallel_${requestBodies.length}`,
+          model: 'gpt-5.6-sol',
+          output: [],
+          usage: {
+            input_tokens: 1,
+            input_tokens_details: { cached_tokens: 0 },
+            output_tokens: 0,
+            output_tokens_details: { reasoning_tokens: 0 },
+          },
+        }), { status: 200, headers: { 'content-type': 'application/json' } });
+      },
+    });
+    const request = {
+      model: 'gpt-5.6-sol',
+      messages: [{ role: 'user' as const, content: 'Inspect both files.' }],
+      tools: [
+        { name: 'Read', input_schema: { type: 'object', properties: {} } },
+        { name: 'Glob', input_schema: { type: 'object', properties: {} } },
+      ],
+      tool_choice: { type: 'auto' as const },
+    };
+
+    await generateAnthropicResponse(
+      provider.responses('gpt-5.6-sol'),
+      translateRequest(request, '@ai-sdk/openai'),
+      'gpt-5.6-sol',
+    );
+    await generateAnthropicResponse(
+      provider.responses('gpt-5.6-sol'),
+      translateRequest({
+        ...request,
+        tool_choice: { type: 'auto' as const, disable_parallel_tool_use: true },
+      }, '@ai-sdk/openai'),
+      'gpt-5.6-sol',
+    );
+
+    expect(requestBodies.map(body => body.parallel_tool_calls)).toEqual([true, false]);
   });
 
   it('strips Claude Code Anthropic billing attribution from OpenAI OAuth instructions only', () => {
@@ -804,6 +870,7 @@ describe('generateAnthropicResponse', () => {
       }],
       finishReason: 'tool-calls',
       usage: { inputTokens: 1, outputTokens: 2 },
+      finalStep: { providerMetadata: undefined },
     }));
 
     const body = await generateAnthropicResponse(

@@ -301,7 +301,11 @@ describe('createResponsesWebSocketFetch', () => {
     await wsFetch('https://x', {
       method: 'POST',
       headers: { 'x-openai-internal-codex-responses-lite': 'true' },
-      body: JSON.stringify({ model: 'gpt-5.6-luna', reasoning: { effort: 'high' } }),
+      body: JSON.stringify({
+        model: 'gpt-5.6-luna',
+        reasoning: { effort: 'high' },
+        parallel_tool_calls: true,
+      }),
     });
 
     const socket = lastSocket();
@@ -311,7 +315,7 @@ describe('createResponsesWebSocketFetch', () => {
     // Must be a `response.create` event with the Responses fields at top level.
     expect(sent.type).toBe('response.create');
     expect(sent.model).toBe('gpt-5.6-luna');
-    expect(sent.parallel_tool_calls).toBe(false);
+    expect(sent.parallel_tool_calls).toBe(true);
     expect(sent.store).toBe(false);
     expect(sent.reasoning).toEqual({ effort: 'high', context: 'all_turns' });
   });

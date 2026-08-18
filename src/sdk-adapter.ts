@@ -2,7 +2,7 @@
 import { createHash } from 'node:crypto';
 import { streamText, generateText, tool, jsonSchema } from 'ai';
 import type { LanguageModel, ModelMessage, ToolSet } from 'ai';
-import { openai } from '@ai-sdk/openai';
+import { openai, type OpenAIResponsesProviderOptions } from '@ai-sdk/openai';
 import {
   sseChunk,
   encodeToolUseId,
@@ -82,7 +82,11 @@ export interface AnthropicRequest {
   system?: string | Array<string | { text?: string; cache_control?: { type?: string; ttl?: string } }>;
   messages: AnthropicMsg[];
   tools?: AnthropicTool[];
-  tool_choice?: { type: 'auto' | 'any' | 'tool'; name?: string };
+  tool_choice?: {
+    type: 'auto' | 'any' | 'tool';
+    name?: string;
+    disable_parallel_tool_use?: boolean;
+  };
   max_tokens?: number;
   temperature?: number;
   stream?: boolean;
@@ -715,15 +719,19 @@ export function translateRequest(
   // blocks, while retaining an automatic latest-message breakpoint as fallback.
   if (npm === '@ai-sdk/openai') {
     const claudeSessionId = extractClaudeSessionId(body, options?.claudeSessionId);
+    const openAiOptions = {
+      promptCacheKey: claudeSessionId
+        ? claudeSessionPromptCacheKey(claudeSessionId)
+        : openAiPromptCacheKey(baseSystem, upstreamTools),
+      ...(upstreamTools.length > 0
+        ? { parallelToolCalls: body.tool_choice?.disable_parallel_tool_use !== true }
+        : {}),
+      ...(supportsExplicitOpenAiCaching
+        ? { promptCacheOptions: { mode: 'implicit' as const, ttl: '30m' as const } }
+        : {}),
+    } satisfies OpenAIResponsesProviderOptions;
     providerOptions = deepMergeProviderOptions(providerOptions, {
-      openai: {
-        promptCacheKey: claudeSessionId
-          ? claudeSessionPromptCacheKey(claudeSessionId)
-          : openAiPromptCacheKey(baseSystem, upstreamTools),
-        ...(supportsExplicitOpenAiCaching
-          ? { promptCacheOptions: { mode: 'implicit', ttl: '30m' } }
-          : {}),
-      },
+      openai: openAiOptions,
     });
   }
 
@@ -1301,12 +1309,13 @@ export async function generateAnthropicResponse(
       SDK_TOTAL_TIMEOUT_MS,
     );
     try {
-    const r = await (options?.generateText ?? generateText)({
+      const r = await (options?.generateText ?? generateText)({
         model,
         ...params,
         abortSignal: generateAbort.signal,
       } as Parameters<typeof generateText>[0]);
-      ({ text, toolCalls, finishReason, usage, providerMetadata } = r);
+      ({ text, toolCalls, finishReason, usage } = r);
+      providerMetadata = r.finalStep.providerMetadata;
     } finally {
       stopForwardingAbort();
       clearTimeout(totalTimer);
