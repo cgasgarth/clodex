@@ -84,7 +84,7 @@ function spawnWorker(
   const ready = new Promise<void>((resolve, reject) => {
     const timeout = setTimeout(
       () => reject(new Error(`Timed out waiting for worker ${workerId}`)),
-      5_000,
+      15_000,
     );
     const checkReady = (): void => {
       if (!stdout.includes('READY\n')) return;

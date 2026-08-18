@@ -65,6 +65,7 @@ import { resolveOpenAiCompactionThreshold } from '../oauth/responses-compaction.
 import { resolveContextWindow } from '../models/context-window.js';
 import { getOrCreateProxyToken } from './token.js';
 import { BunHttpResponse } from '../transport/bun-http-response.js';
+import { waitForTcpListener } from '../transport/listener-ready.js';
 import type { ApiProcessingMode } from '../daemon/api-pricing.js';
 import {
   RESPONSE_STREAM_MAX_RETRIES,
@@ -532,6 +533,22 @@ function prepareAgentStreamTransaction(
     },
   });
   return { ...prepared, state };
+}
+
+async function requireReachableProxyServer(
+  server: Bun.Server<undefined>,
+  onRejection: (cause: unknown) => void,
+  onException: (error: Error) => void,
+): Promise<number> {
+  const boundPort = server.port;
+  if (boundPort !== undefined && await waitForTcpListener('127.0.0.1', boundPort)) {
+    return boundPort;
+  }
+  await server.stop(true);
+  process.off('unhandledRejection', onRejection);
+  process.off('uncaughtException', onException);
+  if (boundPort === undefined) throw new Error('Proxy did not bind to a TCP port');
+  throw new Error(`Proxy did not become reachable on 127.0.0.1:${boundPort}`);
 }
 
 export async function startProxyCatalog(
@@ -1146,13 +1163,7 @@ export async function startProxyCatalog(
     process.off('uncaughtException', onException);
     throw error;
   }
-  const boundPort = server.port;
-  if (boundPort === undefined) {
-    await server.stop(true);
-    process.off('unhandledRejection', onRejection);
-    process.off('uncaughtException', onException);
-    throw new Error('Proxy did not bind to a TCP port');
-  }
+  const boundPort = await requireReachableProxyServer(server, onRejection, onException);
   plog(() =>
     `started on port ${boundPort}, catalog=${routes.length} model(s), default=${catalog.defaultRoute.aliasId}`,
   );
