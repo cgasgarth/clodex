@@ -16,7 +16,10 @@ const COMPACT_BODY_FIELDS = [
   'text',
 ] as const;
 
-export const OPENAI_COMPACTION_DEFAULT_RATIO = 0.9;
+export const OPENAI_COMPACTION_DEFAULT_THRESHOLD = 350_000;
+export const OPENAI_COMPACTION_MAX_CONTEXT_RATIO = 0.9;
+const OPENAI_COMPACTION_REARM_CONTEXT_RATIO = 0.05;
+const OPENAI_COMPACTION_REARM_MIN_TOKENS = 16_000;
 // Native compaction on a large context can legitimately take several minutes.
 // Prefer preserving the thread over failing a healthy but slow compaction.
 export const RESPONSES_COMPACT_TIMEOUT_MS = NATIVE_COMPACTION_TIMEOUT_MS;
@@ -88,8 +91,8 @@ export class ResponsesCompactionError extends Error {
 }
 
 /**
- * Resolve the native-compaction threshold. The default mirrors Codex:
- * compact at 90% of the model's advertised context window.
+ * Resolve the native-compaction threshold. Opted-in GPT models compact at
+ * 350K input tokens, capped at 90% of smaller advertised context windows.
  *
  * Native compaction is experimental and off by default. Set
  * CLODEX_OPENAI_COMPACTION=1 to opt in.
@@ -102,7 +105,7 @@ export function resolveOpenAiCompactionThreshold(
   if (!configured || !ENABLED_VALUES.has(configured)) return undefined;
 
   const modelSafeThreshold = Number.isFinite(contextWindow) && (contextWindow ?? 0) > 0
-    ? Math.floor(contextWindow! * OPENAI_COMPACTION_DEFAULT_RATIO)
+    ? Math.floor(contextWindow! * OPENAI_COMPACTION_MAX_CONTEXT_RATIO)
     : undefined;
   const explicit = env.CLODEX_OPENAI_COMPACT_THRESHOLD?.trim();
   if (explicit) {
@@ -114,7 +117,34 @@ export function resolveOpenAiCompactionThreshold(
     }
   }
 
-  return modelSafeThreshold;
+  return modelSafeThreshold === undefined
+    ? undefined
+    : Math.min(OPENAI_COMPACTION_DEFAULT_THRESHOLD, modelSafeThreshold);
+}
+
+/**
+ * Prevent a compacted response whose opaque state remains near the configured
+ * threshold from immediately starting another compaction. The hard context
+ * limit remains the final overflow boundary.
+ */
+export function resolveOpenAiCompactionRearmThreshold(
+  configuredThreshold: number,
+  postCompactionInputTokens: number,
+  contextWindow: number | undefined,
+): number {
+  const growth = Number.isFinite(contextWindow) && (contextWindow ?? 0) > 0
+    ? Math.max(
+        OPENAI_COMPACTION_REARM_MIN_TOKENS,
+        Math.floor(contextWindow! * OPENAI_COMPACTION_REARM_CONTEXT_RATIO),
+      )
+    : OPENAI_COMPACTION_REARM_MIN_TOKENS;
+  const candidate = Math.max(
+    configuredThreshold,
+    postCompactionInputTokens + growth,
+  );
+  return Number.isFinite(contextWindow) && (contextWindow ?? 0) > 0
+    ? Math.min(candidate, Math.max(configuredThreshold, Math.floor(contextWindow!) - 1))
+    : candidate;
 }
 
 export function responsesCompactUrl(input: string | URL | Request): string {

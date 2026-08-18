@@ -141,7 +141,8 @@ restart.
 
 Native compaction is off by default because OpenAI's compacted chain and
 Claude's saved transcript are different state. Enable and tune it with
-`CLODEX_OPENAI_COMPACTION=1` and `CLODEX_OPENAI_COMPACT_THRESHOLD`; read the
+`CLODEX_OPENAI_COMPACTION=1`; the default GPT trigger is 350K input tokens.
+Override it with `CLODEX_OPENAI_COMPACT_THRESHOLD` when needed, and read the
 [native compaction guide](docs/native-codex-compaction.md) before doing so.
 
 ### Secondwind

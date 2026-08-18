@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { anthropicErrorType, clampRetryAfterSeconds } from '../../upstream-error.js';
 import { deleteStoredResponsesCheckpoint } from '../responses-checkpoint-store.js';
+import { resolveOpenAiCompactionRearmThreshold } from '../responses-compaction.js';
 import {
   TERMINAL_EVENT_TYPES,
   FAILURE_EVENT_TYPES,
@@ -46,7 +47,6 @@ import {
   emitResponseErrorDiagnostic,
   trackReasoningProtocol,
   responseUsage,
-  withUsageOffset,
   responseUsageDebug,
   captureOutput,
   expectedAssistantItems,
@@ -85,6 +85,8 @@ export function beginRecycledLineage(entry: ConnectionEntry): void {
   entry.expectedAssistantKinds = undefined;
   entry.compactedInput = undefined;
   entry.lastInputTokens = undefined;
+  entry.postCompactionInputTokens = undefined;
+  entry.nextCompactionInputTokens = undefined;
   entry.claudeCompactionSummaryHash = undefined;
   entry.claudeAgentId = undefined;
   entry.recyclableAgentHead = false;
@@ -431,9 +433,6 @@ function handleSocketMessage(entry: ConnectionEntry, data: RawData): void {
   captureOutput(ctx, event);
   if (TERMINAL_EVENT_TYPES.has(type ?? '')) {
     ctx.modelResponseUsage = responseUsage(event);
-    if (type === 'response.completed' && ctx.usageOffset) {
-      event = withUsageOffset(event, ctx.usageOffset);
-    }
     const usage = responseUsage(event);
     if (usage) {
       ctx.responseUsage = usage;
@@ -592,6 +591,28 @@ function handleSocketMessage(entry: ConnectionEntry, data: RawData): void {
         }),
       );
       entry.lastInputTokens = ctx.modelResponseUsage?.inputTokens;
+      if (
+        ctx.establishCompactionRearm
+        && ctx.compactThreshold !== undefined
+        && ctx.modelResponseUsage?.inputTokens !== undefined
+      ) {
+        entry.postCompactionInputTokens = ctx.modelResponseUsage.inputTokens;
+        entry.nextCompactionInputTokens = resolveOpenAiCompactionRearmThreshold(
+          ctx.compactThreshold,
+          ctx.modelResponseUsage.inputTokens,
+          ctx.contextWindow,
+        );
+        emitContextDiagnostic(entry, ctx, {
+          event: 'ws_compaction',
+          outcome: 'rearmed',
+          configuredThreshold: ctx.compactThreshold,
+          postCompactionInputTokens: entry.postCompactionInputTokens,
+          nextCompactionInputTokens: entry.nextCompactionInputTokens,
+        });
+      } else {
+        entry.postCompactionInputTokens = ctx.postCompactionInputTokens;
+        entry.nextCompactionInputTokens = ctx.nextCompactionInputTokens;
+      }
       entry.promptFieldHashes = ctx.promptFieldHashes;
       entry.instructionsSnapshot = ctx.instructionsSnapshot;
       entry.lastUsedAt = now;

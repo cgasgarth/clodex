@@ -33,6 +33,8 @@ function checkpoint(
     expectedAssistantKinds: ['assistant'],
     compactedInput: [{ type: 'compaction', encrypted_content: 'opaque-state' }],
     lastInputTokens: 42,
+    postCompactionInputTokens: 40,
+    nextCompactionInputTokens: 16_040,
     lastUsedAt,
   };
 }
