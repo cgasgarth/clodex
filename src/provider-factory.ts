@@ -1,9 +1,9 @@
 // Maps an OpenCode provider's `npm` package (the field providers.ts already
 // reads) to a Vercel AI SDK LanguageModel instance. The SDK owns wire format,
 // endpoint selection, and provider quirks.
-import type { LanguageModel, ProviderMetadata } from 'ai';
+import type { LanguageModel } from 'ai';
 import { wrapLanguageModel, extractReasoningMiddleware } from 'ai';
-import type { FetchFunction } from '@ai-sdk/provider-utils';
+import type { FetchFunction, ProviderOptions } from '@ai-sdk/provider-utils';
 import type { ProviderDataValue } from './types.js';
 import { VERTEX_ANTHROPIC_NPM, CODEX_RESPONSES_LITE_VERSION, CODEX_RESPONSES_LITE_WS_URL } from './constants.js';
 import { extractOpenAiAccountId } from './oauth/openai.js';
@@ -118,8 +118,6 @@ export interface ProviderModelSpec {
   headers?: Record<string, string>;
   /** Backend capability: model requires the Responses-Lite request shape (x-openai-internal-codex-responses-lite). */
   useResponsesLite?: boolean;
-  /** Backend capability: model must use the WebSocket Responses transport instead of HTTP. */
-  preferWebSockets?: boolean;
   /** Native compaction token threshold for OAuth Responses models. */
   openAiCompactThreshold?: number;
   /** Hard model context window used to prevent known-oversized Responses sends. */
@@ -211,7 +209,7 @@ export async function createLanguageModel(
             ...spec.headers,
             ...(accountId && { 'ChatGPT-Account-Id': accountId }),
             originator: 'clodex',
-            // Responses-Lite models (backend prefer_websockets/use_responses_lite,
+            // Responses-Lite models (backend use_responses_lite,
             // e.g. gpt-5.6-luna) require these on the request.
             ...(spec.useResponsesLite && {
               version: CODEX_RESPONSES_LITE_VERSION,
@@ -219,9 +217,8 @@ export async function createLanguageModel(
             }),
           },
           // Keep every ChatGPT/Codex OAuth Responses conversation on the
-          // persistent WebSocket transport. Models flagged prefer_websockets
-          // require it; the remaining OAuth Responses models benefit from the
-          // same connection-local previous_response_id continuation cache.
+          // persistent WebSocket transport so connection-local
+          // previous_response_id continuation remains available.
           ...(useResponsesEndpoint && {
                 fetch: (dependencies.createResponsesWebSocketFetch ?? createResponsesWebSocketFetch)(
                   CODEX_RESPONSES_LITE_WS_URL,
@@ -545,7 +542,7 @@ function mapCodexEffortToDeepSeek(effort: string): 'high' | 'max' | 'off' | unde
 /** DeepSeek thinking toggle spreads via provider id keys on @ai-sdk/openai-compatible. */
 function deepSeekEffortProviderOptions(
   effort: string,
-): ProviderMetadata | undefined {
+): ProviderOptions | undefined {
   const mapped = mapCodexEffortToDeepSeek(effort);
   if (!mapped) return undefined;
   const thinking = { type: mapped === 'off' ? 'disabled' : 'enabled' };
@@ -862,7 +859,7 @@ export function effortProviderOptions(
   effort?: string,
   modelId?: string,
   metadata?: ReasoningMetadata,
-): ProviderMetadata | undefined {
+): ProviderOptions | undefined {
   if (!effort) return undefined;
 
   if (isOpenRouterRoute(npm, metadata)) {
@@ -961,14 +958,14 @@ export function effortProviderOptions(
 }
 
 export function deepMergeProviderOptions(
-  a?: ProviderMetadata,
-  b?: ProviderMetadata,
-): ProviderMetadata | undefined {
+  a?: ProviderOptions,
+  b?: ProviderOptions,
+): ProviderOptions | undefined {
   if (!a && !b) return undefined;
   if (!a) return b;
   if (!b) return a;
   const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
-  const out: ProviderMetadata = {};
+  const out: ProviderOptions = {};
   for (const key of keys) {
     out[key] = { ...a[key], ...b[key] };
   }
@@ -976,7 +973,7 @@ export function deepMergeProviderOptions(
 }
 
 /** Per-provider providerOptions to request reasoning/thinking output. */
-export function thinkingProviderOptions(npm: string): ProviderMetadata | undefined {
+export function thinkingProviderOptions(npm: string): ProviderOptions | undefined {
   if (npm === '@ai-sdk/google') {
     return { google: { thinkingConfig: { includeThoughts: true } } };
   }

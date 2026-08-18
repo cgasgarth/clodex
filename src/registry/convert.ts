@@ -22,7 +22,6 @@ function modelToCached(model: LocalProviderModel): CachedModel {
     reasoning: model.reasoning,
     interleavedReasoningField: model.interleavedReasoningField,
     useResponsesLite: model.useResponsesLite,
-    preferWebSockets: model.preferWebSockets,
   };
 }
 

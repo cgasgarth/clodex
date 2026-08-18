@@ -1,41 +1,18 @@
 // Shared helpers for Anthropic ↔ upstream translation proxies.
-import { isObject, isString } from '../runtime/type-guards.js';
+import { isString } from '../runtime/type-guards.js';
 import type { ProviderMetadata } from 'ai';
-import { diagnosticRecord } from '../observability/trace-log.js';
 import type { DiagnosticRecord } from '../observability/trace-log.js';
-
-export type FullStreamPart = {
-  type: string;
-  id?: string;
-  text?: string;
-  delta?: string;
-  toolName?: string;
-  toolCallId?: string;
-  input?: unknown;
-  output?: unknown;
-  providerExecuted?: boolean;
-  finishReason?: string;
-  totalUsage?: {
-    inputTokens?: number;
-    outputTokens?: number;
-    inputTokenDetails?: { cacheReadTokens?: number; cacheWriteTokens?: number };
-    /** AI SDK 6 compatibility for older third-party LanguageModel implementations. */
-    cachedInputTokens?: number;
-  };
-  providerMetadata?: ProviderMetadata;
-  error?: unknown;
-  reason?: string;
-};
 
 interface ProxyPayload {
   value: unknown;
 }
 
-export function grabRoundTripSignature(part: FullStreamPart): string | undefined {
-  const md = part.providerMetadata;
-  const thoughtSignature = md?.google?.thoughtSignature
-    ?? md?.google?.thought_signature
-    ?? md?.openai?.reasoningEncryptedContent;
+export function grabRoundTripSignature(
+  providerMetadata: ProviderMetadata | undefined,
+): string | undefined {
+  const thoughtSignature = providerMetadata?.google?.thoughtSignature
+    ?? providerMetadata?.google?.thought_signature
+    ?? providerMetadata?.openai?.reasoningEncryptedContent;
   return isString(thoughtSignature) ? thoughtSignature : undefined;
 }
 
@@ -44,7 +21,7 @@ let sdkWarningsSilenced = false;
 export function silenceSdkWarnings(): void {
   if (sdkWarningsSilenced) return;
   sdkWarningsSilenced = true;
-  Object.assign(globalThis, { AI_SDK_LOG_WARNINGS: false });
+  globalThis.AI_SDK_LOG_WARNINGS = false;
 }
 
 const TOOL_USE_SIG_SEP = '__ts__';
@@ -57,21 +34,6 @@ function rememberToolSignature(rawId: string, thoughtSignature: string): void {
   if (toolSignatureRegistry.size <= MAX_STORED_TOOL_SIGNATURES) return;
   const oldest = toolSignatureRegistry.keys().next().value;
   if (oldest) toolSignatureRegistry.delete(oldest);
-}
-
-export function parseToolArguments(value: ProxyPayload['value']): DiagnosticRecord {
-  if (value === null || value === undefined) return {};
-  if (isObject(value) && !Array.isArray(value)) return diagnosticRecord(value);
-  if (isString(value)) {
-    if (!value) return {};
-    try {
-      const parsed = JSON.parse(value);
-      if (isObject(parsed) && parsed !== null && !Array.isArray(parsed)) {
-        return diagnosticRecord(parsed);
-      }
-    } catch { /* fall through */ }
-  }
-  return {};
 }
 
 export function sseChunk(eventType: string, data: ProxyPayload['value']): string {

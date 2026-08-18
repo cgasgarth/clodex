@@ -390,7 +390,8 @@ describe('formatModelCatalogLines', () => {
     const lines = formatModelCatalogLines(catalogModels);
 
     expect(lines).toContain('  go (2, 1 duplicate hidden)');
-    expect(lines.some(line => line.includes('#') && line.includes('Model') && line.includes('Anthropic ID') && line.includes('OpenAI ID'))).toBe(true);
+    expect(lines.some(line => line.includes('#') && line.includes('Model') && line.includes('Anthropic ID'))).toBe(true);
+    expect(lines.some(line => line.includes('OpenAI ID'))).toBe(false);
     expect(lines.some(line => line.includes('DeepSeek V4 Flash') && line.includes('anthropic-go__deepseek-v4-flash') && line.includes('deepseek-v4-flash'))).toBe(true);
     expect(lines.filter(line => line.includes('DeepSeek V4 Flash'))).toHaveLength(1);
   });

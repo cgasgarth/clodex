@@ -168,9 +168,8 @@ ${pc.bold('Proxy mode env:')}
   Start clodex server --proxy, then export the HTTPS_PROXY, HTTP_PROXY,
   and NODE_EXTRA_CA_CERTS values it prints. Do not set ANTHROPIC_BASE_URL.
 
-${pc.bold('Gateway endpoints (endpoint mode):')}
+${pc.bold('Gateway endpoint (endpoint mode):')}
   Anthropic-compatible:  ANTHROPIC_BASE_URL=http://127.0.0.1:17645/anthropic
-  OpenAI-compatible:     OPENAI_BASE_URL=http://127.0.0.1:17645/openai/v1
   API key: use anything locally; use the server password in network mode.
 
 ${pc.bold('Examples:')}

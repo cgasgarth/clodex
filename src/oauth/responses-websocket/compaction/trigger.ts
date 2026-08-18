@@ -75,9 +75,6 @@ export async function runCompactionTrigger({
             overflowRetried: false,
             outputByIndex: new Map(),
             outputIndexByItemId: new Map(),
-            reasoningPartsByItemId: new Map(),
-            recentUpstreamEventTypes: [],
-            emittedProtocolAnomalies: new Set(),
             emitDiagnostic: diagnostic,
             createReplacement,
           };

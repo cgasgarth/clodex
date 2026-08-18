@@ -24,9 +24,8 @@ interface OAuthModelSeed {
   /** ChatGPT Codex client input window, which may differ from the public API model. */
   contextWindow?: number;
   reasoning?: boolean;
-  /** Backend capability seed — mirrors the live use_responses_lite/prefer_websockets flags. */
+  /** Backend capability seed — mirrors the live use_responses_lite flag. */
   useResponsesLite?: boolean;
-  preferWebSockets?: boolean;
 }
 
 /** Claude-facing context policy shared by the GPT-5.6 Sol, Terra, and Luna routes. */
@@ -47,7 +46,7 @@ const OPENAI_OAUTH_MODEL_SEEDS: OAuthModelSeed[] = [
   // GPT-5.6 family (Sol / Terra / Luna)
   { id: 'gpt-5.6-sol',          name: 'GPT-5.6 Sol',       contextWindow: GPT_5_6_CONTEXT_WINDOW, reasoning: true },
   { id: 'gpt-5.6-terra',        name: 'GPT-5.6 Terra',     contextWindow: GPT_5_6_CONTEXT_WINDOW, reasoning: true },
-  { id: 'gpt-5.6-luna',         name: 'GPT-5.6 Luna',      contextWindow: GPT_5_6_CONTEXT_WINDOW, reasoning: true, useResponsesLite: true, preferWebSockets: true },
+  { id: 'gpt-5.6-luna',         name: 'GPT-5.6 Luna',      contextWindow: GPT_5_6_CONTEXT_WINDOW, reasoning: true, useResponsesLite: true },
   // GPT-5.5 family (Pro)
   { id: 'gpt-5.5',              name: 'GPT-5.5',           contextWindow: 272_000, reasoning: true },
   // GPT-5.4 family
@@ -77,7 +76,6 @@ export function buildOpenAiOAuthModels(): CachedModel[] {
       npm: '@ai-sdk/openai',
       reasoning: seed.reasoning,
       useResponsesLite: seed.useResponsesLite,
-      preferWebSockets: seed.preferWebSockets,
     };
   });
 }

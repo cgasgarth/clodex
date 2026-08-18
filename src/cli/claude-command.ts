@@ -488,7 +488,6 @@ export async function runClaudeCommand(
           reasoning: selectedModel.reasoning,
           interleavedReasoningField: selectedModel.interleavedReasoningField,
           useResponsesLite: selectedModel.useResponsesLite,
-          preferWebSockets: selectedModel.preferWebSockets,
           processingMode: parsed.fast
             && activeProvider.id === 'openai-oauth'
             && activeProvider.authType === 'oauth'

@@ -48,7 +48,6 @@ import {
   responseFailureDetails,
   emitContextDiagnostic,
   emitResponseErrorDiagnostic,
-  trackReasoningProtocol,
   responseUsage,
   responseUsageDebug,
   captureOutput,
@@ -408,9 +407,6 @@ export function resetContextForRetry(ctx: RequestContext): void {
   ctx.modelResponseUsage = undefined;
   ctx.outputByIndex.clear();
   ctx.outputIndexByItemId.clear();
-  ctx.reasoningPartsByItemId.clear();
-  ctx.recentUpstreamEventTypes = [];
-  ctx.emittedProtocolAnomalies.clear();
 }
 
 function handleSocketMessage(entry: ConnectionEntry, data: RawData): void {
@@ -441,7 +437,6 @@ function handleSocketMessage(entry: ConnectionEntry, data: RawData): void {
   }
 
   const type = eventType(event);
-  trackReasoningProtocol(entry, ctx, event, type);
   captureOutput(ctx, event);
   if (TERMINAL_EVENT_TYPES.has(type ?? '')) {
     ctx.modelResponseUsage = responseUsage(event);

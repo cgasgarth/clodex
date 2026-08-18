@@ -69,14 +69,13 @@ async function refreshOAuthProvider(
   throw new Error(`refreshOAuthProvider: unsupported template "${tpl}"`);
 }
 
-/** A parsed model entry, including backend-reported transport capability flags. */
+/** A parsed model entry, including backend-reported request capability flags. */
 interface OpenAiModelEntry {
   id: string;
   name: string;
   context_window?: number;
-  /** Backend flags: model needs the Responses-Lite shape / WebSocket transport. */
+  /** Backend flag: model needs the Responses-Lite shape. */
   useResponsesLite?: boolean;
-  preferWebSockets?: boolean;
 }
 
 interface OpenAiModelPayload {
@@ -97,11 +96,10 @@ function optionalFiniteNumber(record: DiagnosticRecord, key: string): number | u
   return isNumber(value) && Number.isFinite(value) ? value : undefined;
 }
 
-/** Read the Responses-Lite / WebSocket capability flags off a raw model entry. */
-function readCapabilityFlags(m: DiagnosticRecord): Pick<OpenAiModelEntry, 'useResponsesLite' | 'preferWebSockets'> {
+/** Read the Responses-Lite capability flag off a raw model entry. */
+function readCapabilityFlags(m: DiagnosticRecord): Pick<OpenAiModelEntry, 'useResponsesLite'> {
   return {
     useResponsesLite: optionalBoolean(m['use_responses_lite']),
-    preferWebSockets: optionalBoolean(m['prefer_websockets']),
   };
 }
 
@@ -154,7 +152,6 @@ function buildDynamicOAuthModel(entry: OpenAiModelEntry, seedById: Map<string, C
       ...seed,
       contextWindow,
       useResponsesLite: entry.useResponsesLite ?? seed.useResponsesLite,
-      preferWebSockets: entry.preferWebSockets ?? seed.preferWebSockets,
     };
   }
   const { id } = entry;
@@ -170,7 +167,6 @@ function buildDynamicOAuthModel(entry: OpenAiModelEntry, seedById: Map<string, C
     npm: '@ai-sdk/openai',
     reasoning: modelPrefersResponsesApi(id),
     useResponsesLite: entry.useResponsesLite,
-    preferWebSockets: entry.preferWebSockets,
   };
 }
 

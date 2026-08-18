@@ -44,8 +44,6 @@ export interface ServerModelInfo {
   interleavedReasoningField?: string;
   /** Backend capability: model requires the Responses-Lite request shape (x-openai-internal-codex-responses-lite). */
   useResponsesLite?: boolean;
-  /** Backend capability: model must use the WebSocket Responses transport instead of HTTP. */
-  preferWebSockets?: boolean;
   /** Fallback reasoning effort when the client omits output_config.effort. */
   defaultEffort?: string;
   contextWindow?: number;
@@ -65,7 +63,6 @@ export interface ModelCatalog {
 }
 
 const CREATED_AT_ISO = '2025-01-01T00:00:00Z';
-const CREATED_AT_UNIX = 1735689600;
 
 export function formatAnthropicModelEntry(
   id: string,
@@ -205,10 +202,9 @@ export function upstreamModelId(model: ServerModelInfo): string {
 export interface ModelCatalogRow {
   name: string;
   anthropicId: string;
-  openaiId: string;
 }
 
-/** Dedupe by (name, anthropicId, openaiId) — same model can appear twice in a provider's raw list. */
+/** Dedupe by name and Anthropic id — the same model can appear twice in a provider's raw list. */
 export function buildDedupedModelRows(models: ServerModelInfo[], opts?: GatewayModelOptions): ModelCatalogRow[] {
   const seen = new Set<string>();
   const rows: ModelCatalogRow[] = [];
@@ -216,28 +212,11 @@ export function buildDedupedModelRows(models: ServerModelInfo[], opts?: GatewayM
     const row: ModelCatalogRow = {
       name: model.name,
       anthropicId: exposedGatewayAliasId(model, opts),
-      openaiId: model.id,
     };
-    const key = `${row.name}\u0000${row.anthropicId}\u0000${row.openaiId}`;
+    const key = `${row.name}\u0000${row.anthropicId}`;
     if (seen.has(key)) continue;
     seen.add(key);
     rows.push(row);
   }
   return rows;
-}
-
-export function supportsDirectOpenAIChatCompletions(model: ServerModelInfo): boolean {
-  return model.modelFormat === 'openai' && !!model.completionsUrl;
-}
-
-export function formatOpenAIModels(models: ServerModelInfo[]) {
-  return {
-    object: 'list',
-    data: models.map(model => ({
-      id: model.id,
-      object: 'model',
-      created: CREATED_AT_UNIX,
-      owned_by: model.sourceBackend,
-    })),
-  };
 }
