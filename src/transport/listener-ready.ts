@@ -1,4 +1,5 @@
 import { connect, type AddressInfo, type Server } from 'node:net';
+import { request } from 'node:http';
 import { setTimeout as delay } from 'node:timers/promises';
 
 const LISTENER_READY_TIMEOUT_MS = 1_000;
@@ -56,6 +57,32 @@ interface TcpListenerWaitOptions {
   delay?: (ms: number) => Promise<void>;
 }
 
+interface HttpListenerWaitOptions {
+  now?: () => number;
+  probe?: (url: string, timeoutMs: number) => Promise<boolean>;
+  delay?: (ms: number) => Promise<void>;
+}
+
+function probeHttpListener(url: string, timeoutMs: number): Promise<boolean> {
+  return new Promise(resolve => {
+    const probe = request(url, { method: 'HEAD' });
+    let settled = false;
+    const finish = (ready: boolean) => {
+      if (settled) return;
+      settled = true;
+      probe.destroy();
+      resolve(ready);
+    };
+    probe.once('response', response => {
+      response.resume();
+      finish(true);
+    });
+    probe.once('error', () => finish(false));
+    probe.setTimeout(timeoutMs, () => finish(false));
+    probe.end();
+  });
+}
+
 /**
  * Probe every candidate once per round and return the first reachable
  * candidate in caller-provided priority order. All retry rounds share one
@@ -110,6 +137,29 @@ export async function waitForTcpListener(
   options: TcpListenerWaitOptions = {},
 ): Promise<boolean> {
   return (await waitForTcpListenerCandidate(host, [{ port }], timeoutMs, options)) !== null;
+}
+
+/** Retry an HTTP probe until the listener answers or the deadline expires. */
+export async function waitForHttpListener(
+  url: string,
+  timeoutMs = LISTENER_READY_TIMEOUT_MS,
+  options: HttpListenerWaitOptions = {},
+): Promise<boolean> {
+  const now = options.now ?? Date.now;
+  const probe = options.probe ?? probeHttpListener;
+  const wait = options.delay ?? (ms => delay(ms));
+  const deadline = now() + timeoutMs;
+
+  do {
+    const remaining = Math.max(1, deadline - now());
+    if (await probe(url, Math.min(remaining, TCP_PROBE_TIMEOUT_MS))) return true;
+
+    const retryDelay = Math.min(LISTENER_READY_RETRY_MS, deadline - now());
+    if (retryDelay <= 0) return false;
+    await wait(retryDelay);
+  } while (now() < deadline);
+
+  return false;
 }
 
 async function closeAfterReadinessFailure(server: Server): Promise<void> {

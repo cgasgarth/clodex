@@ -65,7 +65,7 @@ import { resolveOpenAiCompactionThreshold } from '../oauth/responses-compaction.
 import { resolveContextWindow } from '../models/context-window.js';
 import { getOrCreateProxyToken } from './token.js';
 import { BunHttpResponse } from '../transport/bun-http-response.js';
-import { waitForTcpListener } from '../transport/listener-ready.js';
+import { waitForHttpListener } from '../transport/listener-ready.js';
 import type { ApiProcessingMode } from '../daemon/api-pricing.js';
 import {
   RESPONSE_STREAM_MAX_RETRIES,
@@ -541,7 +541,10 @@ async function requireReachableProxyServer(
   onException: (error: Error) => void,
 ): Promise<number> {
   const boundPort = server.port;
-  if (boundPort !== undefined && await waitForTcpListener('127.0.0.1', boundPort)) {
+  if (
+    boundPort !== undefined
+    && await waitForHttpListener(`http://127.0.0.1:${boundPort}/`)
+  ) {
     return boundPort;
   }
   await server.stop(true);

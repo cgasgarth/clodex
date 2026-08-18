@@ -156,11 +156,17 @@ describe('preference write concurrency', () => {
     const workerPath = await buildWorker(root);
     const workerCount = 8;
     const writesPerWorker = 4;
-    const spawned = Array.from({ length: workerCount }, (_, index) =>
-      spawnWorker(workerPath, configHome, `worker-${index}`, writesPerWorker),
-    );
-
-    await Promise.all(spawned.map(worker => worker.ready));
+    const spawned: WorkerProcess[] = [];
+    for (let index = 0; index < workerCount; index += 1) {
+      const worker = spawnWorker(
+        workerPath,
+        configHome,
+        `worker-${index}`,
+        writesPerWorker,
+      );
+      spawned.push(worker);
+      await worker.ready;
+    }
     const exits = Promise.all(spawned.map(worker => worker.exit));
     const malformed = observeJsonUntil(configPath, exits);
     for (const worker of spawned) worker.child.stdin?.end('START\n');
