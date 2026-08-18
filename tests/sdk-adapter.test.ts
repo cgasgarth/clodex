@@ -64,6 +64,7 @@ describe('translateTools', () => {
       type: 'web_search_20260209',
       name: 'web_search',
       allowed_domains: ['openai.com'],
+      blocked_domains: ['example.com'],
       user_location: { type: 'approximate', country: 'US', timezone: 'America/Chicago' },
     }], '@ai-sdk/openai');
 
@@ -71,7 +72,10 @@ describe('translateTools', () => {
       type: 'provider',
       id: 'openai.web_search',
       args: {
-        filters: { allowedDomains: ['openai.com'] },
+        filters: {
+          allowedDomains: ['openai.com'],
+          blockedDomains: ['example.com'],
+        },
         userLocation: { type: 'approximate', country: 'US', timezone: 'America/Chicago' },
       },
     });
@@ -86,12 +90,15 @@ describe('translateTools', () => {
     expect(tools?.web_search.execute).toBeUndefined();
   });
 
-  it('rejects server web-search exclusions that OpenAI cannot enforce', () => {
-    expect(() => translateTools([{
+  it('maps server web-search exclusions to the OpenAI provider tool', () => {
+    const tools = translateTools([{
       type: 'web_search_20260209',
       name: 'web_search',
       blocked_domains: ['example.com'],
-    }], '@ai-sdk/openai')).toThrow('does not support blocked_domains');
+    }], '@ai-sdk/openai');
+    expect(tools?.web_search).toMatchObject({
+      args: { filters: { blockedDomains: ['example.com'] } },
+    });
   });
 });
 
@@ -404,7 +411,7 @@ describe('translateRequest', () => {
       processingMode: 'fast',
     });
 
-    expect(fast.providerOptions?.openai?.serviceTier).toBe('priority');
+    expect(fast.providerOptions?.openai?.serviceTier).toBe('fast');
     expect(standard.providerOptions?.openai?.serviceTier).toBeUndefined();
     expect(apiKey.providerOptions?.openai?.serviceTier).toBeUndefined();
     expect(otherProvider.providerOptions?.openai?.serviceTier).toBeUndefined();
@@ -443,7 +450,51 @@ describe('translateRequest', () => {
       'gpt-5.6-sol',
     );
 
-    expect(requestBody?.service_tier).toBe('priority');
+    expect(requestBody?.service_tier).toBe('fast');
+  });
+
+  it('serializes OpenAI web-search domain filters on the wire request', async () => {
+    let requestBody: Record<string, unknown> | undefined;
+    const provider = createOpenAI({
+      apiKey: 'synthetic-test-key',
+      fetch: async (_input, init) => {
+        requestBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        return new Response(JSON.stringify({
+          id: 'resp_web_search_test',
+          model: 'gpt-5.6-sol',
+          output: [],
+          usage: {
+            input_tokens: 1,
+            input_tokens_details: { cached_tokens: 0 },
+            output_tokens: 0,
+            output_tokens_details: { reasoning_tokens: 0 },
+          },
+        }), { status: 200, headers: { 'content-type': 'application/json' } });
+      },
+    });
+
+    await generateAnthropicResponse(
+      provider.responses('gpt-5.6-sol'),
+      translateRequest({
+        model: 'gpt-5.6-sol',
+        messages: [{ role: 'user', content: 'Search trusted sources.' }],
+        tools: [{
+          type: 'web_search_20260209',
+          name: 'web_search',
+          allowed_domains: ['openai.com'],
+          blocked_domains: ['example.com'],
+        }],
+      }, '@ai-sdk/openai'),
+      'gpt-5.6-sol',
+    );
+
+    expect(requestBody?.tools).toContainEqual({
+      type: 'web_search',
+      filters: {
+        allowed_domains: ['openai.com'],
+        blocked_domains: ['example.com'],
+      },
+    });
   });
 
   it('serializes the Claude parallel-tool preference on OpenAI Responses requests', async () => {

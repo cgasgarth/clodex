@@ -1,4 +1,5 @@
 // Shared helpers for Anthropic ↔ upstream translation proxies.
+import type { ProviderMetadata } from 'ai';
 
 export type FullStreamPart = {
   type: string;
@@ -18,20 +19,17 @@ export type FullStreamPart = {
     /** AI SDK 6 compatibility for older third-party LanguageModel implementations. */
     cachedInputTokens?: number;
   };
-  providerMetadata?: {
-    google?: { thoughtSignature?: string; thought_signature?: string };
-    openai?: { reasoningEncryptedContent?: string | null };
-  };
+  providerMetadata?: ProviderMetadata;
   error?: unknown;
   reason?: string;
 };
 
 export function grabRoundTripSignature(part: FullStreamPart): string | undefined {
   const md = part.providerMetadata;
-  return md?.google?.thoughtSignature
+  const thoughtSignature = md?.google?.thoughtSignature
     ?? md?.google?.thought_signature
-    ?? md?.openai?.reasoningEncryptedContent
-    ?? undefined;
+    ?? md?.openai?.reasoningEncryptedContent;
+  return typeof thoughtSignature === 'string' ? thoughtSignature : undefined;
 }
 
 let sdkWarningsSilenced = false;

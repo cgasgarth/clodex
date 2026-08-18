@@ -281,12 +281,12 @@ function toStreamTextOptions(
   params: SdkCallParams,
   extra: Record<string, unknown> = {},
 ): Parameters<typeof streamText>[0] {
-  return { model, ...params, ...extra } as unknown as Parameters<typeof streamText>[0];
+  return { model, ...params, ...extra };
 }
 
 function toGenerateTextOptions(
   model: LanguageModel,
   params: SdkCallParams,
 ): Parameters<typeof generateText>[0] {
-  return { model, ...params } as unknown as Parameters<typeof generateText>[0];
+  return { model, ...params };
 }
