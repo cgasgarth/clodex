@@ -1,5 +1,22 @@
 # Changelog
 
+## [3.2.0](https://github.com/cgasgarth/clodex/compare/v3.1.0...v3.2.0) (2026-08-18)
+
+
+### Features
+
+* add session-scoped fast mode ([ced687a](https://github.com/cgasgarth/clodex/commit/ced687a78a58cdde76680ee0b3d7b1f957059ac3))
+* support Claude native fast command ([#86](https://github.com/cgasgarth/clodex/issues/86)) ([a29ebfe](https://github.com/cgasgarth/clodex/commit/a29ebfed549c49d6c04fe50bc5979556faae533e))
+* use xAI native doom-loop recovery ([1e96da2](https://github.com/cgasgarth/clodex/commit/1e96da2f60c105c2097a382645912d6f21f4e466))
+
+
+### Bug Fixes
+
+* prevent repeated GPT compaction ([#90](https://github.com/cgasgarth/clodex/issues/90)) ([5f4c82e](https://github.com/cgasgarth/clodex/commit/5f4c82e2b5734ecab4cfff22a62c47b8a5172701))
+* support Claude Code 2.1.229 ([84653cd](https://github.com/cgasgarth/clodex/commit/84653cdf6a2da3057f7f54787f185c780a7841dc))
+* support Claude Code 2.1.233 ([17c6032](https://github.com/cgasgarth/clodex/commit/17c60328b5deb751d3bbed86913f04114aeffbbc))
+* switch selected accounts in active sessions ([7a121f0](https://github.com/cgasgarth/clodex/commit/7a121f03adeaec3769b1394010e12e3068a3c8ab))
+
 ## [3.1.0](https://github.com/cgasgarth/clodex/compare/v3.0.0...v3.1.0) (2026-08-13)
 
 
