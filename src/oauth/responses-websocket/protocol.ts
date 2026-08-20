@@ -1,5 +1,7 @@
 import { createHash } from 'node:crypto';
 import { isNumber, isObject, isString } from '../../runtime/type-guards.js';
+import { sanitizeToolInput } from '../../tool-input-sanitize.js';
+import type { ProviderDataValue } from '../../types.js';
 import { TERMINAL_EVENT_TYPES } from './types.js';
 import type {
   JsonObject,
@@ -280,8 +282,55 @@ function withoutEphemeralFields(item: JsonObject): JsonObject {
   return out;
 }
 
+/** Read the required properties from each function tool in the request. */
+function requiredToolProps(payload: JsonObject): Map<string, ReadonlySet<string>> {
+  const output = new Map<string, ReadonlySet<string>>();
+  const add = (value: JsonValue): void => {
+    if (!isJsonObject(value)) return;
+    if (value.type === 'namespace' && Array.isArray(value.tools)) {
+      for (const nested of value.tools) add(nested);
+      return;
+    }
+    if (value.type !== 'function' || !isString(value.name)) return;
+    const parameters = isJsonObject(value.parameters) ? value.parameters : undefined;
+    const required = Array.isArray(parameters?.required) ? parameters.required : [];
+    output.set(value.name, new Set(required.filter(isString)));
+  };
+  if (Array.isArray(payload.tools)) {
+    for (const tool of payload.tools) add(tool);
+  }
+  return output;
+}
+
+/**
+ * Store function arguments in the same shape that the Anthropic translation
+ * sends to Claude Code. The upstream request itself stays unchanged.
+ */
+function sanitizedCallArguments(
+  item: JsonObject,
+  requiredProps: Map<string, ReadonlySet<string>>,
+): JsonObject {
+  if (!isString(item.arguments)) return item;
+  const raw = item.arguments.trim();
+  let parsed: unknown;
+  try {
+    parsed = raw === '' ? {} : JSON.parse(raw);
+  } catch {
+    return item;
+  }
+  if (!isJsonObject(parsed)) return item;
+  const required = requiredProps.get(isString(item.name) ? item.name : '');
+  // SAFETY: JSON.parse produced this object, so each property is JSON data.
+  const toolInput = parsed as Record<string, ProviderDataValue>;
+  return {
+    ...item,
+    arguments: JSON.stringify(sanitizeToolInput(toolInput, required)),
+  };
+}
+
 export function expectedAssistantItems(ctx: RequestContext): JsonValue[] {
   const output: JsonValue[] = [];
+  const requiredProps = requiredToolProps(ctx.originalPayload);
   for (const [, accumulator] of [...ctx.outputByIndex.entries()].toSorted(([left], [right]) => left - right)) {
       const done = accumulator.done ?? {};
       const type = accumulator.type ?? (isString(done.type) ? done.type : undefined);
@@ -306,7 +355,14 @@ export function expectedAssistantItems(ctx: RequestContext): JsonValue[] {
         output.push({ ...withoutEphemeralFields(done), type });
         continue;
       }
-      if (type === 'function_call' || type === 'custom_tool_call') {
+      if (type === 'function_call') {
+        output.push({
+          ...sanitizedCallArguments(withoutEphemeralFields(done), requiredProps),
+          type,
+        });
+        continue;
+      }
+      if (type === 'custom_tool_call') {
         output.push({ ...withoutEphemeralFields(done), type });
       }
   }

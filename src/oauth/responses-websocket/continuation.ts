@@ -409,8 +409,11 @@ export function continuationMismatchSummary(entry: ConnectionEntry, payload: Jso
   const firstMismatch = isNumber(details.firstMismatch) ? details.firstMismatch : 0;
   const expectedKind = isString(details.expectedKind) ? details.expectedKind : 'none';
   const actualKind = isString(details.actualKind) ? details.actualKind : 'none';
+  const expectedHash = isString(details.expectedHash) ? details.expectedHash : 'none';
+  const actualHash = isString(details.actualHash) ? details.actualHash : 'none';
   return `full_items=${fullItems} expected_prefix_items=${expectedPrefixItems} `
-    + `first_mismatch=${firstMismatch} expected=${expectedKind} actual=${actualKind}`;
+    + `first_mismatch=${firstMismatch} expected=${expectedKind} actual=${actualKind} `
+    + `expected_hash=${expectedHash} actual_hash=${actualHash}`;
 }
 
 export function historyContinuationMatch(
