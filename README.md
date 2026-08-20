@@ -33,10 +33,9 @@ that every runtime artifact matches the checkout.
 This release supports Claude Code **2.1.237 only**. Clodex checks the installed
 version before it patches or launches Claude Code.
 
-Clodex targets the moving **Bun 1.4 canary** channel. Install or update Bun with
-`bun upgrade --canary`; `bun --revision` shows the exact build in use. Canary
-builds change between CI runs, so compatibility PRs record the validated
-revision and run the full repository gate before installation.
+Clodex targets **Bun 1.4.0**. Install or update Bun with `bun upgrade`; `bun
+--revision` shows the exact build in use. Compatibility PRs record the
+validated revision and run the full repository gate before installation.
 
 Install clodex, sign in to a provider, choose the models you want Claude to
 show, and patch Claude Code's model metadata:
