@@ -2497,6 +2497,85 @@ beforeEach(() => {
     expect(JSON.stringify(diagnostics)).not.toContain('private trigger failure');
   });
 
+  it('skips repeated routine compact endpoint calls after HTTP 404', async () => {
+    const diagnostics: ResponsesWebSocketDiagnosticEvent[] = [];
+    const compactFetch = vi.fn(async () => new Response(JSON.stringify({
+      error: { type: 'not_found_error', message: 'not found' },
+    }), {
+      status: 404,
+      headers: { 'content-type': 'application/json' },
+    }));
+    const wsFetch = createResponsesWebSocketFetch(WS_URL, undefined, {
+      accountId: 'acct-compact-404-cache',
+      compactThreshold: 100,
+      // SAFETY: The test fixture defines the asserted runtime shape.
+      compactFetch: compactFetch as typeof fetch,
+      onDiagnostic: event => diagnostics.push(event),
+    });
+    const firstUser = { role: 'user', content: [{ type: 'input_text', text: 'first' }] };
+    const first = await wsFetch('https://example.test/responses', {
+      method: 'POST', headers: {}, body: JSON.stringify(sessionPayload([firstUser])),
+    });
+    const firstSocket = lastSocket();
+    firstSocket.emit('open');
+    emitTextResponse(firstSocket, 'resp-404-first', 'first answer', {
+      input_tokens: 150,
+      output_tokens: 10,
+    });
+    await readAll(first);
+
+    const secondUser = { role: 'user', content: [{ type: 'input_text', text: 'second' }] };
+    const secondInput = [
+      firstUser,
+      { role: 'assistant', content: [{ type: 'output_text', text: 'first answer' }] },
+      secondUser,
+    ];
+    const secondPromise = wsFetch('https://example.test/responses', {
+      method: 'POST', headers: {}, body: JSON.stringify(sessionPayload(secondInput)),
+    });
+    await waitForCondition(() => expect(firstSocket.send).toHaveBeenCalledTimes(2));
+    firstSocket.emit('message', Buffer.from(JSON.stringify({
+      type: 'error', error: { code: 'compaction_trigger_unavailable' },
+    })));
+    const second = await secondPromise;
+    const secondSocket = lastSocket();
+    secondSocket.emit('open');
+    emitTextResponse(secondSocket, 'resp-404-second', 'second answer', {
+      input_tokens: 150,
+      output_tokens: 10,
+    });
+    await readAll(second);
+    expect(compactFetch).toHaveBeenCalledOnce();
+
+    const thirdUser = { role: 'user', content: [{ type: 'input_text', text: 'third' }] };
+    const thirdInput = [
+      ...secondInput,
+      { role: 'assistant', content: [{ type: 'output_text', text: 'second answer' }] },
+      thirdUser,
+    ];
+    const thirdPromise = wsFetch('https://example.test/responses', {
+      method: 'POST', headers: {}, body: JSON.stringify(sessionPayload(thirdInput)),
+    });
+    await waitForCondition(() => expect(secondSocket.send).toHaveBeenCalledTimes(2));
+    secondSocket.emit('message', Buffer.from(JSON.stringify({
+      type: 'error', error: { code: 'compaction_trigger_unavailable' },
+    })));
+    const third = await thirdPromise;
+    const thirdSocket = lastSocket();
+    thirdSocket.emit('open');
+    emitTextResponse(thirdSocket, 'resp-404-third', 'third answer');
+    await readAll(third);
+
+    expect(compactFetch).toHaveBeenCalledOnce();
+    expect(diagnostics).toContainEqual(expect.objectContaining({
+      event: 'ws_compaction',
+      outcome: 'skipped',
+      transport: 'responses_compact_endpoint',
+      skipReason: 'endpoint_not_found_cached',
+      statusCode: 404,
+    }));
+  });
+
   it('times out an in-band trigger before the downstream watchdog and falls back', async () => {
     const canonical = [
       { role: 'user', content: [{ type: 'input_text', text: 'retained after timeout' }] },
@@ -4404,6 +4483,171 @@ beforeEach(() => {
     expect(sent.previous_response_id).toBe('resp_tool');
     expect(sent.input).toEqual([toolOutput]);
     emitTextResponse(socket, 'resp_done', 'done');
+    await readAll(second);
+  });
+
+  it.each([
+    {
+      label: 'null filler',
+      accountId: 'acct-tool-null-filler',
+      upstreamArguments: '{"path":"file.ts","offset":null}',
+      echoedArguments: '{"path":"file.ts"}',
+      tools: [{
+        type: 'function', name: 'Read',
+        parameters: {
+          type: 'object',
+          properties: { path: { type: 'string' }, offset: { type: 'number' } },
+          required: ['path'],
+        },
+      }],
+    },
+    {
+      label: 'optional empty values',
+      accountId: 'acct-tool-optional-empty',
+      upstreamArguments: '{"query":"q","allowed_domains":[],"prefix":""}',
+      echoedArguments: '{"query":"q"}',
+      tools: [{
+        type: 'function', name: 'Read',
+        parameters: {
+          type: 'object',
+          properties: {
+            query: { type: 'string' },
+            allowed_domains: { type: 'array' },
+            prefix: { type: 'string' },
+          },
+          required: ['query'],
+        },
+      }],
+    },
+    {
+      label: 'required empty values',
+      accountId: 'acct-tool-required-empty',
+      upstreamArguments: '{"items":[],"prefix":""}',
+      echoedArguments: '{"items":[],"prefix":""}',
+      tools: [{
+        type: 'function', name: 'Read',
+        parameters: {
+          type: 'object',
+          properties: { items: { type: 'array' }, prefix: { type: 'string' } },
+          required: ['items', 'prefix'],
+        },
+      }],
+    },
+    {
+      label: 'blank arguments',
+      accountId: 'acct-tool-blank-arguments',
+      upstreamArguments: '   ',
+      echoedArguments: '{}',
+      tools: [{ type: 'function', name: 'Read', parameters: { type: 'object' } }],
+    },
+  ])('continues when Claude echoes sanitized $label', async ({
+    accountId,
+    upstreamArguments,
+    echoedArguments,
+    tools,
+  }) => {
+    const input = [{ role: 'user', content: [{ type: 'input_text', text: 'use the tool' }] }];
+    const wsFetch = createResponsesWebSocketFetch(WS_URL, undefined, { accountId });
+    const first = await wsFetch('https://x', {
+      method: 'POST',
+      headers: {},
+      body: JSON.stringify(sessionPayload(input, { tools })),
+    });
+    const socket = lastSocket();
+    socket.emit('open');
+    socket.emit('message', Buffer.from(JSON.stringify({
+      type: 'response.created', response: { id: `${accountId}-response` },
+    })));
+    socket.emit('message', Buffer.from(JSON.stringify({
+      type: 'response.output_item.done',
+      output_index: 0,
+      item: {
+        type: 'function_call',
+        call_id: `${accountId}-call`,
+        name: 'Read',
+        arguments: upstreamArguments,
+      },
+    })));
+    socket.emit('message', Buffer.from(JSON.stringify({
+      type: 'response.completed', response: { id: `${accountId}-response` },
+    })));
+    await readAll(first);
+
+    const echoedCall = {
+      type: 'function_call',
+      call_id: `${accountId}-call`,
+      name: 'Read',
+      arguments: echoedArguments,
+    };
+    const toolOutput = {
+      type: 'function_call_output',
+      call_id: `${accountId}-call`,
+      output: 'result',
+    };
+    const second = await wsFetch('https://x', {
+      method: 'POST',
+      headers: {},
+      body: JSON.stringify(sessionPayload([...input, echoedCall, toolOutput], { tools })),
+    });
+
+    // SAFETY: The test fixture defines the asserted runtime shape.
+    const sent = JSON.parse(socket.send.mock.calls[1]![0] as string);
+    expect(sent.previous_response_id).toBe(`${accountId}-response`);
+    expect(sent.input).toEqual([toolOutput]);
+    emitTextResponse(socket, `${accountId}-done`, 'done');
+    await readAll(second);
+  });
+
+  it('starts a new chain when an echoed tool argument has a different value', async () => {
+    const logs: string[] = [];
+    const input = [{ role: 'user', content: [{ type: 'input_text', text: 'read it' }] }];
+    const wsFetch = createResponsesWebSocketFetch(WS_URL, message => logs.push(message), {
+      accountId: 'acct-tool-value-mismatch',
+    });
+    const first = await wsFetch('https://x', {
+      method: 'POST', headers: {}, body: JSON.stringify(sessionPayload(input)),
+    });
+    const original = lastSocket();
+    original.emit('open');
+    original.emit('message', Buffer.from(JSON.stringify({
+      type: 'response.created', response: { id: 'resp-tool-value' },
+    })));
+    original.emit('message', Buffer.from(JSON.stringify({
+      type: 'response.output_item.done',
+      output_index: 0,
+      item: {
+        type: 'function_call', call_id: 'call-tool-value', name: 'Read',
+        arguments: '{"path":"expected.ts"}',
+      },
+    })));
+    original.emit('message', Buffer.from(JSON.stringify({
+      type: 'response.completed', response: { id: 'resp-tool-value' },
+    })));
+    await readAll(first);
+
+    const changedCall = {
+      type: 'function_call', call_id: 'call-tool-value', name: 'Read',
+      arguments: '{"path":"different.ts"}',
+    };
+    const toolOutput = {
+      type: 'function_call_output', call_id: 'call-tool-value', output: 'result',
+    };
+    const second = await wsFetch('https://x', {
+      method: 'POST', headers: {},
+      body: JSON.stringify(sessionPayload([...input, changedCall, toolOutput])),
+    });
+    const replacement = lastSocket();
+    expect(replacement).not.toBe(original);
+    replacement.emit('open');
+    // SAFETY: The test fixture defines the asserted runtime shape.
+    const sent = JSON.parse(replacement.send.mock.calls[0]![0] as string);
+    expect(sent.previous_response_id).toBeUndefined();
+    expect(sent.input).toEqual([...input, changedCall, toolOutput]);
+    const mismatchLog = logs.find(line => line.includes('history mismatch'));
+    expect(mismatchLog).toMatch(/expected_hash=[0-9a-f]{16} actual_hash=[0-9a-f]{16}/);
+    expect(mismatchLog).not.toContain('expected.ts');
+    expect(mismatchLog).not.toContain('different.ts');
+    emitTextResponse(replacement, 'resp-tool-value-replacement', 'done');
     await readAll(second);
   });
 

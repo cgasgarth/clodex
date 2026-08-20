@@ -45,6 +45,7 @@ import {
   MODEL_TOTAL_TIMEOUT_MS,
 } from './config/timeouts.js';
 import { isObject, isString } from './runtime/type-guards.js';
+import { sanitizeToolInput } from './tool-input-sanitize.js';
 import type { ProviderDataValue } from './types.js';
 
 export { silenceSdkWarnings };
@@ -605,28 +606,6 @@ export function translateMessages(
       continue;
     }
     out.push(...translateAssistantBlocks(blocks, npm));
-  }
-  return out;
-}
-
-/**
- * Strip filler values GPT-family models emit for optional params instead of
- * omitting them: top-level `null` always, and empty strings or arrays for
- * properties the tool's schema does not require. Claude Code forwards some
- * tool inputs verbatim into server-side API calls (e.g. WebSearch domain lists
- * become the `web_search` tool config, where an empty list is a 400), so filler
- * must be removed here. Required properties keep empty values — there they are
- * intentional (e.g. TodoWrite's `todos: []` clears the list).
- */
-function sanitizeToolInput(
-  input: ToolInput,
-  requiredProps?: ReadonlySet<string>,
-): ToolInput {
-  const out: ToolInput = {};
-  for (const [k, v] of Object.entries(input)) {
-    if (v === null) continue;
-    if ((v === '' || (Array.isArray(v) && v.length === 0)) && !requiredProps?.has(k)) continue;
-    out[k] = v;
   }
   return out;
 }

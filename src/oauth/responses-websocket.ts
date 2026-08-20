@@ -107,6 +107,7 @@ export function createResponsesWebSocketFetch(
   options: ResponsesWebSocketFetchOptions = {},
 ): FetchFunction {
   const debug = (message: string) => { try { log?.(`ws: ${message}`); } catch { /* ignore */ } };
+  let standaloneCompactionNotFound = false;
   const resolvedOptions = resolveWebSocketOptions(options);
   // Durable native state must never remain active after the user disables the
   // native compaction opt-in, even if a caller accidentally supplies a path.
@@ -588,7 +589,24 @@ export function createResponsesWebSocketFetch(
         }
       }
 
-      if (!compacted) {
+      if (!compacted && standaloneCompactionNotFound) {
+        debug('standalone compaction skipped after an earlier HTTP 404 on this transport');
+        emitDiagnostic(options, {
+          event: 'ws_compaction',
+          outcome: 'skipped',
+          transport: 'responses_compact_endpoint',
+          mode: 'routine',
+          reason: compactionReason,
+          skipReason: 'endpoint_not_found_cached',
+          statusCode: 404,
+          threshold: effectiveCompactThreshold,
+          configuredThreshold: compactThreshold,
+          postCompactionInputTokens: provisionalPostCompactionInputTokens,
+          contextWindow,
+          measuredInputTokens,
+          estimatedInputTokens,
+        }, diagnosticCorrelation);
+      } else if (!compacted) {
         let standaloneStartedAt: number | undefined;
         try {
           const checkpointInput = selectedCheckpoint && checkpointMatch
@@ -671,6 +689,7 @@ export function createResponsesWebSocketFetch(
           }, diagnosticCorrelation);
         } catch (error) {
           const compactError = error instanceof ResponsesCompactionError ? error : undefined;
+          if (compactError?.statusCode === 404) standaloneCompactionNotFound = true;
           overflowRecovery?.recordExternalCompaction(error, compactError?.usage);
           compactionUsage = overflowRecovery?.usage ?? compactionUsage;
           const contextRejected = compactError?.failureClass === 'context_length';
