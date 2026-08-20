@@ -33,7 +33,7 @@ import { isReservedModelAlias } from '../models/aliases.js';
  * and never receive the new transforms, silently. `tests/patcher.test.ts` pins a
  * hash of this file to force that decision to be made rather than forgotten.
  */
-export const PATCH_TRANSFORMS_VERSION = 10;
+export const PATCH_TRANSFORMS_VERSION = 11;
 
 export interface PatchScriptModelEntry {
   alias?: string;
@@ -299,7 +299,7 @@ export function applyClodexPatches(source: string, config: PatchScriptModelConfi
   // ---------------------------------------------------------------------------
   // PATCH 1 — Agent/subagent tool 'model' zod enum.
   // Anchor: the enum constructor call followed by
-  // ["sonnet",...,"fable"].optional().describe(. Claude 2.1.234 replaced
+  // ["sonnet",...,"fable"].optional().describe(. Claude 2.1.237 replaces
   // Zod's `.enum(...)` spelling with a minified enum helper, so preserve the
   // constructor token instead of assuming either implementation. We append our
   // identities (alias when defined, else
@@ -466,12 +466,11 @@ export function applyClodexPatches(source: string, config: PatchScriptModelConfi
     const MARKER = '/*clodex:native-context-owner*/';
     applyOnce(
       'PATCH X1: native context owner',
-      /function ([\w$]+)\(\)\{if\(([\w$]+)\.DISABLE_COMPACT\)return!1;if\(\2\.DISABLE_AUTO_COMPACT\)return!1;return ([\w$]+)\("autoCompactEnabled",!0\)\.value\}/,
-      (_m, predicate, configVar, readSetting) =>
-        'function ' + predicate + '(){' + MARKER
+      /(function ([\w$]+)\(\)\{return Boolean\(([\w$]+)\.DISABLE_COMPACT\|\|\3\.DISABLE_AUTO_COMPACT\)\})function ([\w$]+)\(\)\{if\(\2\(\)\)return!1;return ([\w$]+)\("autoCompactEnabled",!0\)\.value\}/,
+      (_m, disabledPredicate, isDisabled, _configVar, predicate, readSetting) =>
+        disabledPredicate + 'function ' + predicate + '(){' + MARKER
         + 'if(process.env.CLODEX_NATIVE_CONTEXT_OWNER==="1")return!1;'
-        + 'if(' + configVar + '.DISABLE_COMPACT)return!1;if(' + configVar
-        + '.DISABLE_AUTO_COMPACT)return!1;'
+        + 'if(' + isDisabled + '())return!1;'
         + 'return ' + readSetting + '("autoCompactEnabled",!0).value}',
       { marker: MARKER, required: true }
     );

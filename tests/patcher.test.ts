@@ -461,8 +461,8 @@ describe('PATCH_TRANSFORMS_VERSION', () => {
     ).replace(/\r\n/g, '\n');
     const digest = createHash('sha256').update(source).digest('hex');
     expect({ version: PATCH_TRANSFORMS_VERSION, digest }).toEqual({
-      version: 10,
-      digest: '96fa563a6be353d5d89cf32f91e17c2e8498fad05f25c1d26500a0949444b94b',
+      version: 11,
+      digest: '857bf3bdd2bffd77a553aec4c7a2a83e3299a410a7cfebb15e89e270d78e2c2c',
     });
   });
 });
@@ -661,7 +661,7 @@ const CLAUDE_CORE_FIXTURE = [
   'function Lbo(){if(lK("hipaa"))return!1;return QE_()&&iEs().enabled}',
   'function Fw(e){let t=Rd();if(oSs(e))return!Syo(t.enabledMcpServers).includes(e);return Syo(t.disabledMcpServers).includes(e)}',
   'function aY(e,t,r=Mv()){let n=lo(e),o=JE(e,r);if(process.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW){let l=UNe("CLAUDE_CODE_AUTO_COMPACT_WINDOW",process.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW,Tfo,Nds);if(l.status!=="invalid"){let c=Math.max(Tfo,l.effective);return{window:Math.min(o,c),configured:c,source:"env"}}}return{window:o,configured:o,source:"auto"}}',
-  'function JI(){if(Z.DISABLE_COMPACT)return!1;if(Z.DISABLE_AUTO_COMPACT)return!1;return Hc("autoCompactEnabled",!0).value}',
+  'function D0(){return Boolean(Z.DISABLE_COMPACT||Z.DISABLE_AUTO_COMPACT)}function JI(){if(D0())return!1;return Hc("autoCompactEnabled",!0).value}',
   'function uMu(e,t,r,n=t,o){let i=o??Sfo(t,r),s=r.enabled?i:t,a=s-20000,l=r.testBlockingOverride,c=l!==void 0&&!isNaN(l)&&l>0?l:n-3000,u=Math.max(0,Math.round((s-e)/s*100));if(e>=c)return{level:"blocked",pctLeft:u};if(r.enabled&&e>=i)return{level:"compact",pctLeft:u};if(e>=a)return{level:"warn",pctLeft:u};return{level:"ok"}}',
   'function gMu(e,t,r,n){let o=Uds(t,r,n),i=o.enabled?r:void 0,s=CSe(t,i);if(!JGe(t,r))return e>=Hds(s,o);let{window:a}=aY(t,i);if(a<bRe)return!1;return e>=Hds(s,o)}',
   'const workflowNote=`NOTE: You are running inside a workflow script. Be concise \\u2014 the script will parse your output.`,aa,bb,cc,dd,sj_=180000,attempts=5;var runtime={};',
@@ -1125,7 +1125,7 @@ const config = {
     expect(out).not.toMatch(/KNOWN=\[[^\]]*gpt-5\.6-sol/);
   });
 
-  it('patches Claude 2.1.234 enum helper syntax without rewriting the helper', () => {
+  it('patches Claude 2.1.237 enum helper syntax without rewriting the helper', () => {
     const source = CLAUDE_FIXTURE.replace(
       '.enum(["sonnet","opus","haiku","fable"])',
       'xr(["sonnet","opus","haiku","fable"])',
@@ -1137,7 +1137,7 @@ const config = {
     expect(out).not.toContain('.enum(["sonnet","opus","haiku","fable","sol","clodex:openai:mystery"])');
   });
 
-  it('keeps native Clodex ownership ahead of Claude 2.1.234 unknown-model enforcement', () => {
+  it('keeps native Clodex ownership ahead of Claude 2.1.237 unknown-model enforcement', () => {
     const source = CLAUDE_FIXTURE.replace(
       'return{window:o,configured:o,source:"auto"}}',
       'if(fx()&&!ee.CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT&&!R8_(e,r)&&!zks(e)&&!Vur(e,n))return{window:o,configured:o,source:"unknown-model"};return{window:o,configured:o,source:"auto"}}',
@@ -1564,7 +1564,12 @@ const config = {
 
   it('delegates automatic context lifecycle to Clodex only when the child flag is set', () => {
     const out = runPatchScript(config);
-    expect(out).toContain('/*clodex:native-context-owner*/if(process.env.CLODEX_NATIVE_CONTEXT_OWNER==="1")return!1;');
+    expect(out).toContain(
+      'function D0(){return Boolean(Z.DISABLE_COMPACT||Z.DISABLE_AUTO_COMPACT)}'
+      + 'function JI(){/*clodex:native-context-owner*/'
+      + 'if(process.env.CLODEX_NATIVE_CONTEXT_OWNER==="1")return!1;'
+      + 'if(D0())return!1;return Hc("autoCompactEnabled",!0).value}',
+    );
     expect(out).toContain('/*clodex:native-context-guard*/if(process.env.CLODEX_NATIVE_CONTEXT_OWNER==="1")return{level:"ok",pctLeft:100};');
     expect(out).toContain('/*clodex:native-precompute-owner*/if(process.env.CLODEX_NATIVE_CONTEXT_OWNER==="1")return!1;');
     expect(out).toContain('/*clodex:native-context-window*/if(process.env.CLODEX_NATIVE_CONTEXT_OWNER==="1")return{window:o,configured:o,source:"owner"};');
