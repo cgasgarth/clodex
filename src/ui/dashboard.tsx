@@ -11,7 +11,7 @@ import {
   API_PRICING_AS_OF,
   API_PRICING_SOURCE,
 } from '../daemon/api-pricing.js';
-import type { SecondwindModeMetrics, SecondwindSnapshot } from '../daemon/secondwind.js';
+import type { SecondwindSnapshot } from '../daemon/secondwind.js';
 import type { DiagnosticLogMode, SecondwindMode } from '../types.js';
 import type { DaemonClaudeModelSnapshot, DaemonClaudeModelView } from '../daemon/model-service.js';
 import {
@@ -40,6 +40,7 @@ import {
   type UsageAccountScope,
   type UsageRange,
 } from './dashboard-data.js';
+import { SecondwindMetricLine } from './secondwind-metric-line.js';
 type DashboardView =
   | 'overview'
   | 'usage'
@@ -870,42 +871,6 @@ function Dashboard(): React.ReactNode {
       : secondwind?.mode === 'shadow'
         ? 'yellow'
         : undefined;
-    const metricLine = (label: string, selectedMetrics: SecondwindModeMetrics | undefined, savingsLabel: string) => {
-      return (
-      <Box flexDirection="column" key={secondwind?.mode}>
-        <Text bold>{label}</Text>
-        <Text>
-          {selectedMetrics?.requests ?? 0} requests · {selectedMetrics?.blocksRewritten ?? 0} blocks rewritten
-        </Text>
-        <Text>
-          {secondwindTokenSummary(selectedMetrics)}
-          {' · '}{secondwindPercentSaved(selectedMetrics)} of tool-output tokens saved
-          {' · '}{savingsLabel} {formatUsd(selectedMetrics?.estimatedSavingsUsd ?? 0)}
-        </Text>
-        {((selectedMetrics?.savedInputTokens ?? 0)
-          + (selectedMetrics?.savedCachedInputTokens ?? 0)
-          + (selectedMetrics?.savedCacheWriteTokens ?? 0)) > 0 && (
-          <Text dimColor>
-            saved attribution: {compactNumber(selectedMetrics?.savedInputTokens ?? 0)} uncached
-            {' / '}{compactNumber(selectedMetrics?.savedCachedInputTokens ?? 0)} cache reads
-            {' / '}{compactNumber(selectedMetrics?.savedCacheWriteTokens ?? 0)} cache writes
-          </Text>
-        )}
-        {((selectedMetrics?.estimatedInputSavingsUsd ?? 0)
-          + (selectedMetrics?.estimatedCacheSavingsUsd ?? 0)
-          + (selectedMetrics?.estimatedOutputSavingsUsd ?? 0)) > 0 && (
-          <Text dimColor>
-            estimated dollars: {formatUsd(selectedMetrics?.estimatedInputSavingsUsd ?? 0)} input
-            {' + '}{formatUsd(selectedMetrics?.estimatedCacheSavingsUsd ?? 0)} cache
-            {' + '}{formatUsd(selectedMetrics?.estimatedOutputSavingsUsd ?? 0)} output threshold
-          </Text>
-        )}
-        {(selectedMetrics?.unpricedRequests ?? 0) > 0 && (
-          <Text dimColor>{selectedMetrics!.unpricedRequests} unsupported-model requests excluded from dollars</Text>
-        )}
-      </Box>
-      );
-    };
     content = (
       <>
         <Box borderStyle="round" paddingX={1} flexDirection="column">
@@ -966,9 +931,17 @@ function Dashboard(): React.ReactNode {
         </Box>
         )}
         <Box borderStyle="round" paddingX={1} flexDirection="column">
-          {metricLine('Applied', secondwind?.applied, 'estimated savings')}
+          <SecondwindMetricLine
+            label="Applied"
+            metrics={secondwind?.applied}
+            savingsLabel="estimated savings"
+          />
           <Text> </Text>
-          {metricLine('Shadow potential', secondwind?.shadow, 'estimated possible savings')}
+          <SecondwindMetricLine
+            label="Shadow potential"
+            metrics={secondwind?.shadow}
+            savingsLabel="estimated possible savings"
+          />
           <Text dimColor>API-equivalent cache-aware estimate for priced OpenAI and Grok requests.</Text>
         </Box>
         <Box borderStyle="round" paddingX={1} flexDirection="column">
