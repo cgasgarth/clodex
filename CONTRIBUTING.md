@@ -93,8 +93,8 @@ bun run dev
 bun test tests/patcher.test.ts
 ```
 
-Development and the published CLI require **Bun 1.4 canary or newer**. CI follows
-the moving canary channel and prints the exact revision used by each run.
+Development and the published CLI require **Bun 1.4.0 or newer**. CI uses Bun
+1.4.0 and prints the exact revision used by each run.
 `packageManager`, `engines.bun`, and `bun.lock` define the toolchain contract.
 Dependencies are exact-pinned.
 Do not add Node, npm, pnpm, Vitest, or tsup execution paths.

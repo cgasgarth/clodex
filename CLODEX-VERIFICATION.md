@@ -54,7 +54,7 @@ real commands (including `claude -p`) but NEVER add them to the automated test s
 ## C. Preserved functionality
 
 - C1. `bun run typecheck`, `bun run test`, and `bun run build` all pass cleanly
-  with the Bun 1.4 canary recorded in `packageManager`.
+  with Bun 1.4.0 recorded in `packageManager`.
 - C2. `clodex claude --dry-run` completes a simulated launch (endpoint mode) without
   writing state.
 - C3. Endpoint mode: `clodex server` starts; `GET /v1/models` (or `/models`) lists the

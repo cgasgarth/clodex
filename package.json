@@ -22,7 +22,7 @@
     "proxy"
   ],
   "type": "module",
-  "packageManager": "bun@1.4.0-canary.1",
+  "packageManager": "bun@1.4.0",
   "bin": {
     "clodex": "dist/cli.js",
     "clodex-claude": "dist/claude-wrapper.js"
@@ -33,7 +33,7 @@
     "README.md"
   ],
   "engines": {
-    "bun": ">=1.4.0-canary.1"
+    "bun": ">=1.4.0"
   },
   "scripts": {
     "build": "bun run scripts/build.ts",
