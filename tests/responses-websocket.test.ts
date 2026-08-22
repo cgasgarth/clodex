@@ -43,6 +43,10 @@ import {
   type ResponsesWebSocketDiagnosticEvent,
 } from '../src/oauth/responses-websocket.js';
 import { saveStoredResponsesCheckpoint } from '../src/oauth/responses-checkpoint-store.js';
+import {
+  REHOMED_INSTRUCTIONS_BOOTSTRAP,
+  RESPONSES_INSTRUCTIONS_MAX_CHARACTERS,
+} from '../src/oauth/responses-websocket/request/instructions.js';
 import { sdkUpstreamErrorDetails } from '../src/transport/upstream-error.js';
 import {
   createHoisted,
@@ -1469,6 +1473,116 @@ beforeEach(() => {
 
     emitTextResponse(socket, 'resp_2', 'hello again');
     await readAll(second);
+  });
+
+  it('re-homes oversized instructions once and continues with only the new delta', async () => {
+    const diagnostics: ResponsesWebSocketDiagnosticEvent[] = [];
+    const oversizedInstructions = 'i'.repeat(RESPONSES_INSTRUCTIONS_MAX_CHARACTERS + 1);
+    const firstUser = {
+      role: 'user',
+      content: [{ type: 'input_text', text: 'recover this thread' }],
+    };
+    const wsFetch = createResponsesWebSocketFetch(WS_URL, undefined, {
+      accountId: 'acct-oversized-instructions',
+      onDiagnostic: event => diagnostics.push(event),
+    });
+
+    const first = await wsFetch('https://example.test/responses', {
+      method: 'POST',
+      headers: {},
+      body: JSON.stringify(sessionPayload([firstUser], { instructions: oversizedInstructions })),
+    });
+    const socket = lastSocket();
+    socket.emit('open');
+    // SAFETY: The fake socket records serialized response.create payloads.
+    const firstSent = JSON.parse(socket.send.mock.calls[0]![0] as string);
+    // SAFETY: The request helper creates JSON object input items and input_text parts.
+    const developerChunks = (firstSent.input as JsonObject[])
+      .filter(item => item.role === 'developer')
+      .map(item => (item.content as JsonObject[])[0]!.text as string);
+    expect(firstSent.instructions).toBe(REHOMED_INSTRUCTIONS_BOOTSTRAP);
+    expect(developerChunks.join('')).toBe(oversizedInstructions);
+    emitTextResponse(socket, 'resp_oversized_instructions', 'recovered');
+    await readAll(first);
+
+    const echoedAssistant = {
+      role: 'assistant',
+      content: [{ type: 'output_text', text: 'recovered' }],
+    };
+    const nextUser = {
+      role: 'user',
+      content: [{ type: 'input_text', text: 'continue' }],
+    };
+    const second = await wsFetch('https://example.test/responses', {
+      method: 'POST',
+      headers: {},
+      body: JSON.stringify(sessionPayload(
+        [firstUser, echoedAssistant, nextUser],
+        { instructions: oversizedInstructions },
+      )),
+    });
+    expect(socket.send).toHaveBeenCalledTimes(2);
+    // SAFETY: The fake socket records serialized response.create payloads.
+    const secondSent = JSON.parse(socket.send.mock.calls[1]![0] as string);
+    expect(secondSent.previous_response_id).toBe('resp_oversized_instructions');
+    expect(secondSent.input).toEqual([nextUser]);
+    expect(secondSent.instructions).toBe(REHOMED_INSTRUCTIONS_BOOTSTRAP);
+    emitTextResponse(socket, 'resp_oversized_continued', 'continued');
+    await readAll(second);
+
+    expect(diagnostics).toContainEqual(expect.objectContaining({
+      event: 'ws_instructions_rehomed',
+      outcome: 'completed',
+      originalCharacters: oversizedInstructions.length,
+      chunkCount: 5,
+    }));
+    expect(JSON.stringify(diagnostics)).not.toContain(oversizedInstructions.slice(0, 100));
+  });
+
+  it('makes forced native compaction legal before the provider validates instructions', async () => {
+    const oversizedInstructions = 'i'.repeat(1_063_358);
+    const firstUser = {
+      role: 'user',
+      content: [{ type: 'input_text', text: 'compact this oversized thread' }],
+    };
+    const compactFetch = vi.fn(async (_request: string | URL | Request, init?: RequestInit) => {
+      const compactPayload = JSON.parse(String(init?.body));
+      expect(compactPayload.instructions).toBe(REHOMED_INSTRUCTIONS_BOOTSTRAP);
+      expect(compactPayload.instructions.length)
+        .toBeLessThanOrEqual(RESPONSES_INSTRUCTIONS_MAX_CHARACTERS);
+      // SAFETY: The request helper creates JSON object input items and input_text parts.
+      const chunks = (compactPayload.input as JsonObject[])
+        .filter(item => item.role === 'developer')
+        .map(item => (item.content as JsonObject[])[0]!.text as string);
+      expect(chunks.join('')).toBe(oversizedInstructions);
+      return new Response(JSON.stringify({
+        output: [firstUser, { type: 'compaction', encrypted_content: 'oversized-instruction-state' }],
+        usage: { input_tokens: 300_000, output_tokens: 800 },
+      }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    });
+    const wsFetch = createResponsesWebSocketFetch(WS_URL, undefined, {
+      accountId: 'acct-oversized-instructions-compact',
+      compactThreshold: 265_000,
+      contextWindow: 1_000_000,
+      // SAFETY: The test fixture defines the asserted runtime shape.
+      compactFetch: compactFetch as typeof fetch,
+    });
+
+    const response = await withResponsesWebSocketDiagnosticContext(
+      { estimatedInputTokens: 344_000, forceCompaction: true },
+      () => wsFetch('https://example.test/responses', {
+        method: 'POST',
+        headers: {},
+        body: JSON.stringify(sessionPayload([firstUser], { instructions: oversizedInstructions })),
+      }),
+    );
+    const body = await readAll(response);
+    expect(compactFetch).toHaveBeenCalledOnce();
+    expect(fakeSockets).toHaveLength(0);
+    expect(body).toContain('Context compacted natively by OpenAI');
   });
 
   it('keeps upstream frames byte-identical when native compaction is disabled', async () => {

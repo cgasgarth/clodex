@@ -25,6 +25,7 @@ import {
   toHeaderRecord,
 } from '../fingerprint.js';
 import type { HeaderRecord } from '../fingerprint.js';
+import { rehomeOversizedResponsesInstructions } from './instructions.js';
 
 function isJsonObject<Value>(value: Value): value is Value & JsonObject {
   return isObject(value) && !Array.isArray(value);
@@ -103,6 +104,15 @@ export function prepareResponsesRequest(
     payload = applyResponsesLiteContract(payload);
   }
 
+  // Preserve prompt diagnostics from Claude's original instruction string.
+  // The provider-facing payload can move an oversized value into input items,
+  // but instruction changes must remain visible to head selection diagnostics.
+  const promptFingerprint = responsesWebSocketPromptFingerprint(payload);
+  const promptFieldHashes = responsesWebSocketPromptFieldHashes(payload);
+  const instructionsSnapshot = instructionsFromPayload(payload);
+  const rehomedInstructions = rehomeOversizedResponsesInstructions(payload);
+  payload = rehomedInstructions.payload;
+
   const authorizationFingerprint = authorizationHeaderFingerprint(headers);
   const partitionUrl = bypassForWebSearch
     ? `${wsUrl}#full-responses-web-search`
@@ -124,8 +134,9 @@ export function prepareResponsesRequest(
       options,
       authorizationFingerprint,
     ),
-    promptFingerprint: responsesWebSocketPromptFingerprint(payload),
-    promptFieldHashes: responsesWebSocketPromptFieldHashes(payload),
-    instructionsSnapshot: instructionsFromPayload(payload),
+    promptFingerprint,
+    promptFieldHashes,
+    instructionsSnapshot,
+    rehomedInstructions: rehomedInstructions.metadata,
   };
 }

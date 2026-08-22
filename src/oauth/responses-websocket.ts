@@ -126,8 +126,18 @@ export function createResponsesWebSocketFetch(
       promptFingerprint,
       promptFieldHashes,
       instructionsSnapshot,
+      rehomedInstructions,
     } = prepareResponsesRequest(wsUrl, init, options);
     const diagnosticCorrelation = diagnosticContext.getStore();
+    if (rehomedInstructions) {
+      emitDiagnostic(options, {
+        event: 'ws_instructions_rehomed',
+        outcome: 'completed',
+        originalCharacters: rehomedInstructions.originalCharacters,
+        chunkCount: rehomedInstructions.chunkCount,
+        largestChunkCharacters: rehomedInstructions.largestChunkCharacters,
+      }, diagnosticCorrelation);
+    }
     const now = resolvedOptions.now();
     loadCompactionCheckpointStore(checkpointStoreDir, now, checkpointKey);
     const evictions = cleanupExpiredConnections(now);

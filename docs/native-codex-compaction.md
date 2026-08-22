@@ -140,6 +140,15 @@ in Clodex, so base64 payload size is not mistaken for text tokens.
 in-band trigger fails. Its returned array is canonical and is forwarded as-is;
 Clodex does not prune or reinterpret it.
 
+The Responses API validates the top-level `instructions` string before it runs
+either response creation or compaction. If Claude builds an instruction string
+above the API's 1,048,576-character limit, Clodex moves the exact text into
+ordered 256-KiB developer input messages and replaces the top-level value with
+a short bootstrap instruction. This makes the request legal before native
+compaction starts. The moved messages then follow the normal continuation and
+compaction lifecycle. `ws_instructions_rehomed` reports only lengths and chunk
+counts; it does not record instruction text.
+
 Each compact call has a 10-minute budget. Progressive overflow recovery can
 make up to eight compact calls within one 30-minute recovery deadline while it
 folds dependency-closed prefixes. It reserves five minutes for the final model
