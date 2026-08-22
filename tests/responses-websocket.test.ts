@@ -47,6 +47,11 @@ import {
   REHOMED_INSTRUCTIONS_BOOTSTRAP,
   RESPONSES_INSTRUCTIONS_MAX_CHARACTERS,
 } from '../src/oauth/responses-websocket/request/instructions.js';
+import { compactionSummaryHash } from '../src/oauth/responses-websocket/continuation.js';
+import {
+  syntheticAssistantMessage,
+  syntheticClaudeCompactionSummary,
+} from '../src/oauth/responses-websocket/state.js';
 import { sdkUpstreamErrorDetails } from '../src/transport/upstream-error.js';
 import {
   createHoisted,
@@ -2175,6 +2180,113 @@ beforeEach(() => {
       reason: 'known_oversized',
     }));
     rmSync(checkpointStoreDir, { recursive: true, force: true });
+  });
+
+  it('uses model summarization when an anchored compact endpoint is missing', async () => {
+    mkdirSync(process.env.CLODEX_HOME!, { recursive: true });
+    const checkpointStoreDir = mkdtempSync(join(
+      process.env.CLODEX_HOME!,
+      'claude-anchor-compact-404-',
+    ));
+    const accountId = 'acct-claude-anchor-compact-404';
+    const diagnostics: ResponsesWebSocketDiagnosticEvent[] = [];
+    const compactFetch = vi.fn(async () => new Response(JSON.stringify({
+      error: { type: 'not_found_error', message: 'compact endpoint not found' },
+    }), {
+      status: 404,
+      headers: { 'content-type': 'application/json' },
+    }));
+    const checkpointId = 'missing-endpoint';
+    const summaryText = syntheticClaudeCompactionSummary(checkpointId);
+    const assistantItem = syntheticAssistantMessage('msg_missing_endpoint', summaryText);
+    const originalUser = {
+      role: 'user',
+      content: [{ type: 'input_text', text: 'original task' }],
+    };
+    const checkpointKey = responsesWebSocketPartitionKey(
+      WS_URL,
+      sessionPayload([originalUser]),
+      { accountId },
+    )!;
+    // SAFETY: The synthetic summary is always long enough to produce an anchor hash.
+    const summaryHash = compactionSummaryHash(summaryText)!;
+    expect(saveStoredResponsesCheckpoint(checkpointStoreDir, {
+      version: 2,
+      checkpointKey,
+      lineageKey: randomUUID(),
+      requestInputHashes: [checkpointItemHash(originalUser)],
+      requestInputKinds: ['user'],
+      expectedAssistantHashes: [checkpointItemHash(assistantItem)],
+      expectedAssistantKinds: ['message'],
+      compactedInput: [
+        { type: 'compaction', encrypted_content: 'anchored-native-state' },
+        assistantItem,
+      ],
+      lastInputTokens: 50,
+      claudeCompactionSummaryHash: summaryHash,
+      lastUsedAt: Date.now(),
+    }, 16, 64)).toBe(true);
+
+    const wsFetch = createResponsesWebSocketFetch(WS_URL, undefined, {
+      accountId,
+      checkpointStoreDir,
+      compactThreshold: 10_000,
+      contextWindow: 100_000,
+      // SAFETY: The test fixture defines the asserted runtime shape.
+      compactFetch: compactFetch as typeof fetch,
+      onDiagnostic: event => diagnostics.push(event),
+    });
+    const continuationPrefix =
+      'This session is being continued from a previous conversation that ran out of context. '
+      + 'The summary below covers the earlier portion of the conversation.\n\n';
+    const continuationSuffix =
+      'Continue the conversation from where it left off without asking the user any further questions. '
+      + 'Resume directly — do not acknowledge the summary, do not recap what was happening, '
+      + 'do not preface with "I\'ll continue" or similar. Pick up the last task as if the break never happened.';
+    // Make the anchored canonical request cross the compaction threshold while
+    // remaining well inside the provider context window.
+    const currentPrompt = { type: 'input_text', text: `recover-${'x'.repeat(80_000)}` };
+    const rewrittenUser = {
+      role: 'user',
+      content: [{
+        type: 'input_text',
+        text: `${continuationPrefix}Summary:\n${summaryText.slice(9, -10)}\n${continuationSuffix}`,
+      }, currentPrompt],
+    };
+    const response = await withResponsesWebSocketDiagnosticContext(
+      { estimatedInputTokens: 25_000, forceCompaction: true },
+      () => wsFetch('https://example.test/responses', {
+        method: 'POST',
+        headers: {},
+        body: JSON.stringify(sessionPayload([rewrittenUser])),
+      }),
+    );
+
+    expect(compactFetch).toHaveBeenCalledOnce();
+    expect(response.status).toBe(200);
+    const socket = lastSocket();
+    socket.emit('open');
+    // SAFETY: The fake socket records serialized response.create payloads.
+    const sent = JSON.parse(socket.send.mock.calls[0]![0] as string);
+    expect(sent.input).toEqual([
+      { type: 'compaction', encrypted_content: 'anchored-native-state' },
+      assistantItem,
+      { role: 'user', content: [currentPrompt] },
+    ]);
+    expect(diagnostics).toContainEqual(expect.objectContaining({
+      event: 'ws_overflow_recovery',
+      outcome: 'fallback',
+      skipReason: 'endpoint_not_found',
+      fallback: 'matched_canonical_response',
+      statusCode: 404,
+    }));
+    expect(diagnostics).toContainEqual(expect.objectContaining({
+      event: 'ws_compaction',
+      outcome: 'skipped',
+      skipReason: 'endpoint_not_found_cached',
+    }));
+    emitTextResponse(socket, 'resp_anchor_model_summary', 'portable summary');
+    await readAll(response);
   });
 
   it('does not anchor a tampered synthetic Claude compaction summary', async () => {
