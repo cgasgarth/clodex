@@ -140,6 +140,11 @@ in Clodex, so base64 payload size is not mistaken for text tokens.
 in-band trigger fails. Its returned array is canonical and is forwarded as-is;
 Clodex does not prune or reinterpret it.
 
+If that optional endpoint returns HTTP 404 for an anchored Claude compaction
+request, Clodex uses the restored canonical checkpoint with normal model
+summarization when the combined request still fits the hard context window.
+The missing endpoint must not block Claude's portable-summary fallback.
+
 The Responses API validates the top-level `instructions` string before it runs
 either response creation or compaction. If Claude builds an instruction string
 above the API's 1,048,576-character limit, Clodex moves the exact text into

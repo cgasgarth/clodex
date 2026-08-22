@@ -435,19 +435,48 @@ export function createResponsesWebSocketFetch(
       && effectiveCompactThreshold !== undefined
       && matchedCanonicalEstimatedTokens >= effectiveCompactThreshold
     ) {
-      try {
-        const recovered = await runOverflowRecovery('known_oversized', true);
-        if (
-          !recovered
-          && contextWindow !== undefined
-          && matchedCanonicalEstimatedTokens >= contextWindow
-        ) {
-          terminalOverflowReason =
-            'No dependency-safe native compaction prefix could recover the oversized anchored continuation';
+      if (standaloneCompactionNotFound && matchedCanonicalFitsContext) {
+        // The optional compact endpoint is unavailable, but the restored
+        // checkpoint plus Claude's current compact prompt is still a legal
+        // response-create request. Let Claude's normal summary inference run.
+        emitDiagnostic(options, {
+          event: 'ws_overflow_recovery',
+          outcome: 'skipped',
+          reason: 'known_oversized',
+          skipReason: 'endpoint_not_found_cached',
+          fallback: 'matched_canonical_response',
+          contextWindow,
+          estimatedInputTokens: matchedCanonicalEstimatedTokens,
+        }, diagnosticCorrelation);
+      } else {
+        try {
+          const recovered = await runOverflowRecovery('known_oversized', true);
+          if (
+            !recovered
+            && contextWindow !== undefined
+            && matchedCanonicalEstimatedTokens >= contextWindow
+          ) {
+            terminalOverflowReason =
+              'No dependency-safe native compaction prefix could recover the oversized anchored continuation';
+          }
+        } catch (error) {
+          if (!(error instanceof ResponsesCompactionError)) throw error;
+          if (error.statusCode === 404 && matchedCanonicalFitsContext) {
+            standaloneCompactionNotFound = true;
+            emitDiagnostic(options, {
+              event: 'ws_overflow_recovery',
+              outcome: 'fallback',
+              reason: 'known_oversized',
+              skipReason: 'endpoint_not_found',
+              fallback: 'matched_canonical_response',
+              statusCode: 404,
+              contextWindow,
+              estimatedInputTokens: matchedCanonicalEstimatedTokens,
+            }, diagnosticCorrelation);
+          } else {
+            terminalRecoveryFailure = error;
+          }
         }
-      } catch (error) {
-        if (!(error instanceof ResponsesCompactionError)) throw error;
-        terminalRecoveryFailure = error;
       }
     }
     if (
