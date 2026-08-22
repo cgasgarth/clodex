@@ -299,8 +299,8 @@ export function applyClodexPatches(source: string, config: PatchScriptModelConfi
   // ---------------------------------------------------------------------------
   // PATCH 1 — Agent/subagent tool 'model' zod enum.
   // Anchor: the enum constructor call followed by
-  // ["sonnet",...,"fable"].optional().describe(. Claude 2.1.237 replaces
-  // Zod's `.enum(...)` spelling with a minified enum helper, so preserve the
+  // ["sonnet",...,"fable"].optional().describe(. Claude Code uses a minified
+  // enum helper here, so preserve the
   // constructor token instead of assuming either implementation. We append our
   // identities (alias when defined, else
   // the canonical id) inside the enum so the tool accepts them — this is the same
