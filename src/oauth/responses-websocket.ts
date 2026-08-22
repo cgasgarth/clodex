@@ -336,6 +336,15 @@ export function createResponsesWebSocketFetch(
       && matchedCanonicalEstimatedTokens !== undefined
       && matchedCanonicalEstimatedTokens < contextWindow
     );
+    const rawPortableSummaryFitsContext = (
+      !forceCompaction
+      && anchored
+      && contextWindow !== undefined
+      && estimatedInputTokens !== undefined
+      && estimatedInputTokens < contextWindow
+      && matchedCanonicalEstimatedTokens !== undefined
+      && matchedCanonicalEstimatedTokens >= contextWindow
+    );
     const overflowRecovery = compactThreshold !== undefined
       ? new ResponsesOverflowRecoverySession({
         requestUrl,
@@ -427,7 +436,27 @@ export function createResponsesWebSocketFetch(
         terminalRecoveryFailure = error;
       }
     };
-    if (
+    if (rawPortableSummaryFitsContext) {
+      // The exact Claude summary is independently usable context. If restoring
+      // the older opaque checkpoint plus Claude's retained tail would exceed
+      // the hard window, start a fresh head from that smaller portable summary.
+      // Do not reject a legal raw request because its optional anchor is larger.
+      emitDiagnostic(options, {
+        event: 'ws_overflow_recovery',
+        outcome: 'fallback',
+        reason: 'known_oversized',
+        skipReason: 'canonical_context_overflow',
+        fallback: 'raw_portable_summary',
+        contextWindow,
+        estimatedInputTokens,
+        canonicalEstimatedInputTokens: matchedCanonicalEstimatedTokens,
+      }, diagnosticCorrelation);
+      selected = undefined;
+      selectedMatch = undefined;
+      selectedDelta = undefined;
+      selectedCheckpoint = undefined;
+      checkpointMatch = undefined;
+    } else if (
       compactThreshold !== undefined
       && anchored
       && matchedCanonicalInput
@@ -501,6 +530,7 @@ export function createResponsesWebSocketFetch(
     if (
       compactThreshold !== undefined
       && compactionReason
+      && !rawPortableSummaryFitsContext
       && inputArray(payload).length > 0
       && !hasCompacted()
       && !terminalOverflowReason

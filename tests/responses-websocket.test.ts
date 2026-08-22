@@ -2289,6 +2289,105 @@ beforeEach(() => {
     await readAll(response);
   });
 
+  it('uses Claude portable history when its opaque anchor exceeds the hard window', async () => {
+    mkdirSync(process.env.CLODEX_HOME!, { recursive: true });
+    const checkpointStoreDir = mkdtempSync(join(
+      process.env.CLODEX_HOME!,
+      'claude-anchor-context-overflow-',
+    ));
+    const accountId = 'acct-claude-anchor-context-overflow';
+    const diagnostics: ResponsesWebSocketDiagnosticEvent[] = [];
+    const compactFetch = vi.fn(async () => new Response('unexpected compaction', { status: 500 }));
+    const checkpointId = 'oversized-anchor';
+    const summaryText = syntheticClaudeCompactionSummary(checkpointId);
+    const assistantItem = syntheticAssistantMessage('msg_oversized_anchor', summaryText);
+    const originalUser = {
+      role: 'user',
+      content: [{ type: 'input_text', text: 'original task' }],
+    };
+    const checkpointKey = responsesWebSocketPartitionKey(
+      WS_URL,
+      sessionPayload([originalUser]),
+      { accountId },
+    )!;
+    // SAFETY: The synthetic summary is always long enough to produce an anchor hash.
+    const summaryHash = compactionSummaryHash(summaryText)!;
+    expect(saveStoredResponsesCheckpoint(checkpointStoreDir, {
+      version: 2,
+      checkpointKey,
+      lineageKey: randomUUID(),
+      requestInputHashes: [checkpointItemHash(originalUser)],
+      requestInputKinds: ['user'],
+      expectedAssistantHashes: [checkpointItemHash(assistantItem)],
+      expectedAssistantKinds: ['message'],
+      compactedInput: [
+        { type: 'compaction', encrypted_content: 'large-native-state' },
+        assistantItem,
+      ],
+      lastInputTokens: 800,
+      postCompactionInputTokens: 800,
+      nextCompactionInputTokens: 900,
+      claudeCompactionSummaryHash: summaryHash,
+      lastUsedAt: Date.now(),
+    }, 16, 64)).toBe(true);
+
+    const wsFetch = createResponsesWebSocketFetch(WS_URL, undefined, {
+      accountId,
+      checkpointStoreDir,
+      compactThreshold: 100,
+      contextWindow: 1_000,
+      // SAFETY: The test fixture defines the asserted runtime shape.
+      compactFetch: compactFetch as typeof fetch,
+      onDiagnostic: event => diagnostics.push(event),
+    });
+    const continuationPrefix =
+      'This session is being continued from a previous conversation that ran out of context. '
+      + 'The summary below covers the earlier portion of the conversation.\n\n';
+    const continuationSuffix =
+      'Continue the conversation from where it left off without asking the user any further questions. '
+      + 'Resume directly — do not acknowledge the summary, do not recap what was happening, '
+      + 'do not preface with "I\'ll continue" or similar. Pick up the last task as if the break never happened.';
+    const currentPrompt = { type: 'input_text', text: `recover-${'x'.repeat(2_000)}` };
+    const rewrittenUser = {
+      role: 'user',
+      content: [{
+        type: 'input_text',
+        text: `${continuationPrefix}Summary:\n${summaryText.slice(9, -10)}\n${continuationSuffix}`,
+      }, currentPrompt],
+    };
+    const response = await withResponsesWebSocketDiagnosticContext(
+      { estimatedInputTokens: 700 },
+      () => wsFetch('https://example.test/responses', {
+        method: 'POST',
+        headers: {},
+        body: JSON.stringify(sessionPayload([rewrittenUser])),
+      }),
+    );
+
+    expect(compactFetch).not.toHaveBeenCalled();
+    expect(response.status).toBe(200);
+    const socket = lastSocket();
+    socket.emit('open');
+    // SAFETY: The fake socket records serialized response.create payloads.
+    const sent = JSON.parse(socket.send.mock.calls[0]![0] as string);
+    expect(sent.previous_response_id).toBeUndefined();
+    expect(sent.input).toEqual([rewrittenUser]);
+    expect(diagnostics).toContainEqual(expect.objectContaining({
+      event: 'ws_overflow_recovery',
+      outcome: 'fallback',
+      skipReason: 'canonical_context_overflow',
+      fallback: 'raw_portable_summary',
+      contextWindow: 1_000,
+      estimatedInputTokens: 700,
+    }));
+    emitTextResponse(socket, 'resp_portable_summary_fallback', 'continued', {
+      input_tokens: 700,
+      output_tokens: 10,
+    });
+    await readAll(response);
+    rmSync(checkpointStoreDir, { recursive: true, force: true });
+  });
+
   it('does not anchor a tampered synthetic Claude compaction summary', async () => {
     const wsFetch = createResponsesWebSocketFetch(WS_URL, undefined, {
       accountId: 'acct-short-summary',
