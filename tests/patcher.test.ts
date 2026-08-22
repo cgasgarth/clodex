@@ -462,7 +462,7 @@ describe('PATCH_TRANSFORMS_VERSION', () => {
     const digest = createHash('sha256').update(source).digest('hex');
     expect({ version: PATCH_TRANSFORMS_VERSION, digest }).toEqual({
       version: 11,
-      digest: '857bf3bdd2bffd77a553aec4c7a2a83e3299a410a7cfebb15e89e270d78e2c2c',
+      digest: '2ea3db1e06f54615b8bcb651fcc7bbdd00aa590ffae5b995d36e8ef7a528f666',
     });
   });
 });
@@ -1125,7 +1125,7 @@ const config = {
     expect(out).not.toMatch(/KNOWN=\[[^\]]*gpt-5\.6-sol/);
   });
 
-  it('patches Claude 2.1.237 enum helper syntax without rewriting the helper', () => {
+  it('patches minified enum helper syntax without rewriting the helper', () => {
     const source = CLAUDE_FIXTURE.replace(
       '.enum(["sonnet","opus","haiku","fable"])',
       'xr(["sonnet","opus","haiku","fable"])',
@@ -1137,7 +1137,7 @@ const config = {
     expect(out).not.toContain('.enum(["sonnet","opus","haiku","fable","sol","clodex:openai:mystery"])');
   });
 
-  it('keeps native Clodex ownership ahead of Claude 2.1.237 unknown-model enforcement', () => {
+  it('keeps native Clodex ownership ahead of unknown-model enforcement', () => {
     const source = CLAUDE_FIXTURE.replace(
       'return{window:o,configured:o,source:"auto"}}',
       'if(fx()&&!ee.CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT&&!R8_(e,r)&&!zks(e)&&!Vur(e,n))return{window:o,configured:o,source:"unknown-model"};return{window:o,configured:o,source:"auto"}}',
