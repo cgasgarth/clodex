@@ -145,6 +145,11 @@ request, Clodex uses the restored canonical checkpoint with normal model
 summarization when the combined request still fits the hard context window.
 The missing endpoint must not block Claude's portable-summary fallback.
 
+If the restored opaque checkpoint plus Claude's retained tail exceeds the hard
+context window but Claude's portable-summary request fits, Clodex starts a new
+response head from the portable summary. An optional opaque anchor must not make
+an otherwise valid post-compaction request fail locally.
+
 The Responses API validates the top-level `instructions` string before it runs
 either response creation or compaction. If Claude builds an instruction string
 above the API's 1,048,576-character limit, Clodex moves the exact text into
