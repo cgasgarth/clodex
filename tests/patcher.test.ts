@@ -461,8 +461,8 @@ describe('PATCH_TRANSFORMS_VERSION', () => {
     ).replace(/\r\n/g, '\n');
     const digest = createHash('sha256').update(source).digest('hex');
     expect({ version: PATCH_TRANSFORMS_VERSION, digest }).toEqual({
-      version: 11,
-      digest: '2ea3db1e06f54615b8bcb651fcc7bbdd00aa590ffae5b995d36e8ef7a528f666',
+      version: 12,
+      digest: '0e5f7438817948d8dd6789b03052f79d85fad14847f8d0fb58ca605e7da819c8',
     });
   });
 });
@@ -653,10 +653,10 @@ describe('summarizePatchResults', () => {
 // A minified stand-in for the Claude Code bundle carrying every anchor the
 // patch transforms key on, so they can be executed end to end.
 const CLAUDE_CORE_FIXTURE = [
-  '.enum(["sonnet","opus","haiku","fable"]).optional().describe(`Optional model override for this agent. Defaults to inherit.`)',
+  '.enum(["sonnet","opus","haiku","fable"]).optional().describe("Model override for this agent. Use `inherit` to match the spawning conversation.")',
   'var KNOWN=["sonnet","opus","haiku","fable","opusplan"];',
   'function rz(x){switch(x){case"best":{return "opus"}default:return null}}',
-  'function opts(e,t,r){let n=cur(),o=(n==="opus")?[n,r]:[r];for(let i of o)Dlh(e,i,t);return e}',
+  'function opts(e,t){let o=cur(e),r=Q.ANTHROPIC_CUSTOM_MODEL_OPTION;return o}',
   'function RS(e,t){let r=FAc();if(r!==void 0)return r;if(EHi(e,t))return Dve;return $Ac(e,t)}',
   'function Lbo(){if(lK("hipaa"))return!1;return QE_()&&iEs().enabled}',
   'function Fw(e){let t=Rd();if(oSs(e))return!Syo(t.enabledMcpServers).includes(e);return Syo(t.disabledMcpServers).includes(e)}',

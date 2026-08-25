@@ -78,7 +78,7 @@ import {
   type PatchScriptModelConfig,
 } from './transforms.js';
 
-const SUPPORTED_CLAUDE_CODE_VERSION = '2.1.241';
+const SUPPORTED_CLAUDE_CODE_VERSION = '2.1.245';
 
 function isString<Value>(value: Value): value is Value & string {
   return typeof value === 'string';
