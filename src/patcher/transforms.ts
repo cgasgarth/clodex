@@ -33,7 +33,7 @@ import { isReservedModelAlias } from '../models/aliases.js';
  * and never receive the new transforms, silently. `tests/patcher.test.ts` pins a
  * hash of this file to force that decision to be made rather than forgotten.
  */
-export const PATCH_TRANSFORMS_VERSION = 11;
+export const PATCH_TRANSFORMS_VERSION = 12;
 
 export interface PatchScriptModelEntry {
   alias?: string;
@@ -364,8 +364,9 @@ export function applyClodexPatches(source: string, config: PatchScriptModelConfi
 
   // ---------------------------------------------------------------------------
   // PATCH 5 — interactive /model picker.
-  // The picker is assembled through a single choke-point function; we insert,
-  // right after its loop, a snippet that appends our custom
+  // The picker is assembled through one choke-point function. Claude 2.1.245
+  // starts it from the built-in rows, then reads ANTHROPIC_CUSTOM_MODEL_OPTION;
+  // append our custom
   // {value,label,description} entries — with a runtime .some() dedupe guard so
   // it is safe even if the function runs over the same array twice. Only
   // aliases not already injected are added, so reruns top up cleanly.
@@ -381,27 +382,26 @@ export function applyClodexPatches(source: string, config: PatchScriptModelConfi
         (a) => '{value:' + q(a) + ',label:' + q(a.charAt(0).toUpperCase() + a.slice(1)) + ',description:' + q(displayFor(a, ALIAS_TO_ID[a]!)) + '}'
       )
       .join(',');
-    const inject = missing.length
-      ? '[' + entries + '].forEach(function(_o){if(!e.some(function(_i){return _i.value===_o.value}))e.push(_o)});'
+    const inject = (options: string): string => missing.length
+      ? '[' + entries + '].forEach(function(_o){if(!' + options
+        + '.some(function(_i){return _i.value===_o.value}))' + options + '.push(_o)});'
       : '';
     if (ALIASES.length === 0) {
       log('SKIP', 'PATCH 5: model picker options', 'no aliases configured');
     } else {
       applyOnce(
         'PATCH 5: model picker options',
-        /(\?\[[\w$]+,r\]:\[r\];for\(let [\w$]+ of [\w$]+\)[\w$]+\(e,[\w$]+,t\);)/,
-        (m) => m + inject,
-        { required: false, noopIsSkip: true }
+        /(function [\w$]+\([\w$]+,[\w$]+\)\{let ([\w$]+)=[\w$]+\([\w$]+\),[\w$]+=[\w$]+\.ANTHROPIC_CUSTOM_MODEL_OPTION;)/,
+        (head, options) => head + '/*ccpatch:model-picker*/' + inject(options),
+        { marker: '/*ccpatch:model-picker*/', required: false, noopIsSkip: true }
       );
     }
   }
 
   // ---------------------------------------------------------------------------
   // PATCH 4 — Agent tool 'model' parameter description text.
-  // Append the available model names (with their real labels) before the closing
-  // backtick so the model knows which extra names it may request and what they
-  // actually are. Best-effort (cosmetic). The text is spliced into a backtick
-  // template literal, so backticks and interpolation openers are stripped.
+  // Append the available model names (with their real labels) so the model knows
+  // which extra names it may request and what they are. Best-effort (cosmetic).
   // ---------------------------------------------------------------------------
   {
     const listing = IDENTITIES.map(function (i) {
@@ -410,12 +410,11 @@ export function applyClodexPatches(source: string, config: PatchScriptModelConfi
     }).join('; ');
     applyOnce(
       'PATCH 4: Agent tool model description',
-      /(describe\(`Optional model override for this agent[^`]*?)(`\))/,
-      (_m, body, close) =>
-        body.includes('Additional custom models')
-          ? body + close
-          : body + ' Additional custom models: ' + listing + '.' + close,
-      { required: false, noopIsSkip: true }
+      /(describe\()("Model override for this agent\. Use `inherit` to match the spawning conversation\.")(\))/,
+      (_m, open, body, close) =>
+        open + '/*ccpatch:agent-model-description*/'
+        + q(JSON.parse(body) + ' Additional custom models: ' + listing + '.') + close,
+      { marker: '/*ccpatch:agent-model-description*/', required: false, noopIsSkip: true }
     );
   }
 
@@ -481,12 +480,11 @@ export function applyClodexPatches(source: string, config: PatchScriptModelConfi
     const MARKER = '/*clodex:native-context-guard*/';
     applyOnce(
       'PATCH X2: native context guard',
-      new RegExp(String.raw`function ([\w$]+)\(e,t,r,n=t,o\)\{let ([\w$]+)=o\?\?([\w$]+)\(t,r\),([\w$]+)=r\.enabled\?\2:t,([\w$]+)=\4-20000,([\w$]+)=r\.testBlockingOverride,`),
-      (_m, fn, threshold, thresholdFor, active, warn, blocking) =>
-        'function ' + fn + '(e,t,r,n=t,o){' + MARKER
+      /(function [\w$]+\([\w$]+,[\w$]+,[\w$]+,[\w$]+=[\w$]+,[\w$]+\)\{)(let [\w$]+=[\w$]+\?\?[\w$]+\([\w$]+,[\w$]+\),[\w$]+=[\w$]+\.enabled\?[\w$]+:[\w$]+,[\w$]+=[\w$]+-20000,[\w$]+=[\w$]+\.testBlockingOverride,)/,
+      (_m, head, body) =>
+        head + MARKER
         + 'if(process.env.CLODEX_NATIVE_CONTEXT_OWNER==="1")return{level:"ok",pctLeft:100};'
-        + 'let ' + threshold + '=o??' + thresholdFor + '(t,r),' + active + '=r.enabled?' + threshold + ':t,'
-        + warn + '=' + active + '-20000,' + blocking + '=r.testBlockingOverride,',
+        + body,
       { marker: MARKER, required: true }
     );
   }
@@ -496,13 +494,11 @@ export function applyClodexPatches(source: string, config: PatchScriptModelConfi
     const MARKER = '/*clodex:native-precompute-owner*/';
     applyOnce(
       'PATCH X3: native precompute owner',
-      /function ([\w$]+)\(e,t,r,n\)\{let ([\w$]+)=([\w$]+)\(t,r,n\),([\w$]+)=\2\.enabled\?r:void 0,([\w$]+)=([\w$]+)\(t,\4\);if\(!([\w$]+)\(t,r\)\)return e>=([\w$]+)\(\5,\2\);/,
-      (_m, fn, options, readOptions, enabledWindow, context, resolveContext, useAlternatePath, thresholdFor) =>
-        'function ' + fn + '(e,t,r,n){' + MARKER
+      /(function [\w$]+\([\w$]+,[\w$]+,[\w$]+,[\w$]+\)\{)(let [\w$]+=[\w$]+\([\w$]+,[\w$]+,[\w$]+\),[\w$]+=[\w$]+\.enabled\?[\w$]+:void 0,[\w$]+=[\w$]+\([\w$]+,[\w$]+\);if\(![\w$]+\([\w$]+,[\w$]+\)\)return [\w$]+>=[\w$]+\([\w$]+,[\w$]+\);)/,
+      (_m, head, body) =>
+        head + MARKER
         + 'if(process.env.CLODEX_NATIVE_CONTEXT_OWNER==="1")return!1;'
-        + 'let ' + options + '=' + readOptions + '(t,r,n),' + enabledWindow + '=' + options + '.enabled?r:void 0,'
-        + context + '=' + resolveContext + '(t,' + enabledWindow + ');if(!' + useAlternatePath
-        + '(t,r))return e>=' + thresholdFor + '(' + context + ',' + options + ');',
+        + body,
       { marker: MARKER, required: true }
     );
   }
@@ -522,14 +518,12 @@ export function applyClodexPatches(source: string, config: PatchScriptModelConfi
     const MARKER = '/*clodex:native-context-window*/';
     applyOnce(
       'PATCH X4: native context window',
-      /function ([\w$]+)\(e,t,r=([\w$]+)\(\)\)\{let ([\w$]+)=([\w$]+)\(e\),([\w$]+)=([\w$]+)\(e,r\);if\(process\.env\.CLAUDE_CODE_AUTO_COMPACT_WINDOW\)/,
-      (_m, resolver, readClientData, modelKey, normalizeModel, modelCap, resolveModelCap) =>
-        'function ' + resolver + '(e,t,r=' + readClientData + '()){let '
-        + modelKey + '=' + normalizeModel + '(e),' + modelCap + '=' + resolveModelCap
-        + '(e,r);' + MARKER
+      /(function [\w$]+\([\w$]+,[\w$]+,[\w$]+=[\w$]+\(\)\)\{let [\w$]+=[\w$]+\([\w$]+\),([\w$]+)=[\w$]+\([\w$]+,[\w$]+\);)(if\(process\.env\.CLAUDE_CODE_AUTO_COMPACT_WINDOW\))/,
+      (_m, head, modelCap, envBranch) =>
+        head + MARKER
         + 'if(process.env.CLODEX_NATIVE_CONTEXT_OWNER==="1")return{window:' + modelCap
         + ',configured:' + modelCap + ',source:"owner"};'
-        + 'if(process.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW)',
+        + envBranch,
       { marker: MARKER, required: true }
     );
   }
@@ -728,17 +722,17 @@ export function applyClodexPatches(source: string, config: PatchScriptModelConfi
 
     applyOnce(
       'PATCH X9d: Clodex Fast session-only writes',
-      /(function ([\w$]+)\(e,t,r=!0,n\)\{)(if\(([\w$]+)\(\),!r\))/,
-      (_m, head, _toggle, body) =>
-        head + '/*ccpatch:fast-session-write*/if(' + envGate + ')r=!1;' + body,
+      /(function [\w$]+\([\w$]+,[\w$]+,([\w$]+)=!0,[\w$]+\)\{)(if\([\w$]+\(\),!\2\))/,
+      (_m, head, persist, body) =>
+        head + '/*ccpatch:fast-session-write*/if(' + envGate + ')' + persist + '=!1;' + body,
       { marker: '/*ccpatch:fast-session-write*/', required: true },
     );
 
     applyOnce(
       'PATCH X9e: Clodex Fast session-only status',
-      /(async function ([\w$]+)\(e,t,r,n,o=!0,i\)\{)(let [\w$]+=[\w$]+\(\);if\([\w$]+\)return`Fast mode unavailable: \$\{[\w$]+\}`;)/,
-      (_m, head, _toggle, body) =>
-        head + '/*ccpatch:fast-session-status*/if(' + envGate + ')o=!1;' + body,
+      /(async function [\w$]+\([\w$]+,[\w$]+,[\w$]+,[\w$]+,([\w$]+)=!0,[\w$]+\)\{)(let [\w$]+=[\w$]+\(\);if\([\w$]+\)return`Fast mode unavailable: \$\{[\w$]+\}`;)/,
+      (_m, head, persist, body) =>
+        head + '/*ccpatch:fast-session-status*/if(' + envGate + ')' + persist + '=!1;' + body,
       { marker: '/*ccpatch:fast-session-status*/', required: true },
     );
 
