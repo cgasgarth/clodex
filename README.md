@@ -64,6 +64,7 @@ your absolute home path. Keep other settings and hooks that you already use.
 {
   "env": {
     "ANTHROPIC_BASE_URL": "http://127.0.0.1:17647/anthropic",
+    "ANTHROPIC_API_KEY": "clodex",
     "CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK": "1",
     "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY": "1",
     "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "1048576",
@@ -112,9 +113,11 @@ your absolute home path. Keep other settings and hooks that you already use.
 }
 ```
 
-The daemon accepts requests only on its loopback endpoint and does not require
-an API key. The `SessionStart` hook checks health and starts Clodex only when
-needed. No hook stops Clodex. The internal
+Claude Code requires a non-empty credential before it sends requests, so
+`ANTHROPIC_API_KEY` is a fixed, non-secret client placeholder. The daemon
+accepts requests only on its loopback endpoint and does not validate or require
+that value. Do not configure `apiKeyHelper`. The `SessionStart` hook checks
+health and starts Clodex only when needed. No hook stops Clodex. The internal
 `clodex-claude` process wrapper is only for Claude-spawned child processes; it
 is not the terminal startup command.
 
