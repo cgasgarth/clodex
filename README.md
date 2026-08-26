@@ -49,10 +49,11 @@ clodex models
 clodex models --alias sol=clodex:openai-oauth:gpt-5.6-sol
 clodex models --alias luna=clodex:openai-oauth:gpt-5.6-luna
 clodex models --alias terra=clodex:openai-oauth:gpt-5.6-terra
+clodex start
 clodex claude
 ```
 
-After setup, use `clodex claude` wherever you would normally use `claude`.
+After setup, start Clodex, then use `clodex claude` wherever you would normally use `claude`.
 Inside Claude Code, `/model` switches between your enabled Codex models. Bare
 `clodex` opens the daemon dashboard; `clodex start` starts it without opening
 the dashboard.
@@ -195,13 +196,12 @@ clodex                      # start if needed, then open the Ink dashboard
 clodex stop                 # stop the daemon
 ```
 
-Bare `clodex` starts the daemon if needed and opens six views: Overview, Usage,
-Accounts, Diagnostics, Secondwind, and Models. Press `1`–`6` to switch views. Usage
+Bare `clodex` starts the daemon if needed and opens five views: Overview, Usage,
+Accounts, Diagnostics, and Secondwind. Press `1`–`5` to switch views. Usage
 supports active-account/all-account scope with `a`, plus day/last-7-days/last-30-days
 navigation with `Tab`, `Shift+Tab`, `←`, `→`, and `0`.
 Secondwind mode changes require confirmation. Secondwind processes every translated
-OpenAI and Grok request before provider translation. The Models view enables or disables
-models in the live route catalog and native picker used by new Claude launches.
+OpenAI and Grok request before provider translation.
 The Diagnostics view switches between compact error-only logs and full lifecycle logs;
 full mode records native compaction start, completion, duration, and recovery details.
 
@@ -250,7 +250,9 @@ errors.
 
 ### `clodex claude [options] [claude-flags]`
 
-Launch Claude Code bridged to OpenAI models. Unrecognized flags (and everything after `--`) pass through to Claude Code (`-c`, `--resume`, `--print`, …).
+Launch Claude Code through a running Clodex daemon. Run `clodex start` first.
+Unrecognized flags (and everything after `--`) pass through to Claude Code
+(`-c`, `--resume`, `--print`, …).
 
 | Flag | Effect |
 | --- | --- |

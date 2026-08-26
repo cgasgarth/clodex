@@ -3,7 +3,7 @@ import { mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSyn
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { isObject } from './type-guards.js';
+import { isObject, isString } from './type-guards.js';
 
 type ClaudeSettingValue = string | number | boolean | null | ClaudeSettingValue[] | ClaudeSettings;
 
@@ -88,6 +88,11 @@ function existingFileMode(path: string): number {
 
 function getClaudeSettingsPath(): string {
   return join(homedir(), '.claude', 'settings.json');
+}
+
+export function readClaudeDefaultModel(path = getClaudeSettingsPath()): string | undefined {
+  const model = readClaudeSettings(path)['model'];
+  return isString(model) && model.trim() ? model.trim() : undefined;
 }
 
 /** Store Clodex picker rows in Claude's native user settings without changing other keys. */

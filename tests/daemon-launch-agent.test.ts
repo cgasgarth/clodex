@@ -2,8 +2,12 @@ import { describe, expect, it } from 'bun:test';
 import { daemonLaunchAgentPlist } from '../src/daemon/launch-agent.js';
 import {
   DEFAULT_DAEMON_PORT,
+  requireDaemonRunning,
   resolveDaemonPort,
 } from '../src/daemon/index.js';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 describe('daemon launch agent', () => {
   it('pins Bun and CLI paths and restarts only abnormal exits', () => {
@@ -34,5 +38,17 @@ describe('daemon launch agent', () => {
     expect(resolveDaemonPort({ CLODEX_DAEMON_PORT: '27777' })).toBe(27777);
     expect(() => resolveDaemonPort({ CLODEX_DAEMON_PORT: '0' }))
       .toThrow('between 1 and 65535');
+  });
+
+  it('requires an explicit daemon start for Claude launches', async () => {
+    const previousHome = process.env['CLODEX_HOME'];
+    process.env['CLODEX_HOME'] = mkdtempSync(join(tmpdir(), 'clodex-manual-start-'));
+    try {
+      await expect(requireDaemonRunning('/opt/clodex/cli.js'))
+        .rejects.toThrow('Run `clodex start` first');
+    } finally {
+      if (previousHome === undefined) delete process.env['CLODEX_HOME'];
+      else process.env['CLODEX_HOME'] = previousHome;
+    }
   });
 });

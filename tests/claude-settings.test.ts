@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'bun:test';
 import {
   buildClaudeModelPickerOptions,
+  readClaudeDefaultModel,
   syncClaudeModelPickerSettings,
 } from '../src/runtime/claude-settings.js';
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
@@ -49,6 +50,17 @@ describe('native Claude model picker settings', () => {
       [{ name: 'sol', routeId: routes[0]!.aliasId }],
       path,
     )).toBe(false);
+    expect(readClaudeDefaultModel(path)).toBe('sol');
+  });
+
+  it('ignores an absent or non-string default model', () => {
+    const root = mkdtempSync(join(tmpdir(), 'clodex-claude-settings-'));
+    const missing = join(root, 'missing.json');
+    const invalid = join(root, 'invalid.json');
+    writeFileSync(invalid, '{"model":42}');
+
+    expect(readClaudeDefaultModel(missing)).toBeUndefined();
+    expect(readClaudeDefaultModel(invalid)).toBeUndefined();
   });
 
   it('does not create settings for an empty catalog', () => {

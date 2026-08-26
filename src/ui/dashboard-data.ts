@@ -5,10 +5,6 @@ import {
   type DaemonControlRequestOptions,
 } from '../daemon/control-client.js';
 import type {
-  DaemonClaudeModelSnapshot,
-  DaemonClaudeModelView,
-} from '../daemon/model-service.js';
-import type {
   SecondwindModeMetrics,
   SecondwindSessionSavings,
   SecondwindSnapshot,
@@ -138,14 +134,13 @@ export interface DashboardPanelSnapshot {
   diagnostics?: Diagnostic[];
   diagnosticLogMode?: DiagnosticLogMode;
   secondwind?: SecondwindSnapshot;
-  models?: DaemonClaudeModelView[];
   warnings: string[];
 }
 
 const PERIODS: UsagePeriod[] = ['day', 'last7', 'last30'];
 const CHART_WIDTH = 56;
 const CHART_HEIGHT = 6;
-export const VIEW_SWITCH_HINT = 'Press 1–6 to switch views';
+export const VIEW_SWITCH_HINT = 'Press 1–5 to switch views';
 
 export function requestFailure(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause);
@@ -155,7 +150,7 @@ export async function loadDashboardPanels(
   request: DashboardRequest = daemonControlRequest,
 ): Promise<DashboardPanelSnapshot> {
   const options = { timeoutMs: DASHBOARD_CONTROL_REQUEST_TIMEOUT_MS };
-  const [status, accounts, diagnostics, secondwind, models] = await Promise.allSettled([
+  const [status, accounts, diagnostics, secondwind] = await Promise.allSettled([
     request<DaemonStatus>('/v1/status', options),
     request<{ accounts: Account[] }>('/v1/accounts', options),
     request<{ diagnostics: Diagnostic[]; mode: DiagnosticLogMode }>(
@@ -163,7 +158,6 @@ export async function loadDashboardPanels(
       options,
     ),
     request<SecondwindSnapshot>('/v1/secondwind', options),
-    request<DaemonClaudeModelSnapshot>('/v1/claude/models', options),
   ]);
   const warnings: string[] = [];
   if (status.status === 'rejected') warnings.push(`status: ${requestFailure(status.reason)}`);
@@ -174,9 +168,7 @@ export async function loadDashboardPanels(
   if (secondwind.status === 'rejected') {
     warnings.push(`Secondwind: ${requestFailure(secondwind.reason)}`);
   }
-  if (models.status === 'rejected') warnings.push(`models: ${requestFailure(models.reason)}`);
-
-  let reachable = [status, accounts, diagnostics, secondwind, models]
+  let reachable = [status, accounts, diagnostics, secondwind]
     .some(result => result.status === 'fulfilled');
   if (!reachable) {
     try {
@@ -198,7 +190,6 @@ export async function loadDashboardPanels(
       ? diagnostics.value.mode
       : undefined,
     secondwind: secondwind.status === 'fulfilled' ? secondwind.value : undefined,
-    models: models.status === 'fulfilled' ? models.value.models : undefined,
     warnings,
   };
 }

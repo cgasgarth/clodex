@@ -49,8 +49,8 @@ clodex-claude --resume <session>
 clodex-claude --clodex-account person@example.com
 ```
 
-`clodex claude …` is the higher-level equivalent: it starts the daemon when
-needed, launches through the shared endpoint, and automatically points
+`clodex claude …` is the higher-level equivalent: it requires a running daemon,
+launches through the shared endpoint, and automatically points
 Claude-spawned children at `clodex-claude`.
 
 Set Claude Code's process wrapper to the absolute `clodex-claude` path so
@@ -77,11 +77,10 @@ Bare `clodex` starts the daemon when needed, then opens the Ink dashboard.
 `clodex start` starts it without opening the dashboard, and `clodex stop`
 stops it.
 
-- `1`–`6`: switch Overview, Usage, Accounts, Diagnostics, Secondwind, and Models views
+- `1`–`5`: switch Overview, Usage, Accounts, Diagnostics, and Secondwind views
 - Usage: `Tab` changes range; `←`/`→` changes period
 - Accounts: `↑`/`↓` chooses; `Enter` selects; `l` logs in; `x x` logs out
 - Secondwind: `←`/`→` or `o`, `s`, and `n` choose a mode; `Enter` confirms
-- Models: `↑`/`↓` chooses; `Space` stages enable/disable; `Enter` confirms
 - `r`: refresh
 - `q`: quit the dashboard; the daemon keeps running
 

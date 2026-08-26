@@ -39,7 +39,6 @@ import {
 } from './launch-agent.js';
 import { createDaemonAccountController } from './account-service.js';
 import { createDaemonSecondwindService } from './secondwind.js';
-import { createDaemonClaudeModelController } from './model-service.js';
 import { loadPreferences, savePreferences } from '../config/config.js';
 import {
   diagnosticLogMode,
@@ -109,8 +108,9 @@ ${pc.bold('Usage:')}
   clodex daemon logs        Print daemon log paths
 
 Run bare ${pc.bold('clodex')} to open the live Ink dashboard.
-The existing ${pc.bold('clodex-claude')} wrapper automatically discovers the
-daemon endpoint on its restart-stable port (default ${DEFAULT_DAEMON_PORT}).
+Run ${pc.bold('clodex start')} before launching Claude. The internal
+${pc.bold('clodex-claude')} process wrapper discovers the daemon endpoint on its
+restart-stable port (default ${DEFAULT_DAEMON_PORT}).
 Account switching is explicit; quota or auth errors never fail over to another
 account.`;
 }
@@ -206,6 +206,23 @@ export async function ensureDaemonRunning(
   const runtime = readDaemonRuntimeState();
   if (!runtime || !isPidAlive(runtime.pid)) {
     throw new Error('Clodex daemon started without publishing valid runtime state');
+  }
+  return runtime;
+}
+
+export async function requireDaemonRunning(
+  cliPath: string,
+  timeoutMs = 2_000,
+): Promise<DaemonRuntimeState> {
+  const runtime = readDaemonRuntimeState();
+  if (!runtime || !isPidAlive(runtime.pid)) {
+    throw new Error('Clodex is not running. Run `clodex start` first.');
+  }
+  if (!runtimeMatchesInstall(runtime, cliPath)) {
+    throw new Error('The running Clodex daemon does not match this install. Run `clodex restart`.');
+  }
+  if (!await waitForDaemon(timeoutMs, runtime.controlSocketPath)) {
+    throw new Error(`Clodex daemon pid ${runtime.pid} is not ready. Run \`clodex restart\`.`);
   }
   return runtime;
 }
@@ -355,7 +372,6 @@ async function runDaemonProcess(): Promise<number> {
       }),
       event => shouldWriteWebSocketDiagnostic(activeDiagnosticLogMode, event),
     );
-    const models = createDaemonClaudeModelController(endpoint);
     runtime = createDaemonRuntimeState({
       pid: process.pid,
       bunPath: process.execPath,
@@ -381,7 +397,6 @@ async function runDaemonProcess(): Promise<number> {
       accounts,
       secondwind,
       diagnosticLogs,
-      models,
       requestRestart,
       requestStop: requestShutdown,
     });

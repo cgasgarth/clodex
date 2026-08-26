@@ -2,11 +2,6 @@
   // Bun 1.4 exposes `dedupe` as a runtime subcommand. Knip treats the
   // subcommand in `bun dedupe --check` as an external executable.
   "ignoreBinaries": ["dedupe"],
-  "ignoreUnresolved": [
-    // Required for Linux CI: this macOS-only executable is intentionally used
-    // by launch-agent.ts. Do not remove when local macOS Knip calls it redundant.
-    "/bin/launchctl"
-  ],
   "entry": [
     // Bun Worker entrypoint built separately from the CLI bundle. Keep this
     // explicit: its URL is selected dynamically for source and dist runs.
