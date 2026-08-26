@@ -35,7 +35,7 @@ describe('managed-account launch ticket transport', () => {
     expect(parseProxyLaunchTicket('Bearer value')).toBeUndefined();
   });
 
-  it('carries the launch ticket in a daemon endpoint API key', async () => {
+  it('carries the launch ticket in a daemon endpoint header', async () => {
     const root = mkdtempSync(join(tmpdir(), 'clodex-endpoint-ticket-'));
     roots.push(root);
     process.env['CLODEX_HOME'] = root;
@@ -59,7 +59,7 @@ describe('managed-account launch ticket transport', () => {
         method: 'POST',
         headers: {
           'content-type': 'application/json',
-          'x-api-key': `${handle.token}.ticket.part-two`,
+          'x-clodex-launch-ticket': 'ticket.part-two',
         },
         body: JSON.stringify({
           model: 'sol',

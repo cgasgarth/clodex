@@ -30,7 +30,7 @@ vi.mock('../src/sdk-adapter.js', () => {
   };
 });
 
-function postToProxy(port: number, token: string, body: JsonValue): Promise<{ status: number; body: string }> {
+function postToProxy(port: number, body: JsonValue): Promise<{ status: number; body: string }> {
   return new Promise((resolve, reject) => {
     const payload = JSON.stringify(body);
     const req = http.request(
@@ -41,7 +41,6 @@ function postToProxy(port: number, token: string, body: JsonValue): Promise<{ st
         method: 'POST',
         headers: {
           'content-type': 'application/json',
-          authorization: `Bearer ${token}`,
           'anthropic-version': '2023-06-01',
           'content-length': Buffer.byteLength(payload),
         },
@@ -79,7 +78,7 @@ describe('SDK proxy provider identity', () => {
     };
 
     const handle = await startProxyCatalog([route], route.aliasId, false);
-    const res = await postToProxy(handle.port, handle.token, {
+    const res = await postToProxy(handle.port, {
       model: route.aliasId,
       max_tokens: 100,
       messages: [{ role: 'user', content: 'hi' }],
@@ -109,7 +108,7 @@ describe('SDK proxy provider identity', () => {
     };
 
     const handle = await startProxyCatalog([route], route.aliasId, false);
-    const res = await postToProxy(handle.port, handle.token, {
+    const res = await postToProxy(handle.port, {
       model: route.aliasId,
       max_tokens: 100,
       messages: [{ role: 'user', content: 'hi' }],

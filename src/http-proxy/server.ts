@@ -223,7 +223,6 @@ function socketIdentity(socket: SocketEndpoint): string {
 
 function adapterNodeHeaders(
   req: http.IncomingMessage,
-  adapterToken: string,
   contentLength: number,
   requestId: string | undefined,
   launchTicket: string | undefined,
@@ -231,7 +230,6 @@ function adapterNodeHeaders(
   const headers: http.OutgoingHttpHeaders = {
     'Content-Type': 'application/json',
     'Content-Length': String(contentLength),
-    'x-api-key': adapterToken,
   };
   const sessionId = req.headers['x-claude-code-session-id'];
   if (isString(sessionId)) headers['x-claude-code-session-id'] = sessionId;
@@ -242,13 +240,11 @@ function adapterNodeHeaders(
 
 function adapterFetchHeaders(
   req: http.IncomingMessage,
-  adapterToken: string,
   requestId: string | undefined,
   launchTicket: string | undefined,
 ): Headers {
   const headers = new Headers({
     'Content-Type': 'application/json',
-    'x-api-key': adapterToken,
   });
   const sessionId = req.headers['x-claude-code-session-id'];
   if (isString(sessionId)) headers.set('x-claude-code-session-id', sessionId);
@@ -714,7 +710,6 @@ function forwardToAdapter(
       agent: adapterAgent,
       headers: adapterNodeHeaders(
         req,
-        adapter.token,
         rawBody.length,
         lifecycle?.requestId,
         launchTicket,
@@ -905,7 +900,7 @@ async function forwardToAdapterWithFetch(
   try {
     const response = await fetch(`http://127.0.0.1:${adapter.port}${req.url ?? '/'}`, {
       method: 'POST',
-      headers: adapterFetchHeaders(req, adapter.token, lifecycle?.requestId, launchTicket),
+      headers: adapterFetchHeaders(req, lifecycle?.requestId, launchTicket),
       body: new Uint8Array(rawBody),
       signal: abort.signal,
     });

@@ -36,7 +36,6 @@ function toolRequest(content: string): JsonObject {
 
 function postMessage(
   port: number,
-  token: string,
   body: JsonObject,
 ): Promise<{ status: number; body: string }> {
   return new Promise((resolve, reject) => {
@@ -49,7 +48,6 @@ function postMessage(
       headers: {
         'content-type': 'application/json',
         'content-length': Buffer.byteLength(payload),
-        'x-api-key': token,
         'x-relay-request-id': 'secondwind-e2e-request',
         'x-claude-code-session-id': '11111111-1111-4111-8111-111111111111',
         'x-claude-code-agent-id': 'workflow-agent-1',
@@ -164,7 +162,7 @@ describe('single-endpoint daemon Secondwind integration', () => {
 
     try {
       const original = toolRequest('large tool output '.repeat(1_000));
-      expect((await postMessage(endpoint.port, endpoint.token, original)).status).toBe(200);
+      expect((await postMessage(endpoint.port, original)).status).toBe(200);
       expect(upstreamBodies[0]).toMatchObject({
         model: route.realModelId,
         messages: [{
@@ -246,7 +244,7 @@ describe('single-endpoint daemon Secondwind integration', () => {
         method: 'POST',
         body: { mode: 'off' },
       });
-      expect((await postMessage(endpoint.port, endpoint.token, original)).status).toBe(200);
+      expect((await postMessage(endpoint.port, original)).status).toBe(200);
       expect(upstreamBodies[1]).toMatchObject({
         model: route.realModelId,
         messages: [{

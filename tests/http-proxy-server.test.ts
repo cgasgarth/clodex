@@ -226,7 +226,6 @@ async function adapterResponseFailureEntries(
     routes: [route],
     adapterHandle: {
       port: 1,
-      token: 'adapter-local-token',
       close: () => {},
     },
     inferenceLogPath,
@@ -938,7 +937,6 @@ it('preserves an existing custom CA in the child trust bundle', () => {
       reservedModelIds: ['missing-route', 'orbit', 'Orbit', 'ORBIT'],
       adapterHandle: {
         port: adapterPort,
-        token: 'adapter-local-token',
         close: () => {
           adapterServer.closeAllConnections();
           adapterServer.close();
@@ -976,7 +974,7 @@ it('preserves an existing custom CA in the child trust bundle', () => {
       expect(providerResponse).toContain('200 OK');
       expect(anthropicRequests).toBe(0);
       expect(adapterAuth).toBeUndefined();
-      expect(adapterApiKey).toBe('adapter-local-token');
+      expect(adapterApiKey).toBeUndefined();
       expect(adapterClaudeSessionId).toBe('11111111-1111-4111-8111-111111111111');
       expect(adapterBody).toBe(body);
       const relayEntries = (await readFlushedLog(inferenceLogPath)).trim().split('\n').map(line => JSON.parse(line));
@@ -1185,7 +1183,6 @@ it('preserves an existing custom CA in the child trust bundle', () => {
       routes: [route],
       adapterHandle: {
         port: adapterPort,
-        token: 'adapter-local-token',
         close: () => {
           adapterServer.closeAllConnections();
           adapterServer.close();
@@ -1265,7 +1262,6 @@ it('preserves an existing custom CA in the child trust bundle', () => {
       routes: [route],
       adapterHandle: {
         port: adapterPort,
-        token: 'adapter-local-token',
         close: () => {
           void adapterServer.stop(true);
         },
@@ -1365,7 +1361,6 @@ it('preserves an existing custom CA in the child trust bundle', () => {
       routes: [route],
       adapterHandle: {
         port: adapterPort,
-        token: 'adapter-local-token',
         close: () => {
           void adapterServer.stop(true);
         },
@@ -1441,7 +1436,6 @@ it('preserves an existing custom CA in the child trust bundle', () => {
       routes: [route],
       adapterHandle: {
         port: unavailableAdapterPort,
-        token: 'adapter-local-token',
         close: () => {},
       },
       inferenceLogPath,
@@ -1510,7 +1504,6 @@ it('preserves an existing custom CA in the child trust bundle', () => {
       routes: [route],
       adapterHandle: {
         port: adapterPort,
-        token: 'adapter-local-token',
         close: () => {
           adapterServer.closeAllConnections();
           adapterServer.close();
@@ -1581,7 +1574,6 @@ it('preserves an existing custom CA in the child trust bundle', () => {
       routes: [route],
       adapterHandle: {
         port: 1,
-        token: 'adapter-local-token',
         close: () => {},
       },
       inferenceLogPath,
@@ -1647,7 +1639,6 @@ it('preserves an existing custom CA in the child trust bundle', () => {
       routes: [route],
       adapterHandle: {
         port: adapterPort,
-        token: 'adapter-local-token',
         close: () => {
           adapterServer.closeAllConnections();
           adapterServer.close();

@@ -50,7 +50,6 @@ vi.mock('../src/oauth/responses-websocket.js', () => {
 /** POST JSON to a local proxy via node:http (avoids stubTestGlobal('fetch') interception). */
 function postToProxy(
   port: number,
-  token: string,
   body: JsonValue,
   relayRequestId?: string,
   path = '/v1/messages',
@@ -62,7 +61,6 @@ function postToProxy(
     const payload = JSON.stringify(body);
     const headers: http.OutgoingHttpHeaders = {
       'Content-Type': 'application/json',
-      'Authorization': `Bearer ${token}`,
       'anthropic-version': '2023-06-01',
       'Content-Length': Buffer.byteLength(payload),
     };
@@ -183,7 +181,6 @@ describe('Anthropic endpoint routing', () => {
     try {
       const response = await postToProxy(
         handle.port,
-        handle.token,
         {
           model: route.aliasId,
           max_tokens: 100,
@@ -250,18 +247,18 @@ describe('Anthropic endpoint routing', () => {
     );
 
     try {
-      const inherited = await postToProxy(handle.port, handle.token, {
+      const inherited = await postToProxy(handle.port, {
         model: route.aliasId,
         max_tokens: 100,
         messages: [{ role: 'user', content: 'launch default' }],
       });
-      const disabled = await postToProxy(handle.port, handle.token, {
+      const disabled = await postToProxy(handle.port, {
         model: route.aliasId,
         max_tokens: 100,
         messages: [{ role: 'user', content: 'session standard' }],
         speed: 'standard',
       });
-      const enabled = await postToProxy(handle.port, handle.token, {
+      const enabled = await postToProxy(handle.port, {
         model: route.aliasId,
         max_tokens: 100,
         messages: [{ role: 'user', content: 'session fast' }],
@@ -312,7 +309,7 @@ describe('SDK anonymous route handling', () => {
     };
 
     const handle = await startProxyCatalog([route], route.aliasId, false);
-    const res = await postToProxy(handle.port, handle.token, {
+    const res = await postToProxy(handle.port, {
       model: route.aliasId,
       max_tokens: 100,
       messages: [{ role: 'user', content: 'hi' }],
@@ -350,7 +347,7 @@ describe('SDK anonymous route handling', () => {
 
     const handle = await startProxyCatalog([route], route.aliasId, false);
     try {
-      const res = await postToProxy(handle.port, handle.token, {
+      const res = await postToProxy(handle.port, {
         model: route.aliasId,
         max_tokens: 100,
         messages: [{ role: 'user', content: 'hi' }],
@@ -413,13 +410,13 @@ describe('SDK anonymous route handling', () => {
     );
 
     try {
-      const messages = await postToProxy(handle.port, handle.token, {
+      const messages = await postToProxy(handle.port, {
         model: 'anonymous-model',
         max_tokens: 100,
         messages: [{ role: 'user', content: 'hi' }],
         stream: false,
       });
-      const tokens = await postToProxy(handle.port, handle.token, {
+      const tokens = await postToProxy(handle.port, {
         model: 'anonymous-model',
         messages: [{ role: 'user', content: 'count this' }],
       }, undefined, '/v1/messages/count_tokens');
@@ -518,7 +515,7 @@ describe('catalog model aliases', () => {
         { model: 'missing-route', path: '/v1/messages/count_tokens' },
         { model: 'models/clodex:test:unavailable-model[1M]', path: '/v1/messages/count_tokens' },
       ]) {
-        const response = await postToProxy(handle.port, handle.token, {
+        const response = await postToProxy(handle.port, {
           model: testCase.model,
           max_tokens: 100,
           messages: [{ role: 'user', content: 'hi' }],
@@ -558,7 +555,7 @@ describe('catalog model aliases', () => {
 
     try {
       for (const path of ['/v1/messages', '/v1/messages/count_tokens']) {
-        const response = await postToProxy(handle.port, handle.token, {
+        const response = await postToProxy(handle.port, {
           model: 'clodex:test:unavailable-model',
           max_tokens: 100,
           messages: [{ role: 'user', content: 'hi' }],
@@ -621,7 +618,7 @@ describe('catalog model aliases', () => {
     );
 
     try {
-      const response = await postToProxy(handle.port, handle.token, {
+      const response = await postToProxy(handle.port, {
         model: 'orbit',
         max_tokens: 100,
         messages: [{ role: 'user', content: 'hi' }],
@@ -680,7 +677,7 @@ describe('catalog model aliases', () => {
     );
 
     try {
-      const canonical = await postToProxy(handle.port, handle.token, {
+      const canonical = await postToProxy(handle.port, {
         model: 'luna',
         max_tokens: 100,
         messages: [{ role: 'user', content: 'hi' }],
@@ -690,7 +687,7 @@ describe('catalog model aliases', () => {
       expect(fetchMock).toHaveBeenCalledTimes(1);
 
       for (const savedName of ['LuNa', 'LUNA']) {
-        const blocked = await postToProxy(handle.port, handle.token, {
+        const blocked = await postToProxy(handle.port, {
           model: savedName,
           max_tokens: 100,
           messages: [{ role: 'user', content: 'hi' }],
@@ -761,7 +758,7 @@ describe('catalog model aliases', () => {
     );
 
     try {
-      const res = await postToProxy(handle.port, handle.token, {
+      const res = await postToProxy(handle.port, {
         model: 'sol',
         max_tokens: 100,
         messages: [{ role: 'user', content: 'hi' }],
@@ -793,7 +790,7 @@ describe('catalog model aliases', () => {
         expect(modelLookup).toBe(200);
       }
 
-      const prefixedMessages = await postToProxy(handle.port, handle.token, {
+      const prefixedMessages = await postToProxy(handle.port, {
         model: 'sol',
         max_tokens: 100,
         messages: [{ role: 'user', content: 'background wrapper' }],
@@ -860,7 +857,7 @@ describe('token counting', () => {
     const handle = await startProxyCatalog([route], route.aliasId, false);
 
     try {
-      const res = await postToProxy(handle.port, handle.token, {
+      const res = await postToProxy(handle.port, {
         model: route.aliasId,
         messages: [{ role: 'user', content: 'count this context locally' }],
       }, undefined, '/v1/messages/count_tokens?beta=true');
@@ -892,7 +889,7 @@ describe('token counting', () => {
     const handle = await startProxyCatalog([route], route.aliasId, false);
 
     try {
-      const res = await postToProxy(handle.port, handle.token, {
+      const res = await postToProxy(handle.port, {
         model: route.aliasId,
         messages: [{ role: 'user', content: 'count upstream' }],
       }, undefined, '/v1/messages/count_tokens');
@@ -963,7 +960,6 @@ describe('translated request cancellation', () => {
         signal: controller.signal,
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${handle.token}`,
           'Content-Length': Buffer.byteLength(payload),
           'x-relay-request-id': 'req-cancel-1',
           'x-claude-code-agent-id': 'workflow-cancel-1',
@@ -1026,7 +1022,7 @@ it('returns an HTTP error when request translation throws instead of leaving the
     const handle = await startProxyCatalog([route], route.aliasId, false, inferenceLogPath);
 
     try {
-      const res = await postToProxy(handle.port, handle.token, {
+      const res = await postToProxy(handle.port, {
         model: route.aliasId,
         max_tokens: 100,
         messages: {},
@@ -1079,7 +1075,7 @@ it('returns an HTTP error when request translation throws instead of leaving the
     const handle = await startProxyCatalog([route], route.aliasId, false, inferenceLogPath);
 
     try {
-      const res = await postToProxy(handle.port, handle.token, {
+      const res = await postToProxy(handle.port, {
         model: route.aliasId,
         max_tokens: 100,
         messages: [{ role: 'user', content: 'hi' }],
@@ -1160,7 +1156,7 @@ it('returns an HTTP error when request translation throws instead of leaving the
     const handle = await startProxyCatalog([route], route.aliasId, false);
 
     try {
-      const res = await postToProxy(handle.port, handle.token, {
+      const res = await postToProxy(handle.port, {
         model: route.aliasId,
         max_tokens: 100,
         messages: [{ role: 'user', content: 'hi' }],
@@ -1213,7 +1209,7 @@ it('returns an HTTP error when request translation throws instead of leaving the
     const handle = await startProxyCatalog([route], route.aliasId, false, inferenceLogPath);
 
     try {
-      const res = await postToProxy(handle.port, handle.token, {
+      const res = await postToProxy(handle.port, {
         model: route.aliasId,
         max_tokens: 100,
         messages: [{ role: 'user', content: 'test transport failure' }],
@@ -1285,7 +1281,7 @@ it('returns an HTTP error when request translation throws instead of leaving the
     const handle = await startProxyCatalog([route], route.aliasId, false, inferenceLogPath);
 
     try {
-      const res = await postToProxy(handle.port, handle.token, {
+      const res = await postToProxy(handle.port, {
         model: route.aliasId,
         max_tokens: 100,
         messages: [{ role: 'user', content: 'recover this agent turn' }],
@@ -1358,7 +1354,7 @@ it('returns an HTTP error when request translation throws instead of leaving the
     const handle = await startProxyCatalog([route], route.aliasId, false, inferenceLogPath);
 
     try {
-      const res = await postToProxy(handle.port, handle.token, {
+      const res = await postToProxy(handle.port, {
         model: route.aliasId,
         max_tokens: 100,
         messages: [{ role: 'user', content: 'stream then fail' }],
@@ -1427,7 +1423,7 @@ it('returns an HTTP error when request translation throws instead of leaving the
 
     try {
       let visibleOutput = '';
-      const completed = postToProxy(handle.port, handle.token, {
+      const completed = postToProxy(handle.port, {
         model: route.aliasId,
         max_tokens: 100,
         messages: [{ role: 'user', content: 'stream live' }],
@@ -1482,7 +1478,7 @@ it('returns an HTTP error when request translation throws instead of leaving the
     const handle = await startProxyCatalog([route], route.aliasId, false, inferenceLogPath);
 
     try {
-      const response = await postToProxy(handle.port, handle.token, {
+      const response = await postToProxy(handle.port, {
         model: route.aliasId,
         max_tokens: 100,
         messages: [{ role: 'user', content: 'fail after live output' }],
@@ -1540,7 +1536,7 @@ it('returns an HTTP error when request translation throws instead of leaving the
     const handle = await startProxyCatalog([route], route.aliasId, false, inferenceLogPath);
 
     try {
-      const res = await postToProxy(handle.port, handle.token, {
+      const res = await postToProxy(handle.port, {
         model: route.aliasId,
         max_tokens: 100,
         messages: [{ role: 'user', content: 'stream then reject' }],
@@ -1633,7 +1629,7 @@ it('returns an HTTP error when request translation throws instead of leaving the
     const handle = await startProxyCatalog([route], route.aliasId, false, inferenceLogPath);
 
     try {
-      const res = await postToProxy(handle.port, handle.token, {
+      const res = await postToProxy(handle.port, {
         model: route.aliasId,
         max_tokens: 100,
         messages: [{ role: 'user', content: 'call one tool safely' }],
@@ -1691,7 +1687,7 @@ it('returns an HTTP error when request translation throws instead of leaving the
     const handle = await startProxyCatalog([route], route.aliasId, false, inferenceLogPath);
 
     try {
-      const res = await postToProxy(handle.port, handle.token, {
+      const res = await postToProxy(handle.port, {
         model: route.aliasId,
         max_tokens: 100,
         messages: [{ role: 'user', content: 'call a tool then fail' }],
@@ -1759,7 +1755,7 @@ it('returns an HTTP error when request translation throws instead of leaving the
     const handle = await startProxyCatalog([route], route.aliasId, false);
 
     try {
-      const res = await postToProxy(handle.port, handle.token, {
+      const res = await postToProxy(handle.port, {
         model: route.aliasId,
         max_tokens: 100,
         messages: [{ role: 'user', content: 'This prompt is too long.' }],
@@ -1828,7 +1824,6 @@ it('returns an HTTP error when request translation throws instead of leaving the
       };
       const countResponse = await postToProxy(
         handle.port,
-        handle.token,
         requestBody,
         undefined,
         '/v1/messages/count_tokens',
@@ -1837,7 +1832,6 @@ it('returns an HTTP error when request translation throws instead of leaving the
       const claudeSessionId = '00000000-0000-4000-8000-000000000003';
       const res = await postToProxy(
         handle.port,
-        handle.token,
         requestBody,
         'req-success-1',
         '/v1/messages',
@@ -1948,7 +1942,7 @@ it('returns an HTTP error when request translation throws instead of leaving the
     const handle = await startProxyCatalog([route], route.aliasId, false, inferenceLogPath);
 
     try {
-      const res = await postToProxy(handle.port, handle.token, {
+      const res = await postToProxy(handle.port, {
         model: route.aliasId,
         max_tokens: 100,
         messages: [{ role: 'user', content: 'call a tool with a big argument' }],
@@ -2023,7 +2017,7 @@ it('returns an HTTP error when request translation throws instead of leaving the
     const handle = await startProxyCatalog([route], route.aliasId, false, inferenceLogPath);
 
     try {
-      const response = await postToProxy(handle.port, handle.token, {
+      const response = await postToProxy(handle.port, {
         model: route.aliasId,
         max_tokens: 100,
         messages: [{ role: 'user', content: 'wait through native compaction' }],
@@ -2093,7 +2087,7 @@ it('returns an HTTP error when request translation throws instead of leaving the
     const handle = await startProxyCatalog([route], route.aliasId, false, inferenceLogPath);
 
     try {
-      const res = await postToProxy(handle.port, handle.token, {
+      const res = await postToProxy(handle.port, {
         model: route.aliasId,
         max_tokens: 100,
         messages: [{ role: 'user', content: 'hi' }],
@@ -2146,7 +2140,7 @@ describe('anthropic passthrough debug logging', () => {
     }));
 
     const handle = await startProxyCatalog([route], route.aliasId, true);
-    const res = await postToProxy(handle.port, handle.token, {
+    const res = await postToProxy(handle.port, {
       model: 'claude-sonnet-4-6',
       max_tokens: 100,
       messages: [{ role: 'user', content: 'hi' }],
@@ -2184,7 +2178,7 @@ describe('anthropic passthrough debug logging', () => {
     }));
 
     const handle = await startProxyCatalog([route], route.aliasId, true);
-    await postToProxy(handle.port, handle.token, {
+    await postToProxy(handle.port, {
       model: 'claude-sonnet-4-6',
       max_tokens: 100,
       messages: [{ role: 'user', content: 'hi' }],
@@ -2227,7 +2221,7 @@ describe('anthropic passthrough debug logging', () => {
     }));
 
     const handle = await startProxyCatalog([route], route.aliasId, false);
-    await postToProxy(handle.port, handle.token, {
+    await postToProxy(handle.port, {
       model: 'claude-sonnet-4-6',
       max_tokens: 100,
       system: [{ type: 'text', text: 'You are helpful.' }],
@@ -2276,7 +2270,7 @@ describe('OAuth route credential resolution', () => {
 
     const handle = await startProxyCatalog([route], route.aliasId, false);
     try {
-      const response = await postToProxy(handle.port, handle.token, {
+      const response = await postToProxy(handle.port, {
         model: route.aliasId,
         max_tokens: 100,
         messages: [{
@@ -2329,7 +2323,7 @@ describe('OAuth route credential resolution', () => {
 
     const handle = await startProxyCatalog([route], route.aliasId, false);
     try {
-      const response = await postToProxy(handle.port, handle.token, {
+      const response = await postToProxy(handle.port, {
         model: route.aliasId,
         max_tokens: 100,
         messages: [{ role: 'user', content: 'hi' }],
@@ -2396,7 +2390,7 @@ describe('OAuth route credential resolution', () => {
 
     const handle = await startProxyCatalog([route], route.aliasId, false);
     try {
-      const response = await postToProxy(handle.port, handle.token, {
+      const response = await postToProxy(handle.port, {
         model: route.aliasId,
         max_tokens: 100,
         messages: [{ role: 'user', content: 'hi' }],
@@ -2448,7 +2442,7 @@ describe('OAuth route credential resolution', () => {
 
     const handle = await startProxyCatalog([route], route.aliasId, false);
     try {
-      const response = await postToProxy(handle.port, handle.token, {
+      const response = await postToProxy(handle.port, {
         model: route.aliasId,
         max_tokens: 100,
         messages: [{ role: 'user', content: 'hi' }],
@@ -2491,7 +2485,7 @@ describe('OAuth route credential resolution', () => {
 
     const handle = await startProxyCatalog([route], route.aliasId, false);
     try {
-      const response = await postToProxy(handle.port, handle.token, {
+      const response = await postToProxy(handle.port, {
         model: route.aliasId,
         max_tokens: 100,
         messages: [{ role: 'user', content: 'hi' }],

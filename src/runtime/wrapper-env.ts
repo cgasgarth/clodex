@@ -79,12 +79,6 @@ export function removeAnthropicProxyBypass(env: NodeJS.ProcessEnv): void {
   }
 }
 
-/**
- * Any non-empty key satisfies the local endpoint gateway (`isAuthorized`
- * accepts everything when no server password is set, i.e. local listen mode).
- */
-export const LOCAL_GATEWAY_API_KEY = 'clodex-local';
-
 export function wrapperRequiresServer(env: NodeJS.ProcessEnv): boolean {
   return env[REQUIRE_SERVER_ENV] === '1';
 }
@@ -121,12 +115,8 @@ export function computeWrapperEnv(
   const ticket = launchTicket ?? env[LAUNCH_TICKET_ENV];
   if (ticket) {
     env[LAUNCH_TICKET_ENV] = ticket;
-    const currentKey = env['ANTHROPIC_API_KEY']?.trim();
-    const localToken = currentKey?.split('.', 1)[0] || LOCAL_GATEWAY_API_KEY;
-    env['ANTHROPIC_API_KEY'] = localToken;
     setAnthropicCustomHeader(env, LAUNCH_TICKET_HEADER, ticket);
   } else {
-    env['ANTHROPIC_API_KEY'] ||= LOCAL_GATEWAY_API_KEY;
     setAnthropicCustomHeader(env, LAUNCH_TICKET_HEADER, undefined);
   }
   applyClaudeProxyReliabilityEnv(env);
