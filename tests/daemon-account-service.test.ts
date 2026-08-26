@@ -67,7 +67,34 @@ describe('DaemonAccountService launch tickets', () => {
         apiKey: 'keyring:two-token',
         metricsAccountId: two.id,
       }));
-    expect(service.accountForTicket(undefined)).toBeNull();
+    expect(service.accountForTicket(undefined)?.id).toBe(two.id);
+  });
+
+  it('routes an owner-authenticated plain Claude request through the selected account', async () => {
+    const store = new DaemonAccountStore(
+      { CLODEX_HOME: root },
+      join(root, 'accounts.json'),
+    );
+    const account = store.add({ label: 'Plain Claude', authRef: 'keyring:plain' });
+    const service = new DaemonAccountService(store, {
+      resolveCredential: async (_providerId, authRef) => `${authRef}-token`,
+    });
+    const route = {
+      aliasId: 'claude-sol',
+      realModelId: 'gpt-5.6-sol',
+      displayName: 'Sol',
+      upstreamUrl: 'https://example.test',
+      apiKey: 'boot-token',
+      modelFormat: 'openai' as const,
+      providerId: 'openai-oauth',
+      authType: 'oauth' as const,
+    };
+
+    await expect(service.routeForTicket(route, undefined))
+      .resolves.toEqual(expect.objectContaining({
+        apiKey: 'keyring:plain-token',
+        metricsAccountId: account.id,
+      }));
   });
 
   it('validates durable tickets after a daemon restart and rejects tampering', () => {
