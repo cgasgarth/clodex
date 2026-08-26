@@ -53,13 +53,13 @@
     "prepublishOnly": "bun run build"
   },
   "dependencies": {
-    "@ai-sdk/anthropic": "4.0.39",
-    "@ai-sdk/openai": "4.0.42",
-    "@ai-sdk/openai-compatible": "3.0.31",
-    "@ai-sdk/provider-utils": "5.0.27",
-    "@ai-sdk/xai": "4.0.40",
+    "@ai-sdk/anthropic": "4.0.42",
+    "@ai-sdk/openai": "4.0.47",
+    "@ai-sdk/openai-compatible": "3.0.37",
+    "@ai-sdk/provider-utils": "5.0.30",
+    "@ai-sdk/xai": "4.0.44",
     "@clack/prompts": "1.7.0",
-    "ai": "7.0.66",
+    "ai": "7.0.79",
     "ink": "7.1.1",
     "ipaddr.js": "2.5.0",
     "node-forge": "1.4.0",
@@ -74,10 +74,10 @@
     "@types/node-forge": "1.3.14",
     "@types/react": "19.2.18",
     "@typescript/native": "npm:typescript@7.0.2",
-    "@oxlint/plugins": "1.78.0",
+    "@oxlint/plugins": "1.80.0",
     "husky": "9.1.7",
-    "knip": "6.32.2",
-    "oxlint": "1.78.0",
+    "knip": "6.32.3",
+    "oxlint": "1.80.0",
     "oxlint-tsgolint": "7.0.2001"
   },
   "optionalDependencies": {
