@@ -9,19 +9,45 @@ export const XAI_SUBSCRIPTION_BASE_URL = 'https://cli-chat-proxy.grok.com/v1';
 export const XAI_SUBSCRIPTION_MODEL = 'grok-4.6';
 
 const XAI_DOOM_LOOP_CHECK_EVENT = 'response.doom_loop_check';
-const XAI_DOOM_LOOP_CHECK_WINDOW_TOKENS = 1_024;
-const XAI_DOOM_LOOP_MAX_THRESHOLD = 32;
-const XAI_DOOM_LOOP_MAX_RETRIES = 2;
+const XAI_DOOM_LOOP_RECOVERY_REMINDER = '<system_reminder>Your messages have been flagged as looping. Your response has been flagged as repeating the same text pattern. Avoid excessive repetition. If you are having trouble ask the user for guidance.</system_reminder>';
+const XAI_DOOM_LOOP_DEFAULT_WINDOW_TOKENS = 1_024;
+const XAI_DOOM_LOOP_DEFAULT_MAX_THRESHOLD = 64;
+const XAI_DOOM_LOOP_DEFAULT_MAX_RETRIES = 2;
+const XAI_DOOM_LOOP_MIN_WINDOW_TOKENS = 512;
+const XAI_DOOM_LOOP_MAX_WINDOW_TOKENS = 4_096;
+const XAI_DOOM_LOOP_MIN_THRESHOLD = 2;
+const XAI_DOOM_LOOP_MAX_THRESHOLD = 64;
+const XAI_DOOM_LOOP_MAX_RETRIES = 5;
+
+export interface XaiDoomLoopRecoverySettings {
+  enabled?: boolean;
+  maxThreshold?: number;
+  maxRetries?: number;
+  windowTokens?: number;
+}
+
+export interface XaiDoomLoopRecoveryPolicy {
+  maxThreshold: number;
+  maxRetries: number;
+  windowTokens: number;
+}
 
 interface XaiDoomLoopRecoveryDependencies {
   random?: () => number;
   sleep?: (milliseconds: number) => Promise<void>;
+  settings?: XaiDoomLoopRecoverySettings;
+  env?: Record<string, string | undefined>;
 }
 
 interface ParsedSseFrame {
   eventName?: string;
   payload?: JsonObject;
 }
+
+type FrameDecision =
+  | { kind: 'continue' }
+  | { kind: 'retry' }
+  | { kind: 'fail'; triggers: string[] };
 
 function isJsonObject(value: JsonValue): value is JsonObject {
   return isObject(value) && !Array.isArray(value);
@@ -65,11 +91,90 @@ function isDoomLoopCheckFrame(frame: ParsedSseFrame): boolean {
     || frame.payload?.type === XAI_DOOM_LOOP_CHECK_EVENT;
 }
 
-function hasConfidentThinkingLoop(labels: string[]): boolean {
-  return labels.some(label => {
+function parseEnvironmentBoolean(value: string | undefined): boolean | undefined {
+  switch (value?.trim().toLowerCase()) {
+    case '1':
+    case 'true':
+    case 'yes':
+    case 'on':
+    case 'enabled':
+      return true;
+    case '0':
+    case 'false':
+    case 'no':
+    case 'off':
+    case 'disabled':
+      return false;
+    default:
+      return undefined;
+  }
+}
+
+function clampInteger(value: number | undefined, fallback: number, min: number, max: number): number {
+  if (value === undefined || !Number.isInteger(value)) return fallback;
+  return Math.min(max, Math.max(min, value));
+}
+
+export function resolveXaiDoomLoopRecoveryPolicy(
+  settings: XaiDoomLoopRecoverySettings = {},
+  env: Record<string, string | undefined> = process.env,
+): XaiDoomLoopRecoveryPolicy | undefined {
+  const enabled = parseEnvironmentBoolean(env['GROK_DOOM_LOOP_RECOVERY'])
+    ?? settings.enabled
+    ?? true;
+  if (!enabled) return undefined;
+  const configuredWindow = settings.windowTokens;
+  const windowTokens = configuredWindow === undefined
+    ? XAI_DOOM_LOOP_DEFAULT_WINDOW_TOKENS
+    : Number.isInteger(configuredWindow)
+      && configuredWindow >= XAI_DOOM_LOOP_MIN_WINDOW_TOKENS
+      && configuredWindow <= XAI_DOOM_LOOP_MAX_WINDOW_TOKENS
+      ? configuredWindow
+      : XAI_DOOM_LOOP_MAX_WINDOW_TOKENS;
+  return {
+    maxThreshold: clampInteger(
+      settings.maxThreshold,
+      XAI_DOOM_LOOP_DEFAULT_MAX_THRESHOLD,
+      XAI_DOOM_LOOP_MIN_THRESHOLD,
+      XAI_DOOM_LOOP_MAX_THRESHOLD,
+    ),
+    maxRetries: clampInteger(
+      settings.maxRetries,
+      XAI_DOOM_LOOP_DEFAULT_MAX_RETRIES,
+      0,
+      XAI_DOOM_LOOP_MAX_RETRIES,
+    ),
+    windowTokens,
+  };
+}
+
+function confidentThinkingLoops(
+  labels: string[],
+  policy: XaiDoomLoopRecoveryPolicy | undefined,
+): string[] {
+  if (!policy) return [];
+  return labels.filter(label => {
     const match = label.match(/^tail_repetition:(\d+)@thinking$/);
-    return match !== null && Number(match[1]) <= XAI_DOOM_LOOP_MAX_THRESHOLD;
+    return match !== null && Number(match[1]) <= policy.maxThreshold;
   });
+}
+
+function appendDoomLoopRecoveryReminder(body: BodyInit | null | undefined): BodyInit | null | undefined {
+  if (!isString(body)) return body;
+  let request: JsonObject;
+  try {
+    const parsed: JsonValue = JSON.parse(body);
+    if (!isJsonObject(parsed)) return body;
+    request = parsed;
+  } catch {
+    return body;
+  }
+  if (!Array.isArray(request.input)) return body;
+  request.input.push({
+    role: 'user',
+    content: [{ type: 'input_text', text: XAI_DOOM_LOOP_RECOVERY_REMINDER }],
+  });
+  return JSON.stringify(request);
 }
 
 function commitsProviderOutput(payload?: JsonObject): boolean {
@@ -124,6 +229,10 @@ export function createXaiSubscriptionFetch(
   const conversationId = sessionId;
   const random = recoveryDependencies.random ?? Math.random;
   const sleep = recoveryDependencies.sleep ?? defaultSleep;
+  const recoveryPolicy = resolveXaiDoomLoopRecoveryPolicy(
+    recoveryDependencies.settings,
+    recoveryDependencies.env,
+  );
 
   return Object.assign(
     async (input: URL | RequestInfo, init?: RequestInit): Promise<Response> => {
@@ -131,6 +240,7 @@ export function createXaiSubscriptionFetch(
       if (url.origin !== 'https://cli-chat-proxy.grok.com' || url.pathname !== '/v1/responses') {
         throw new Error('Refusing to send a SuperGrok credential to an unexpected endpoint');
       }
+      let requestBody = init?.body;
       const requestAttempt = async (): Promise<Response> => {
         const headers = new Headers(
           init?.headers ?? (input instanceof Request ? input.headers : undefined),
@@ -145,8 +255,16 @@ export function createXaiSubscriptionFetch(
         headers.set('x-grok-req-id', randomUUID());
         headers.set('x-grok-model-override', XAI_SUBSCRIPTION_MODEL);
         headers.set('x-grok-session-id', sessionId);
-        headers.set('x-grok-doom-loop-check', String(XAI_DOOM_LOOP_CHECK_WINDOW_TOKENS));
-        return transport(cloneFetchInput(input), { ...init, headers, redirect: 'error' });
+        if (recoveryPolicy) {
+          headers.set('x-grok-doom-loop-check', String(recoveryPolicy.windowTokens));
+        }
+        const attemptInit: RequestInit = {
+          ...init,
+          headers,
+          redirect: 'error',
+        };
+        if (requestBody !== undefined) attemptInit.body = requestBody;
+        return transport(cloneFetchInput(input), attemptInit);
       };
 
       const firstResponse = await requestAttempt();
@@ -171,28 +289,42 @@ export function createXaiSubscriptionFetch(
               const bufferedFrames: string[] = [];
               let pending = '';
               let committed = false;
-              let shouldRetry = false;
+              let frameDecision: FrameDecision = { kind: 'continue' };
 
               const flushBuffered = () => {
                 for (const frame of bufferedFrames) controller.enqueue(encoder.encode(frame));
                 bufferedFrames.length = 0;
               };
 
-              const processFrame = (rawFrame: string): boolean => {
+              const processFrame = (rawFrame: string): FrameDecision => {
                 const frame = parseSseFrame(rawFrame);
                 const labels = triggerLabels(frame.payload);
-                const confident = hasConfidentThinkingLoop(labels);
+                const confidentLabels = confidentThinkingLoops(labels, recoveryPolicy);
+                const confident = confidentLabels.length > 0;
+                const recoveryBudgetAvailable = retryCount < (recoveryPolicy?.maxRetries ?? 0);
                 if (isDoomLoopCheckFrame(frame)) {
+                  if (confident && recoveryBudgetAvailable) {
+                    if (committed) {
+                      return { kind: 'fail', triggers: confidentLabels };
+                    }
+                    return { kind: 'retry' };
+                  }
                   if (confident && !committed) {
-                    if (retryCount < XAI_DOOM_LOOP_MAX_RETRIES) return true;
                     flushBuffered();
                     committed = true;
                   }
                   // xAI's typed client always swallows this private control event.
-                  return false;
+                  return { kind: 'continue' };
                 }
-                if (confident && !committed && retryCount < XAI_DOOM_LOOP_MAX_RETRIES) {
-                  return true;
+                if (
+                  confident
+                  && !committed
+                  && recoveryBudgetAvailable
+                ) {
+                  return { kind: 'retry' };
+                }
+                if (confident && committed && recoveryBudgetAvailable) {
+                  return { kind: 'fail', triggers: confidentLabels };
                 }
                 if (committed) {
                   controller.enqueue(encoder.encode(rawFrame));
@@ -203,22 +335,22 @@ export function createXaiSubscriptionFetch(
                 } else {
                   bufferedFrames.push(rawFrame);
                 }
-                return false;
+                return { kind: 'continue' };
               };
 
-              while (!shouldRetry) {
+              while (frameDecision.kind === 'continue') {
                 const { done, value } = await activeReader.read();
                 pending += decoder.decode(value, { stream: !done });
                 let next = nextSseFrame(pending);
                 while (next) {
-                  shouldRetry = processFrame(next.frame);
+                  frameDecision = processFrame(next.frame);
                   pending = next.rest;
-                  if (shouldRetry) break;
+                  if (frameDecision.kind !== 'continue') break;
                   next = nextSseFrame(pending);
                 }
                 if (done) {
-                  if (pending) shouldRetry = processFrame(pending);
-                  if (!shouldRetry) {
+                  if (pending) frameDecision = processFrame(pending);
+                  if (frameDecision.kind === 'continue') {
                     flushBuffered();
                     controller.close();
                     return;
@@ -227,8 +359,16 @@ export function createXaiSubscriptionFetch(
                 }
               }
 
+              if (frameDecision.kind === 'fail') {
+                await activeReader.cancel('xAI doom loop detected after output committed');
+                throw new Error(
+                  `xAI doom loop detected after output committed: ${frameDecision.triggers.join(', ')}`,
+                );
+              }
+
               await activeReader.cancel('xAI doom-loop recovery resample');
               retryCount += 1;
+              requestBody = appendDoomLoopRecoveryReminder(requestBody);
               await sleep(doomLoopBackoff(random));
               response = await requestAttempt();
               if (

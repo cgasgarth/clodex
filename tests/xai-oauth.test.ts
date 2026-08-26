@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from 'bun:test';
 import { runXaiDeviceCodeFlow } from '../src/oauth/xai.js';
-import { createXaiSubscriptionFetch } from '../src/oauth/xai-proxy.js';
+import {
+  createXaiSubscriptionFetch,
+  resolveXaiDoomLoopRecoveryPolicy,
+} from '../src/oauth/xai-proxy.js';
 import type { JsonObject } from './test-helpers.js';
 
 const SSE_HEADERS = { 'content-type': 'text/event-stream' };
@@ -20,6 +23,36 @@ function streamedResponse(chunks: string[]): Response {
 }
 
 describe('xAI SuperGrok OAuth', () => {
+  it('matches Grok Build doom-loop defaults and clamps configured tunables', () => {
+    expect(resolveXaiDoomLoopRecoveryPolicy({}, {})).toEqual({
+      maxThreshold: 64,
+      maxRetries: 2,
+      windowTokens: 1_024,
+    });
+    expect(resolveXaiDoomLoopRecoveryPolicy({
+      maxThreshold: 1_000,
+      maxRetries: 99,
+      windowTokens: 100,
+    }, {})).toEqual({
+      maxThreshold: 64,
+      maxRetries: 5,
+      windowTokens: 4_096,
+    });
+    expect(resolveXaiDoomLoopRecoveryPolicy({
+      maxThreshold: 0,
+      maxRetries: 0,
+      windowTokens: 512,
+    }, {})).toEqual({
+      maxThreshold: 2,
+      maxRetries: 0,
+      windowTokens: 512,
+    });
+    expect(resolveXaiDoomLoopRecoveryPolicy(
+      { enabled: true },
+      { GROK_DOOM_LOOP_RECOVERY: 'disabled' },
+    )).toBeUndefined();
+  });
+
   it('requests a device code and polls the pinned token endpoint', async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(new Response(JSON.stringify({
@@ -90,7 +123,7 @@ describe('xAI SuperGrok OAuth', () => {
     );
   });
 
-  it('discards a confident thinking loop and resamples the unchanged request', async () => {
+  it('resamples a confident thinking loop with Grok Build recovery guidance', async () => {
     const poisoned = [
       sseEvent({ type: 'response.created', response: { id: 'poisoned' } }),
       sseEvent({
@@ -99,7 +132,7 @@ describe('xAI SuperGrok OAuth', () => {
       }),
       sseEvent({
         type: 'response.doom_loop_check',
-        doom_loop_check: { triggers: ['tail_repetition:8@thinking'] },
+        doom_loop_check: { triggers: ['tail_repetition:64@thinking'] },
       }, 'response.doom_loop_check'),
     ].join('');
     const clean = [
@@ -125,15 +158,35 @@ describe('xAI SuperGrok OAuth', () => {
       { random: () => 0, sleep: async milliseconds => { waits.push(milliseconds); } },
     );
 
+    const originalBody = JSON.stringify({
+      model: 'grok-4.6',
+      input: [{
+        role: 'user',
+        content: [{ type: 'input_text', text: 'same prefix' }],
+      }],
+    });
     const response = await proxyFetch('https://cli-chat-proxy.grok.com/v1/responses', {
       method: 'POST',
-      body: '{"input":"same prefix"}',
+      body: originalBody,
     });
     const body = await response.text();
 
     expect(transport).toHaveBeenCalledTimes(2);
-    expect(transport.mock.calls.map(call => call[1]?.body))
-      .toEqual(['{"input":"same prefix"}', '{"input":"same prefix"}']);
+    expect(transport.mock.calls[0]?.[1]?.body).toBe(originalBody);
+    const retryBody = JSON.parse(String(transport.mock.calls[1]?.[1]?.body));
+    expect(retryBody.input).toEqual([
+      {
+        role: 'user',
+        content: [{ type: 'input_text', text: 'same prefix' }],
+      },
+      {
+        role: 'user',
+        content: [{
+          type: 'input_text',
+          text: '<system_reminder>Your messages have been flagged as looping. Your response has been flagged as repeating the same text pattern. Avoid excessive repetition. If you are having trouble ask the user for guidance.</system_reminder>',
+        }],
+      },
+    ]);
     const requestIds = transport.mock.calls.map(call => new Headers(call[1]?.headers).get('x-grok-req-id'));
     expect(new Set(requestIds).size).toBe(2);
     expect(waits).toEqual([0]);
@@ -149,7 +202,11 @@ describe('xAI SuperGrok OAuth', () => {
       sseEvent({
         type: 'response.doom_loop_check',
         doom_loop_check: {
-          triggers: ['tail_repetition:4@response', 'low_logprob@thinking'],
+          triggers: [
+            'tail_repetition:4@response',
+            'low_logprob@thinking',
+            'tail_repetition:65@thinking',
+          ],
         },
       }),
       sseEvent({
@@ -166,6 +223,36 @@ describe('xAI SuperGrok OAuth', () => {
     expect(transport).toHaveBeenCalledOnce();
     expect(body).not.toContain('response.doom_loop_check');
     expect(body).toContain('visible answer');
+  });
+
+  it('honors the Grok Build environment kill switch', async () => {
+    const stream = [
+      sseEvent({
+        type: 'response.doom_loop_check',
+        doom_loop_check: { triggers: ['tail_repetition:2@thinking'] },
+      }),
+      sseEvent({
+        type: 'response.output_text.delta', item_id: 'm1', content_index: 0,
+        output_index: 0, delta: 'accepted without recovery',
+      }),
+    ].join('');
+    const transport = vi.fn(async () => streamedResponse([stream]));
+    const proxyFetch = createXaiSubscriptionFetch(
+      'grok-4.6',
+      'session-disabled',
+      // SAFETY: The test fixture defines the asserted runtime shape.
+      transport as typeof fetch,
+      { env: { GROK_DOOM_LOOP_RECOVERY: '0' } },
+    );
+
+    const response = await proxyFetch('https://cli-chat-proxy.grok.com/v1/responses');
+    const body = await response.text();
+
+    expect(transport).toHaveBeenCalledOnce();
+    const headers = new Headers(transport.mock.calls[0]?.[1]?.headers);
+    expect(headers.has('x-grok-doom-loop-check')).toBe(false);
+    expect(body).toContain('accepted without recovery');
+    expect(body).not.toContain('response.doom_loop_check');
   });
 
   it('accepts the third looping sample after the native two-resample budget', async () => {
@@ -244,7 +331,7 @@ describe('xAI SuperGrok OAuth', () => {
     expect(body).toContain('terminal recovery worked');
   });
 
-  it('swallows malformed detector frames and never replays committed output', async () => {
+  it('fails instead of resampling a thinking loop after output committed', async () => {
     const stream = [
       sseEvent({
         type: 'response.output_text.delta', item_id: 'm1', content_index: 0,
@@ -264,12 +351,29 @@ describe('xAI SuperGrok OAuth', () => {
     // SAFETY: The test fixture defines the asserted runtime shape.
     const proxyFetch = createXaiSubscriptionFetch('grok-4.6', 'session-committed', transport as typeof fetch);
 
-    const body = await (await proxyFetch('https://cli-chat-proxy.grok.com/v1/responses')).text();
+    const response = await proxyFetch('https://cli-chat-proxy.grok.com/v1/responses');
 
     expect(transport).toHaveBeenCalledOnce();
-    expect(body).toContain('already committed');
-    expect(body).toContain('and complete');
-    expect(body).not.toContain('doom_loop_check');
+    await expect(response.text()).rejects.toThrow(
+      'xAI doom loop detected after output committed: tail_repetition:2@thinking',
+    );
+  });
+
+  it('swallows a malformed detector frame without failing the stream', async () => {
+    const stream = [
+      'event: response.doom_loop_check\ndata: definitely-not-json\n\n',
+      sseEvent({
+        type: 'response.output_text.delta', item_id: 'm1', content_index: 0,
+        output_index: 0, delta: 'valid output',
+      }),
+    ].join('');
+    const transport = vi.fn(async () => streamedResponse([stream]));
+    // SAFETY: The test fixture defines the asserted runtime shape.
+    const proxyFetch = createXaiSubscriptionFetch('grok-4.6', 'session-malformed', transport as typeof fetch);
+
+    const body = await (await proxyFetch('https://cli-chat-proxy.grok.com/v1/responses')).text();
+
+    expect(body).toContain('valid output');
     expect(body).not.toContain('definitely-not-json');
   });
 });
