@@ -13,7 +13,6 @@ import {
 } from '../daemon/api-pricing.js';
 import type { SecondwindSnapshot } from '../daemon/secondwind.js';
 import type { DiagnosticLogMode, SecondwindMode } from '../types.js';
-import type { DaemonClaudeModelSnapshot, DaemonClaudeModelView } from '../daemon/model-service.js';
 import {
   accountDisplayName,
   compactNumber,
@@ -46,8 +45,7 @@ type DashboardView =
   | 'usage'
   | 'accounts'
   | 'diagnostics'
-  | 'secondwind'
-  | 'models';
+  | 'secondwind';
 
 const VIEWS: DashboardView[] = [
   'overview',
@@ -55,7 +53,6 @@ const VIEWS: DashboardView[] = [
   'accounts',
   'diagnostics',
   'secondwind',
-  'models',
 ];
 const SECONDWIND_MODES: SecondwindMode[] = ['off', 'shadow', 'on'];
 
@@ -205,9 +202,7 @@ function Dashboard(): React.ReactNode {
   const [diagnostics, setDiagnostics] = useState<Diagnostic[]>([]);
   const [diagnosticLogMode, setDiagnosticLogMode] = useState<DiagnosticLogMode>('error');
   const [secondwind, setSecondwind] = useState<SecondwindSnapshot | null>(null);
-  const [models, setModels] = useState<DaemonClaudeModelView[]>([]);
   const [selectedIndex, setSelectedIndex] = useState(0);
-  const [selectedModelIndex, setSelectedModelIndex] = useState(0);
   const [message, setMessage] = useState('Connecting to Clodex daemon…');
   const [loading, setLoading] = useState(false);
   const [accountAction, setAccountAction] = useState(false);
@@ -216,12 +211,6 @@ function Dashboard(): React.ReactNode {
   const [deviceCode, setDeviceCode] = useState<DeviceCodePrompt>();
   const [secondwindAction, setSecondwindAction] = useState(false);
   const [pendingSecondwindMode, setPendingSecondwindMode] = useState<SecondwindMode>();
-  const [modelAction, setModelAction] = useState(false);
-  const [pendingModelChange, setPendingModelChange] = useState<{
-    modelId: string;
-    name: string;
-    enabled: boolean;
-  }>();
   const refresh = useCallback(async () => {
     if (refreshInFlight.current) return;
     refreshInFlight.current = true;
@@ -240,10 +229,6 @@ function Dashboard(): React.ReactNode {
       if (snapshot.diagnostics) setDiagnostics(snapshot.diagnostics);
       if (snapshot.diagnosticLogMode) setDiagnosticLogMode(snapshot.diagnosticLogMode);
       if (snapshot.secondwind) setSecondwind(snapshot.secondwind);
-      if (snapshot.models) {
-        setModels(snapshot.models);
-        setSelectedModelIndex(index => Math.min(index, Math.max(0, snapshot.models!.length - 1)));
-      }
       const warnings = [...snapshot.warnings];
       const activeAccount = snapshot.accounts?.find(account => account.selected);
       try {
@@ -332,28 +317,6 @@ function Dashboard(): React.ReactNode {
     ).finally(() => setSecondwindAction(false));
   }, [secondwind?.mode, secondwindAction]);
 
-  const setClaudeModelEnabled = useCallback((
-    modelId: string,
-    enabled: boolean,
-  ) => {
-    if (modelAction) return;
-    setModelAction(true);
-    setMessage(`${enabled ? 'Enabling' : 'Disabling'} ${modelId}…`);
-    daemonControlRequest<DaemonClaudeModelSnapshot>('/v1/claude/models', {
-      method: 'POST',
-      body: { modelId, enabled },
-    }).then(
-      snapshot => {
-        setModels(snapshot.models);
-        setMessage(
-          `${modelId} ${enabled ? 'enabled' : 'disabled'}; `
-          + 'the live route catalog and new Claude launches are updated.',
-        );
-      },
-      error => setMessage(error instanceof Error ? error.message : String(error)),
-    ).finally(() => setModelAction(false));
-  }, [modelAction]);
-
   const logout = useCallback((account: Account) => {
     if (accountAction) return;
     setAccountAction(true);
@@ -424,27 +387,15 @@ function Dashboard(): React.ReactNode {
       }
       return;
     }
-    if (pendingModelChange) {
-      if (key.return) {
-        const change = pendingModelChange;
-        setPendingModelChange(undefined);
-        setClaudeModelEnabled(change.modelId, change.enabled);
-      } else {
-        setPendingModelChange(undefined);
-        setMessage('Claude model change cancelled.');
-      }
-      return;
-    }
     if (input === 'q' || key.escape) {
       exit();
       return;
     }
-    if (/^[1-6]$/.test(input)) {
+    if (/^[1-5]$/.test(input)) {
       setView(VIEWS[Number(input) - 1]!);
       setPendingLogoutId(undefined);
       setPendingRestart(false);
       setPendingSecondwindMode(undefined);
-      setPendingModelChange(undefined);
       return;
     }
     if (input === 'r') {
@@ -507,30 +458,6 @@ function Dashboard(): React.ReactNode {
           (current + delta + SECONDWIND_MODES.length) % SECONDWIND_MODES.length
         ]!;
         if (next !== secondwind.mode) setPendingSecondwindMode(next);
-        return;
-      }
-    }
-    if (view === 'models') {
-      if (modelAction) return;
-      if (input === 'j' || key.downArrow) {
-        setSelectedModelIndex(index => Math.min(Math.max(0, models.length - 1), index + 1));
-        return;
-      }
-      if (input === 'k' || key.upArrow) {
-        setSelectedModelIndex(index => Math.max(0, index - 1));
-        return;
-      }
-      if (input === ' ' && models[selectedModelIndex]) {
-        const model = models[selectedModelIndex];
-        setPendingModelChange({
-          modelId: model.modelId,
-          name: model.alias ?? model.name,
-          enabled: !model.enabled,
-        });
-        setMessage(
-          `Press Enter to ${model.enabled ? 'disable' : 'enable'} `
-          + `${model.alias ?? model.name}; any other key cancels.`,
-        );
         return;
       }
     }
@@ -864,7 +791,7 @@ function Dashboard(): React.ReactNode {
             ))}
       </Box>
     );
-  } else if (view === 'secondwind') {
+  } else {
     controls = `←/→ choose · o off · s shadow · n on · Enter confirm · ${VIEW_SWITCH_HINT} · r refresh · q quit`;
     const modeColor = secondwind?.mode === 'on'
       ? 'green'
@@ -960,45 +887,6 @@ function Dashboard(): React.ReactNode {
         </Box>
       </>
     );
-  } else {
-    controls = `↑/↓ model · Space toggle · Enter confirm · ${VIEW_SWITCH_HINT} · r refresh · q quit`;
-    content = (
-      <>
-        <Box borderStyle="round" paddingX={1} flexDirection="column">
-          <Text bold>Claude OpenAI model list</Text>
-          <Text dimColor>
-            Routes change immediately; the native picker changes for new Claude launches.
-          </Text>
-          {models.length === 0
-            ? <Text dimColor>No OpenAI models are available in the provider registry.</Text>
-            : models.map((model, index) => (
-                <Text
-                  key={model.modelId}
-                  color={index === selectedModelIndex ? 'cyan' : undefined}
-                >
-                  {index === selectedModelIndex ? '›' : ' '}
-                  {' '}{model.enabled ? '●' : '○'}
-                  {' '}{model.alias ? `${model.alias} · ` : ''}{model.name}
-                  {' · '}{model.modelId}
-                  {model.contextWindow ? ` · ${compactNumber(model.contextWindow)} context` : ''}
-                </Text>
-              ))}
-        </Box>
-        {pendingModelChange && (
-          <Box borderStyle="round" borderColor="yellow" paddingX={1} flexDirection="column">
-            <Text bold color="yellow">Confirm Claude model change</Text>
-            <Text>
-              {pendingModelChange.enabled ? 'Enable' : 'Disable'}{' '}
-              <Text bold>{pendingModelChange.name}</Text>?
-            </Text>
-            <Text dimColor>
-              This updates the live route catalog and repatches Claude. Press Enter to confirm;
-              {' '}any other key cancels.
-            </Text>
-          </Box>
-        )}
-      </>
-    );
   }
 
   return (
@@ -1012,11 +900,9 @@ function Dashboard(): React.ReactNode {
           ? ' · account action in progress…'
           : secondwindAction
             ? ' · saving Secondwind mode…'
-            : modelAction
-              ? ' · updating Claude model list…'
-              : loading
-                ? ' · refreshing…'
-                : ''}
+            : loading
+              ? ' · refreshing…'
+              : ''}
       </Text>
     </Box>
   );

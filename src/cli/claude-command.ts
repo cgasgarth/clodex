@@ -34,14 +34,17 @@ import {
   wantsCleanAgentStdout,
 } from '../runtime/launch-target.js';
 import { loadHttpProxyRoutes } from '../http-proxy/index.js';
-import { ensureDaemonRunning } from '../daemon/index.js';
+import { requireDaemonRunning } from '../daemon/index.js';
 import { daemonControlRequest } from '../daemon/control-client.js';
 import { LAUNCH_TICKET_HEADER, setAnthropicCustomHeader } from '../runtime/wrapper-env.js';
 import { getOrCreateProxyToken } from '../proxy/token.js';
 import { catalogUsesClodexCompaction, launchClaudeViaCatalog } from './catalog-runtime.js';
 import { resolveCliRuntimePaths } from './runtime-paths.js';
 import type { CliRuntimePaths } from './runtime-paths.js';
-import { syncClaudeModelPickerSettings } from '../runtime/claude-settings.js';
+import {
+  readClaudeDefaultModel,
+  syncClaudeModelPickerSettings,
+} from '../runtime/claude-settings.js';
 
 interface LaunchAttachRequest {
   accountId?: string;
@@ -96,11 +99,11 @@ async function runClaudeDaemonEndpointCommand(
   agentStdout: boolean,
   runtimePaths: CliRuntimePaths,
 ): Promise<number> {
-  let runtime: Awaited<ReturnType<typeof ensureDaemonRunning>>;
+  let runtime: Awaited<ReturnType<typeof requireDaemonRunning>>;
   try {
-    runtime = await ensureDaemonRunning(runtimePaths.cliPath);
+    runtime = await requireDaemonRunning(runtimePaths.cliPath);
   } catch (error) {
-    p.log.error(`Failed to start the Clodex daemon: ${error instanceof Error ? error.message : String(error)}`);
+    p.log.error(error instanceof Error ? error.message : String(error));
     return 1;
   }
 
@@ -129,8 +132,17 @@ async function runClaudeDaemonEndpointCommand(
     return 1;
   }
   const requestedModel = requestedClaudeModel(claudeArgs);
+  const configuredModel = readClaudeDefaultModel();
   const defaultAlias = loaded.aliases[0]?.name ?? loaded.routes[0]?.aliasId;
-  const launchModel = requestedModel ?? defaultAlias;
+  const configuredAlias = configuredModel && loaded.aliases.find(item =>
+    normalizeRouteLookupId(item.name) === normalizeRouteLookupId(configuredModel),
+  );
+  const configuredRoute = configuredModel && loaded.routes.find(item =>
+    normalizeRouteLookupId(item.aliasId) === normalizeRouteLookupId(configuredModel),
+  );
+  const launchModel = requestedModel
+    ?? (configuredAlias || configuredRoute ? configuredModel : undefined)
+    ?? defaultAlias;
   if (!launchModel) {
     p.log.error('No compatible model is configured for the persistent daemon.');
     return 1;

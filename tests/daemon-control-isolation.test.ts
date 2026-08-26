@@ -76,10 +76,6 @@ describe('isolated daemon control plane', () => {
         snapshot: () => ({ mode: 'error' }),
         setMode: setDiagnosticLogMode,
       },
-      models: {
-        snapshot: () => ({ models: [] }),
-        setEnabled: async () => ({ models: [] }),
-      },
       requestRestart: vi.fn(),
       requestStop: vi.fn(),
       workerEnv: env,
