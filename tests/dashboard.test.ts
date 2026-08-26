@@ -252,6 +252,7 @@ describe('dashboard refresh resilience', () => {
       '/v1/accounts': new Error('accounts timed out'),
       '/v1/diagnostics?limit=20': { diagnostics: [] },
       '/v1/secondwind': {},
+      '/v1/native-compaction': { enabled: true },
     }));
 
     expect(snapshot.reachable).toBe(true);
@@ -267,6 +268,7 @@ describe('dashboard refresh resilience', () => {
       '/v1/accounts': new Error('accounts timed out'),
       '/v1/diagnostics?limit=20': new Error('diagnostics timed out'),
       '/v1/secondwind': new Error('Secondwind timed out'),
+      '/v1/native-compaction': new Error('native compaction timed out'),
     }));
 
     expect(snapshot.reachable).toBe(true);
@@ -281,6 +283,7 @@ describe('dashboard refresh resilience', () => {
       '/v1/accounts': { accounts: [] },
       '/v1/diagnostics?limit=20': new Error('diagnostics timed out'),
       '/v1/secondwind': new Error('Secondwind timed out'),
+      '/v1/native-compaction': new Error('native compaction timed out'),
     }, calls));
 
     expect(snapshot.reachable).toBe(true);
@@ -294,6 +297,7 @@ describe('dashboard refresh resilience', () => {
       '/v1/accounts': new Error('accounts timed out'),
       '/v1/diagnostics?limit=20': new Error('diagnostics timed out'),
       '/v1/secondwind': new Error('Secondwind timed out'),
+      '/v1/native-compaction': new Error('native compaction timed out'),
     }));
 
     expect(snapshot.reachable).toBe(false);
@@ -307,9 +311,10 @@ describe('dashboard refresh resilience', () => {
       '/v1/accounts': { accounts: [] },
       '/v1/diagnostics?limit=20': { diagnostics: [] },
       '/v1/secondwind': {},
+      '/v1/native-compaction': { enabled: true },
     }, calls));
 
-    expect(calls).toHaveLength(4);
+    expect(calls).toHaveLength(5);
     expect(calls.every(call =>
       call.timeoutMs === DASHBOARD_CONTROL_REQUEST_TIMEOUT_MS)).toBe(true);
   });

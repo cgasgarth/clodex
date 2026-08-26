@@ -10,16 +10,13 @@ import { installOutboundProxyDispatcher } from './transport/outbound-proxy.js';
 import { daemonHelpText, ensureDaemonRunning, runDaemonCommand, stopDaemon } from './daemon/index.js';
 import { accountsHelpText, runAccountsCommand } from './daemon/account-command.js';
 import { parseArgs, runCatalogCommand } from './cli/args.js';
-import { claudeHelpText, modelsHelpText, printHelp, rootHelpText, serverHelpText } from './cli/help.js';
+import { modelsHelpText, printHelp, rootHelpText, serverHelpText } from './cli/help.js';
 import { runModelsCommand } from './cli/models-command.js';
-import { runClaudeCommand } from './cli/claude-command.js';
 import { resolveCliRuntimePaths } from './cli/runtime-paths.js';
 
 export { parseArgs } from './cli/args.js';
-export { claudeHelpText, modelsHelpText, rootHelpText, serverHelpText } from './cli/help.js';
-export { catalogUsesClodexCompaction, reportInactiveCatalogAliases } from './cli/catalog-runtime.js';
+export { modelsHelpText, rootHelpText, serverHelpText } from './cli/help.js';
 export { runModelsCommand } from './cli/models-command.js';
-export { runClaudeCommand } from './cli/claude-command.js';
 
 export async function main(args: string[] = process.argv.slice(2)): Promise<number> {
   // Honor HTTP_PROXY/HTTPS_PROXY/NO_PROXY for clodex's own outbound calls
@@ -99,7 +96,7 @@ export async function main(args: string[] = process.argv.slice(2)): Promise<numb
       printHelp(serverHelpText());
       return 0;
     }
-    const bridgeMode = resolveBridgeMode('server', parsed.bridgeMode, {
+    const bridgeMode = resolveBridgeMode(parsed.bridgeMode, {
       persist: Boolean(parsed.saveBridgeMode),
     });
     return runServerCommand({
@@ -156,31 +153,16 @@ export async function main(args: string[] = process.argv.slice(2)): Promise<numb
     }), runtimePaths.cliPath);
   }
 
-  if (parsed.command === 'providers') {
-    if (parsed.showVersion) {
-      console.log(VERSION);
-      return 0;
-    }
-    if (parsed.showHelp) {
-      printHelp(providersHelpText());
-      return 0;
-    }
-    if (parsed.trace) {
-      process.env.CLODEX_TRACE = '1';
-    }
-    return runCatalogCommand(() => runProvidersCommand(parsed.claudeArgs), runtimePaths.cliPath);
-  }
-
   if (parsed.showVersion) {
     console.log(VERSION);
     return 0;
   }
   if (parsed.showHelp) {
-    printHelp(claudeHelpText());
+    printHelp(providersHelpText());
     return 0;
   }
-
-  return runClaudeCommand(parsed, runtimePaths);
+  if (parsed.trace) process.env.CLODEX_TRACE = '1';
+  return runCatalogCommand(() => runProvidersCommand(parsed.claudeArgs), runtimePaths.cliPath);
 }
 
 function isCliEntryPoint(): boolean {

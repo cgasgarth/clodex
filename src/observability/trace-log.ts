@@ -4,13 +4,11 @@ import {
   chmodSync,
   existsSync,
   mkdirSync,
-  readFileSync,
   unlinkSync,
 } from 'node:fs';
 import { appendFile, chmod, stat, truncate } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
-import pc from 'picocolors';
 import { getLogsPath } from '../config/paths.js';
 import { isCredentialBearingHeader } from '../credentials/headers.js';
 import type { ApiProcessingMode } from '../daemon/api-pricing.js';
@@ -118,7 +116,6 @@ export async function flushTraceLogs(path?: string): Promise<void> {
   );
 }
 
-const CLAUDE_DEBUG_LOG = 'claude-debug.log';
 const PROXY_DEBUG_LOG = 'proxy-debug.log';
 const PROVIDER_DEBUG_LOG = 'provider-debug.log';
 const INFERENCE_REQUEST_LOG = 'inference-requests.jsonl';
@@ -142,15 +139,6 @@ function ensureLogsDir(): string {
     // best-effort
   }
   return dir;
-}
-
-function getClaudeDebugLogPath(): string {
-  return join(ensureLogsDir(), CLAUDE_DEBUG_LOG);
-}
-
-export function prepareClaudeTraceLog(path = getClaudeDebugLogPath()): string {
-  resetTraceLog(path);
-  return path;
 }
 
 export function getProxyDebugLogPath(): string {
@@ -855,20 +843,4 @@ export function writeSecureLogLine(path: string, line: string): void {
       void flushPendingLog(path, pending);
     }, LOG_FLUSH_INTERVAL_MS);
   }
-}
-
-export function printTraceLog(debugLogPath: string): void {
-  if (!existsSync(debugLogPath)) return;
-  const raw = readFileSync(debugLogPath, 'utf8');
-  const log = redactTraceLog(raw);
-  const errorLines = log.split('\n').filter(l =>
-    l.includes('error') || l.includes('Error') || l.includes('"type":"error"') || l.includes('status') || l.includes('resolveModel failed') || l.includes('resolveModel fallback'),
-  );
-  console.log('\n' + pc.bold(pc.cyan('── Debug trace ──')));
-  if (errorLines.length > 0) {
-    errorLines.slice(0, 30).forEach(l => console.log(pc.dim(l)));
-  } else {
-    console.log(pc.dim('(no errors found in debug log)'));
-  }
-  console.log(pc.dim(`Full log: ${debugLogPath}`));
 }

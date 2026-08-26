@@ -6,9 +6,6 @@ import { generateAnthropicResponse } from '../src/sdk-adapter.js';
 import { startProxyCatalog, type ProxyRoute } from '../src/proxy/index.js';
 import { asMocked, type JsonValue } from './test-helpers.js';
 
-const ORIGINAL_COMPACTION_FLAG = process.env.CLODEX_OPENAI_COMPACTION;
-const ORIGINAL_COMPACTION_THRESHOLD = process.env.CLODEX_OPENAI_COMPACT_THRESHOLD;
-
 vi.mock('../src/provider-factory.js', () => {
   const actual = importActual<typeof import('../src/provider-factory.js')>('../src/provider-factory.js', import.meta.url);
   return {
@@ -65,10 +62,6 @@ describe('SDK proxy provider identity', () => {
   afterEach(() => {
     asMocked(createLanguageModel).mockClear();
     asMocked(generateAnthropicResponse).mockClear();
-    if (ORIGINAL_COMPACTION_FLAG === undefined) delete process.env.CLODEX_OPENAI_COMPACTION;
-    else process.env.CLODEX_OPENAI_COMPACTION = ORIGINAL_COMPACTION_FLAG;
-    if (ORIGINAL_COMPACTION_THRESHOLD === undefined) delete process.env.CLODEX_OPENAI_COMPACT_THRESHOLD;
-    else process.env.CLODEX_OPENAI_COMPACT_THRESHOLD = ORIGINAL_COMPACTION_THRESHOLD;
   });
 
   it('passes stable provider id into the SDK provider factory', async () => {
@@ -100,9 +93,7 @@ describe('SDK proxy provider identity', () => {
     }));
   });
 
-  it('injects the opt-in native-compaction threshold in proxy mode', async () => {
-    process.env.CLODEX_OPENAI_COMPACTION = '1';
-    delete process.env.CLODEX_OPENAI_COMPACT_THRESHOLD;
+  it('injects the default native-compaction threshold in proxy mode', async () => {
     const route: ProxyRoute = {
       aliasId: 'anthropic-openai-oauth__gpt-5.6-sol',
       realModelId: 'gpt-5.6-sol',

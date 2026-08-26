@@ -72,6 +72,10 @@ describe('isolated daemon control plane', () => {
         snapshot: () => ({ mode: 'on' }) as never,
         setMode: vi.fn(),
       },
+      nativeCompaction: {
+        snapshot: () => ({ enabled: true }),
+        setEnabled: vi.fn(() => false),
+      },
       diagnosticLogs: {
         snapshot: () => ({ mode: 'error' }),
         setMode: setDiagnosticLogMode,

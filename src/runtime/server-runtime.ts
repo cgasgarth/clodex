@@ -20,7 +20,7 @@
 // proceeds lockless (best-effort — same exposure as the old single-slot write).
 //
 // NOTE: the standalone `clodex server` command and persistent Clodex daemon
-// write this file. `clodex claude` uses the daemon's endpoint rather than
+// write this file. Claude Code uses the daemon's endpoint rather than
 // creating a private server. `clodex server --no-discovery` (or
 // CLODEX_NO_DISCOVERY=1) opts a standalone server out of registration entirely.
 

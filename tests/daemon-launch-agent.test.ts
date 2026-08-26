@@ -15,8 +15,8 @@ describe('daemon launch agent', () => {
       HOME: '/Users/test',
       CLODEX_HOME: '/Users/test/.clodex',
       CLODEX_CREDENTIAL_HELPER: '/opt/clodex/helper',
-      CLODEX_OPENAI_COMPACTION: '1',
-      CLODEX_OPENAI_COMPACT_THRESHOLD: '250000',
+      CLODEX_OPENAI_COMPACTION: 'legacy-value-must-not-pass-through',
+      CLODEX_OPENAI_COMPACT_THRESHOLD: 'legacy-value-must-not-pass-through',
       CLODEX_DAEMON_ENDPOINT_PORT: '27778',
     });
     expect(plist).toContain('<string>/opt/bun</string>');
@@ -28,8 +28,8 @@ describe('daemon launch agent', () => {
     expect(plist).toContain('<string>Background</string>');
     expect(plist).toContain('<key>CLODEX_CREDENTIAL_HELPER</key>');
     expect(plist).toContain('<string>/opt/clodex/helper</string>');
-    expect(plist).toContain('<key>CLODEX_OPENAI_COMPACT_THRESHOLD</key>');
-    expect(plist).toContain('<string>250000</string>');
+    expect(plist).not.toContain('CLODEX_OPENAI_COMPACTION');
+    expect(plist).not.toContain('CLODEX_OPENAI_COMPACT_THRESHOLD');
     expect(plist).not.toContain('CLODEX_DAEMON_ENDPOINT_PORT');
   });
 

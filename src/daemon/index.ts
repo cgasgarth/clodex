@@ -45,6 +45,9 @@ import {
   shouldWriteDiagnosticEvent,
 } from '../observability/diagnostic-log-mode.js';
 import type { ResponsesWebSocketDiagnosticEvent } from '../oauth/responses-websocket/types.js';
+import {
+  setNativeCompactionEnabled as setRuntimeNativeCompactionEnabled,
+} from '../oauth/responses-compaction.js';
 
 function shouldWriteWebSocketDiagnostic(
   mode: ReturnType<typeof diagnosticLogMode>,
@@ -108,9 +111,10 @@ ${pc.bold('Usage:')}
   clodex daemon logs        Print daemon log paths
 
 Run bare ${pc.bold('clodex')} to open the live Ink dashboard.
-Run ${pc.bold('clodex start')} before launching Claude. The internal
-${pc.bold('clodex-claude')} process wrapper discovers the daemon endpoint on its
-restart-stable port (default ${DEFAULT_DAEMON_PORT}).
+Configure Claude settings once, then use plain ${pc.bold('claude')}. Its
+SessionStart hook can run ${pc.bold('clodex start')} when needed. The internal
+${pc.bold('clodex-claude')} wrapper routes Claude-spawned children through the
+restart-stable daemon port (default ${DEFAULT_DAEMON_PORT}).
 Account switching is explicit; quota or auth errors never fail over to another
 account.`;
 }
@@ -306,7 +310,20 @@ async function runDaemonProcess(): Promise<number> {
   const collector = new DaemonInferenceCollector();
   const accounts = createDaemonAccountController();
   const secondwind = createDaemonSecondwindService(collector.metrics);
-  let activeDiagnosticLogMode = diagnosticLogMode(loadPreferences().diagnosticLogMode);
+  const preferences = loadPreferences();
+  let activeNativeCompaction = preferences.nativeCompactionEnabled ?? true;
+  setRuntimeNativeCompactionEnabled(activeNativeCompaction);
+  const nativeCompaction = {
+    snapshot: () => ({ enabled: activeNativeCompaction }),
+    setEnabled: (enabled: boolean) => {
+      if (enabled === activeNativeCompaction) return false;
+      activeNativeCompaction = enabled;
+      savePreferences({ nativeCompactionEnabled: enabled });
+      setRuntimeNativeCompactionEnabled(enabled);
+      return true;
+    },
+  };
+  let activeDiagnosticLogMode = diagnosticLogMode(preferences.diagnosticLogMode);
   const diagnosticLogs = {
     snapshot: () => ({ mode: activeDiagnosticLogMode }),
     setMode: (mode: typeof activeDiagnosticLogMode) => {
@@ -396,6 +413,7 @@ async function runDaemonProcess(): Promise<number> {
       collector,
       accounts,
       secondwind,
+      nativeCompaction,
       diagnosticLogs,
       requestRestart,
       requestStop: requestShutdown,

@@ -459,7 +459,7 @@ async function runProviderDetail(id: string): Promise<'back' | 'removed'> {
     {
       value: 'toggle',
       label: provider.enabled ? 'Disable provider' : 'Enable provider',
-      hint: provider.enabled ? 'Hide from clodex claude picker' : 'Show in clodex claude picker',
+      hint: provider.enabled ? 'Hide from the Claude model picker' : 'Show in the Claude model picker',
     },
     { value: 'remove', label: 'Remove provider', hint: 'Delete from registry and credential store when safe' },
     { value: 'back', label: 'Back', hint: '' },

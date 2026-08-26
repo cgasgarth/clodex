@@ -4,7 +4,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { loadPreferences, savePreferences } from '../src/config/config.js';
-import { reportInactiveCatalogAliases, runModelsCommand } from '../src/cli.js';
+import { runModelsCommand } from '../src/cli.js';
 import { getConfigPath } from '../src/config/paths.js';
 
 let tempHome: string;
@@ -26,41 +26,6 @@ afterEach(() => {
 });
 
 describe('models alias command', () => {
-  it('reports inactive catalog aliases with their exact saved spellings', () => {
-    const warn = vi.spyOn(p.log, 'warn').mockImplementation(() => {});
-
-    try {
-      reportInactiveCatalogAliases([
-        {
-          name: 'orbit',
-          savedName: 'Orbit',
-          sourceNames: ['Orbit', 'ORBIT'],
-          unavailableReason: 'conflicting targets',
-        },
-        {
-          name: 'archived',
-          savedName: 'ARCHIVED',
-          unavailableReason: 'target unavailable',
-        },
-        {
-          name: 'claude-sonnet-4',
-          savedName: 'CLAUDE-SONNET-4',
-          unavailableReason: 'conflicts with a catalog model id',
-        },
-      ]);
-
-      expect(warn).toHaveBeenCalledWith(
-        '4 saved model aliases inactive. Saved entries were preserved.\n'
-        + '  "Orbit" — conflicting targets\n'
-        + '  "ORBIT" — conflicting targets\n'
-        + '  "ARCHIVED" — target unavailable\n'
-        + '  "CLAUDE-SONNET-4" — conflicts with a catalog model id',
-      );
-    } finally {
-      warn.mockRestore();
-    }
-  });
-
   it('saves, replaces, and removes an alias for a favorite', async () => {
     // The value can be copied directly from `clodex models --list`, including
     // Claude's synthetic context-window suffix.

@@ -20,9 +20,6 @@ async function readFlushedLog(path: string): Promise<string> {
 }
 
 const TEST_HELPER_REF = `helper:v1:${'a'.repeat(64)}:oauth:provider:oauth-provider`;
-const ORIGINAL_COMPACTION_FLAG = process.env.CLODEX_OPENAI_COMPACTION;
-const ORIGINAL_COMPACTION_THRESHOLD = process.env.CLODEX_OPENAI_COMPACT_THRESHOLD;
-
 function rateLimitApiError(retryAfter: string): APICallError {
   return new APICallError({
     message: 'rate limited',
@@ -214,13 +211,6 @@ afterEach(async () => {
   asMocked(generateAnthropicResponse).mockClear();
   asMocked(streamAnthropicResponse).mockClear();
   asMocked(withResponsesWebSocketDiagnosticContext).mockClear();
-  if (ORIGINAL_COMPACTION_FLAG === undefined) delete process.env.CLODEX_OPENAI_COMPACTION;
-  else process.env.CLODEX_OPENAI_COMPACTION = ORIGINAL_COMPACTION_FLAG;
-  if (ORIGINAL_COMPACTION_THRESHOLD === undefined) {
-    delete process.env.CLODEX_OPENAI_COMPACT_THRESHOLD;
-  } else {
-    process.env.CLODEX_OPENAI_COMPACT_THRESHOLD = ORIGINAL_COMPACTION_THRESHOLD;
-  }
   while (handles.length > 0) {
     const handle = handles.pop();
     if (handle) await closeHandle(handle);
@@ -538,9 +528,7 @@ it('logs inference routing metadata without request content', async () => {
     });
   });
 
-  it('injects the opt-in native-compaction threshold in endpoint mode', async () => {
-    process.env.CLODEX_OPENAI_COMPACTION = '1';
-    delete process.env.CLODEX_OPENAI_COMPACT_THRESHOLD;
+  it('injects the default native-compaction threshold in endpoint mode', async () => {
     asMocked(resolveProviderCredential).mockResolvedValue('oauth-token');
     const catalog = createGatewayModelCatalog([{
       id: 'gpt-5.6-sol',

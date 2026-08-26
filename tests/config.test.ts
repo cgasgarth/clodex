@@ -90,6 +90,15 @@ describe('dotfolder config', () => {
     expect(JSON.parse(readFileSync(getConfigPath(), 'utf8')).secondwindMode).toBe('shadow');
   });
 
+  it('persists the daemon-owned native compaction setting', () => {
+    expect(loadPreferences().nativeCompactionEnabled).toBeUndefined();
+
+    savePreferences({ nativeCompactionEnabled: false });
+
+    expect(loadPreferences().nativeCompactionEnabled).toBe(false);
+    expect(JSON.parse(readFileSync(getConfigPath(), 'utf8')).nativeCompactionEnabled).toBe(false);
+  });
+
   it('loads legacy aliases without mutating or filtering their stored form', () => {
     savePreferences({ lastProvider: 'openai-oauth' });
     const legacyPayload = JSON.stringify({
@@ -165,35 +174,25 @@ describe('dotfolder config', () => {
 });
 
 describe('bridge-mode memory', () => {
-  it('defaults Claude to its single endpoint and standalone server to proxy mode', () => {
-    expect(resolveBridgeMode('claude', undefined)).toBe('endpoint');
-    expect(resolveBridgeMode('server', undefined)).toBe('proxy');
+  it('defaults the standalone server to proxy mode', () => {
+    expect(resolveBridgeMode(undefined)).toBe('proxy');
   });
 
   it('never auto-persists an explicit mode flag', () => {
-    expect(resolveBridgeMode('claude', 'endpoint')).toBe('endpoint');
-    expect(resolveBridgeMode('claude', undefined)).toBe('endpoint');
-
-    expect(resolveBridgeMode('server', 'endpoint', { persist: false })).toBe('endpoint');
-    expect(resolveBridgeMode('server', undefined)).toBe('proxy');
+    expect(resolveBridgeMode('endpoint', { persist: false })).toBe('endpoint');
+    expect(resolveBridgeMode(undefined)).toBe('proxy');
   });
 
-  it('persists only with an explicit save gesture (--save-mode), per command', () => {
-    expect(resolveBridgeMode('claude', 'endpoint', { persist: true })).toBe('endpoint');
-    expect(resolveBridgeMode('claude', undefined)).toBe('endpoint');
-    // server is remembered independently — still the proxy default
-    expect(resolveBridgeMode('server', undefined)).toBe('proxy');
-
-    expect(resolveBridgeMode('server', 'endpoint', { persist: true })).toBe('endpoint');
-    expect(resolveBridgeMode('server', undefined)).toBe('endpoint');
+  it('persists only with an explicit save gesture', () => {
+    expect(resolveBridgeMode('endpoint', { persist: true })).toBe('endpoint');
+    expect(resolveBridgeMode(undefined)).toBe('endpoint');
 
     // saved default is overridable for one run without losing the saved value
-    expect(resolveBridgeMode('claude', 'proxy')).toBe('proxy');
-    expect(resolveBridgeMode('claude', undefined)).toBe('endpoint');
+    expect(resolveBridgeMode('proxy')).toBe('proxy');
+    expect(resolveBridgeMode(undefined)).toBe('endpoint');
 
     // and replaceable with another --save-mode
-    expect(resolveBridgeMode('claude', 'proxy', { persist: true })).toBe('proxy');
-    expect(resolveBridgeMode('claude', undefined)).toBe('proxy');
-    expect(resolveBridgeMode('server', undefined)).toBe('endpoint');
+    expect(resolveBridgeMode('proxy', { persist: true })).toBe('proxy');
+    expect(resolveBridgeMode(undefined)).toBe('proxy');
   });
 });

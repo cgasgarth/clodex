@@ -1,11 +1,10 @@
 // src/runtime/launch.ts
-import { execFileSync, execSync, spawn } from 'node:child_process';
-import { existsSync, appendFileSync } from 'node:fs';
+import { execFileSync, execSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { getAppPathOverride } from '../config/config.js';
 import { findBinaryOnPath } from './binary-lookup.js';
-import { isFunction } from './type-guards.js';
 
 const isWindows = process.platform === 'win32';
 
@@ -81,72 +80,4 @@ export function getInstalledClaudeVersion(): string {
 
 export function buildClaudeArgs(model: string | undefined, extraArgs: string[]): string[] {
   return model ? ['--model', model, ...extraArgs] : [...extraArgs];
-}
-
-export function launchClaude(
-  env: NodeJS.ProcessEnv,
-  model: string | undefined,
-  extraArgs: string[],
-): Promise<number> {
-  return new Promise((resolve) => {
-    const claudePath = findClaudeBinary()!;
-    const args = buildClaudeArgs(model, extraArgs);
-
-    const debugFileIdx = extraArgs.indexOf('--debug-file');
-    const debugLogPath = debugFileIdx !== -1 && extraArgs[debugFileIdx + 1] ? extraArgs[debugFileIdx + 1] : undefined;
-
-    const originalStdoutWrite = process.stdout.write.bind(process.stdout);
-    const originalStderrWrite = process.stderr.write.bind(process.stderr);
-
-    const muteWrite = (
-      chunk: string | Uint8Array,
-      encodingOrCallback?: BufferEncoding | ((error?: Error | null) => void),
-      callback?: (error?: Error | null) => void,
-    ) => {
-      if (isFunction(encodingOrCallback)) {
-        callback = encodingOrCallback;
-      }
-      if (debugLogPath) {
-        try {
-          const str = chunk instanceof Uint8Array ? new TextDecoder().decode(chunk) : chunk;
-          appendFileSync(debugLogPath, `[parent] ${str}`);
-        } catch {
-          // ignore
-        }
-      }
-      if (callback) callback();
-      return true;
-    };
-
-    process.stdout.write = muteWrite;
-    process.stderr.write = muteWrite;
-
-    const restore = () => {
-      process.stdout.write = originalStdoutWrite;
-      process.stderr.write = originalStderrWrite;
-    };
-
-    const child = spawn(claudePath, args, {
-      stdio: 'inherit',
-      env,
-      shell: isWindows,
-    });
-
-    const forward = (signal: NodeJS.Signals): void => {
-      child.kill(signal);
-    };
-
-    process.once('SIGINT', () => forward('SIGINT'));
-    process.once('SIGTERM', () => forward('SIGTERM'));
-
-    child.on('exit', (code) => {
-      restore();
-      resolve(code ?? 0);
-    });
-
-    child.on('error', () => {
-      restore();
-      resolve(1);
-    });
-  });
 }

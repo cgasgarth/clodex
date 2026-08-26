@@ -117,6 +117,13 @@ describe('daemon control API', () => {
       controlSocketPath: socketPath,
       version: 'test',
     });
+    let nativeCompactionEnabled = true;
+    const setNativeCompactionEnabled = vi.fn((enabled: boolean) => {
+      if (enabled === nativeCompactionEnabled) return false;
+      nativeCompactionEnabled = enabled;
+      return true;
+    });
+    const requestRestart = vi.fn();
     const handle = await startDaemonControlApi({
       socketPath,
       runtime,
@@ -132,7 +139,11 @@ describe('daemon control API', () => {
           secondwindMode = mode;
         },
       },
-      requestRestart: vi.fn(),
+      nativeCompaction: {
+        snapshot: () => ({ enabled: nativeCompactionEnabled }),
+        setEnabled: setNativeCompactionEnabled,
+      },
+      requestRestart,
       requestStop,
     });
     try {
@@ -170,6 +181,27 @@ describe('daemon control API', () => {
         running: true,
         port: 12346,
       });
+      await expect(daemonControlRequest('/v1/native-compaction', { socketPath }))
+        .resolves.toEqual({ enabled: true });
+      await expect(daemonControlRequest('/v1/native-compaction', {
+        socketPath,
+        method: 'POST',
+        body: { enabled: true },
+      })).resolves.toEqual({ enabled: true });
+      expect(requestRestart).not.toHaveBeenCalled();
+      await expect(daemonControlRequest('/v1/native-compaction', {
+        socketPath,
+        method: 'POST',
+        body: { enabled: false },
+      })).resolves.toEqual({ enabled: false });
+      await new Promise(resolve => setTimeout(resolve, 40));
+      expect(setNativeCompactionEnabled).toHaveBeenCalledWith(false);
+      expect(requestRestart).toHaveBeenCalledTimes(1);
+      await expect(daemonControlRequest('/v1/native-compaction', {
+        socketPath,
+        method: 'POST',
+        body: { enabled: 'false' },
+      })).rejects.toThrow('Native compaction enabled must be a boolean');
       const metrics = await daemonControlRequest<{
         accountId: string;
         buckets: Array<{ requests: number; inputTokens: number }>;

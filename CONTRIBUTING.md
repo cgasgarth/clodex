@@ -125,16 +125,16 @@ A scope is encouraged where it's obvious — `fix(auth):`, `feat(wrapper):`.
 
 ## Manual testing
 
-Much of clodex can't be covered by the automated suite, because it involves launching
-Claude Code against a real provider. The tests cover pure functions; interactive launch
-flows and real-provider behavior are verified by hand.
+Much of clodex can't be covered by the automated suite because it involves the
+real Claude Code binary and a real provider. The tests cover pure functions;
+plain-Claude and real-provider behavior are verified by hand.
 
 If your change touches a launch path, please say in the PR description what you exercised
 manually. Useful commands:
 
 ```bash
-clodex claude --dry-run     # full wizard, preview instead of launch, no writes
-clodex claude --trace       # debug logs to ~/.clodex/logs/
+clodex start                # start the shared daemon without the dashboard
+claude                      # real Claude Code binary using user settings
 clodex models --list        # print model names + aliases
 clodex server               # foreground gateway
 ```
@@ -150,8 +150,9 @@ real `~/.clodex`.
 - **Never add `claude -p` end-to-end tests to the automated suite.** They're manual only.
 - **Don't restructure `src/oauth/responses-websocket.ts`.** The OAuth WebSocket
   continuation logic took extensive real-world testing. Surgical changes only.
-- **Don't touch `~/.claude/settings.json`** from clodex code, and never mutate a legacy
-  `~/.relay-ai` directory.
+- **Preserve unrelated `~/.claude/settings.json` values.** Catalog commands may
+  update only native `modelPicker.options`. Never mutate a legacy `~/.relay-ai`
+  directory.
 
 ## Review
 

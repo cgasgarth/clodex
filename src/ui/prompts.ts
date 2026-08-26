@@ -2,7 +2,7 @@
 // Use printPanel for important callouts (p.note dims all body text).
 import pc from 'picocolors';
 import * as p from '@clack/prompts';
-import type { ConflictInfo, LocalProvider, LocalProviderModel } from '../types.js';
+import type { LocalProvider, LocalProviderModel } from '../types.js';
 
 /** Human-readable label for a model (registry names are often raw ids). */
 export function formatModelLabel(model: Pick<LocalProviderModel, 'id' | 'name'>): string {
@@ -97,10 +97,6 @@ function providerTagColor(providerId: string): (text: string) => string {
   }
 }
 
-function fmtCommand(cmd: string): string {
-  return pc.cyan(cmd);
-}
-
 export function fmtUrl(url: string): string {
   return pc.cyan(url);
 }
@@ -140,43 +136,11 @@ export function navOption(value: string, label: string, hint = '') {
   return { value, label: pc.cyan(label), hint };
 }
 
-export function confirmLaunchMessage(
-  target: string,
-  modelLabel: string,
-  modelId: string,
-  providerName: string,
-  via?: string,
-): string {
-  const viaSuffix = via ? ` ${pc.dim('(')}${via}${pc.dim(')')}` : '';
-  return `Launch ${pc.bold(target)} · ${fmtModel(modelLabel, modelId)} ${pc.dim('via')} ${fmtProvider(providerName)}?${viaSuffix}`;
-}
-
-
-
 export function logConnected(name: string, modelCount: number): void {
   p.log.success(
     `${pc.bold('Connected')} ${pc.dim('·')} ${fmtCount(modelCount, 'model')} ${pc.dim('—')} ${fmtProvider(name)}`,
   );
 }
-
-export function printWelcomePanel(): void {
-  printPanel(pc.cyan('Welcome to clodex'), [
-    pc.white("Let's get you set up."),
-    `${pc.dim('You can manage providers later with ')}${fmtCommand('clodex providers')}${pc.dim('.')}`,
-  ]);
-}
-
-export function printEnvConflictPanel(conflicts: ConflictInfo[]): void {
-  if (conflicts.length === 0) return;
-  printPanel(pc.yellow('Env overrides'), [
-    `${pc.white('These variables will be ')}${pc.yellow(pc.bold('temporarily removed'))}${pc.white(' for the Claude Code child process:')}`,
-    '',
-    ...conflicts.map(c => `  ${pc.dim(c.name)}${pc.white('=')}${pc.yellow(c.value)}`),
-  ]);
-}
-
-
-
 
 export function printProviderDetailPanel(
   name: string,

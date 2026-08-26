@@ -11,6 +11,7 @@ import type {
 } from '../daemon/secondwind.js';
 import { DASHBOARD_CONTROL_REQUEST_TIMEOUT_MS } from '../config/timeouts.js';
 import type { DiagnosticLogMode } from '../types.js';
+import type { NativeCompactionSnapshot } from '../daemon/control-api.js';
 
 interface WebSocketStatus {
   total: number;
@@ -134,6 +135,7 @@ export interface DashboardPanelSnapshot {
   diagnostics?: Diagnostic[];
   diagnosticLogMode?: DiagnosticLogMode;
   secondwind?: SecondwindSnapshot;
+  nativeCompaction?: NativeCompactionSnapshot;
   warnings: string[];
 }
 
@@ -150,7 +152,7 @@ export async function loadDashboardPanels(
   request: DashboardRequest = daemonControlRequest,
 ): Promise<DashboardPanelSnapshot> {
   const options = { timeoutMs: DASHBOARD_CONTROL_REQUEST_TIMEOUT_MS };
-  const [status, accounts, diagnostics, secondwind] = await Promise.allSettled([
+  const [status, accounts, diagnostics, secondwind, nativeCompaction] = await Promise.allSettled([
     request<DaemonStatus>('/v1/status', options),
     request<{ accounts: Account[] }>('/v1/accounts', options),
     request<{ diagnostics: Diagnostic[]; mode: DiagnosticLogMode }>(
@@ -158,6 +160,7 @@ export async function loadDashboardPanels(
       options,
     ),
     request<SecondwindSnapshot>('/v1/secondwind', options),
+    request<NativeCompactionSnapshot>('/v1/native-compaction', options),
   ]);
   const warnings: string[] = [];
   if (status.status === 'rejected') warnings.push(`status: ${requestFailure(status.reason)}`);
@@ -168,7 +171,10 @@ export async function loadDashboardPanels(
   if (secondwind.status === 'rejected') {
     warnings.push(`Secondwind: ${requestFailure(secondwind.reason)}`);
   }
-  let reachable = [status, accounts, diagnostics, secondwind]
+  if (nativeCompaction.status === 'rejected') {
+    warnings.push(`native compaction: ${requestFailure(nativeCompaction.reason)}`);
+  }
+  let reachable = [status, accounts, diagnostics, secondwind, nativeCompaction]
     .some(result => result.status === 'fulfilled');
   if (!reachable) {
     try {
@@ -190,6 +196,9 @@ export async function loadDashboardPanels(
       ? diagnostics.value.mode
       : undefined,
     secondwind: secondwind.status === 'fulfilled' ? secondwind.value : undefined,
+    nativeCompaction: nativeCompaction.status === 'fulfilled'
+      ? nativeCompaction.value
+      : undefined,
     warnings,
   };
 }

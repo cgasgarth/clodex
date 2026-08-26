@@ -41,35 +41,29 @@ clodex daemon install          # install and start the LaunchAgent
 clodex daemon status
 ```
 
-Use `clodex-claude` for terminal launches:
+Start Claude Code with the real binary after the one-time settings setup in the
+main README:
 
 ```bash
-clodex-claude
-clodex-claude --resume <session>
-clodex-claude --clodex-account person@example.com
+claude
+claude --resume <session>
 ```
 
-`clodex claude …` is the higher-level equivalent: it requires a running daemon,
-launches through the shared endpoint, and automatically points
-Claude-spawned children at `clodex-claude`.
-
-Set Claude Code's process wrapper to the absolute `clodex-claude` path so
+Set Claude Code's process wrapper in `~/.claude/settings.json` to the absolute
+`clodex-claude` path so
 workflows, subagents, and background sessions use the same daemon:
 
-```bash
-export CLAUDE_CODE_PROCESS_WRAPPER="/absolute/path/to/clodex-claude"
+```json
+{
+  "env": {
+    "CLAUDE_CODE_PROCESS_WRAPPER": "/absolute/path/to/clodex-claude"
+  }
+}
 ```
 
-The wrapper must ultimately `exec` Claude. If a stable shell launcher is needed,
-keep its final command in this form:
-
-```sh
-exec /absolute/path/to/bun /absolute/path/to/clodex/dist/claude-wrapper.js "$@"
-```
-
-Do not point `CLAUDE_CODE_PROCESS_WRAPPER` at a short-lived version-manager
-shim. Verify the exact path from a minimal environment before relying on
-background agents.
+The internal wrapper must ultimately `exec` Claude. Do not use it as the
+terminal startup command. Do not point it at a short-lived version-manager
+shim.
 
 ## TUI and service commands
 
