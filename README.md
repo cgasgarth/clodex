@@ -116,8 +116,14 @@ your absolute home path. Keep other settings and hooks that you already use.
 Claude Code requires a non-empty credential before it sends requests, so
 `ANTHROPIC_API_KEY` is a fixed, non-secret client placeholder. The daemon
 accepts requests only on its loopback endpoint and does not validate or require
-that value. Do not configure `apiKeyHelper`. The `SessionStart` hook checks
-health and starts Clodex only when needed. No hook stops Clodex. The internal
+that value. Do not configure `apiKeyHelper`.
+
+Claude Code requires one approval before it uses the placeholder in interactive
+sessions. Run `/config` once and set `Use custom API key: clodex` to `true`.
+This choice persists for later terminal sessions.
+
+The `SessionStart` hook checks health and starts Clodex only when needed. No
+hook stops Clodex. The internal
 `clodex-claude` process wrapper is only for Claude-spawned child processes; it
 is not the terminal startup command.
 
