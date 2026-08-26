@@ -83,28 +83,30 @@ export function loadPreferences(): UserPreferences {
     recentModelsByProvider: config.recentModelsByProvider,
     favoriteModels: config.favoriteModels,
     modelAliases: config.modelAliases,
-    claudeBridgeMode: config.claudeBridgeMode,
     serverBridgeMode: config.serverBridgeMode,
     appPathOverrides: config.appPathOverrides,
     recentLaunchFolders: config.recentLaunchFolders,
     secondwindMode: config.secondwindMode,
+    nativeCompactionEnabled: config.nativeCompactionEnabled,
     diagnosticLogMode: config.diagnosticLogMode,
     server: config.server,
   };
 }
 
-export function savePreferences(prefs: Partial<Pick<UserPreferences, 'lastModel' | 'lastProvider' | 'recentModelsByProvider' | 'favoriteModels' | 'modelAliases' | 'claudeBridgeMode' | 'serverBridgeMode' | 'appPathOverrides' | 'recentLaunchFolders' | 'secondwindMode' | 'diagnosticLogMode'>>): void {
+export function savePreferences(prefs: Partial<Pick<UserPreferences, 'lastModel' | 'lastProvider' | 'recentModelsByProvider' | 'favoriteModels' | 'modelAliases' | 'serverBridgeMode' | 'appPathOverrides' | 'recentLaunchFolders' | 'secondwindMode' | 'nativeCompactionEnabled' | 'diagnosticLogMode'>>): void {
   updateConfig(config => {
     if (prefs.lastModel !== undefined) config.lastModel = prefs.lastModel;
     if (prefs.lastProvider !== undefined) config.lastProvider = prefs.lastProvider;
     if (prefs.recentModelsByProvider !== undefined) config.recentModelsByProvider = prefs.recentModelsByProvider;
     if (prefs.favoriteModels !== undefined) config.favoriteModels = prefs.favoriteModels;
     if (prefs.modelAliases !== undefined) config.modelAliases = prefs.modelAliases;
-    if (prefs.claudeBridgeMode !== undefined) config.claudeBridgeMode = prefs.claudeBridgeMode;
     if (prefs.serverBridgeMode !== undefined) config.serverBridgeMode = prefs.serverBridgeMode;
     if (prefs.appPathOverrides !== undefined) config.appPathOverrides = prefs.appPathOverrides;
     if (prefs.recentLaunchFolders !== undefined) config.recentLaunchFolders = prefs.recentLaunchFolders;
     if (prefs.secondwindMode !== undefined) config.secondwindMode = prefs.secondwindMode;
+    if (prefs.nativeCompactionEnabled !== undefined) {
+      config.nativeCompactionEnabled = prefs.nativeCompactionEnabled;
+    }
     if (prefs.diagnosticLogMode !== undefined) config.diagnosticLogMode = prefs.diagnosticLogMode;
   });
 }
@@ -133,19 +135,17 @@ export function setAppPathOverride(appId: string, path: string | null): Record<s
  * single endpoint; the standalone server keeps its proxy default.
  */
 export function resolveBridgeMode(
-  command: 'claude' | 'server',
   explicit: BridgeMode | undefined,
   opts: { persist?: boolean } = {},
 ): BridgeMode {
-  const key = command === 'claude' ? 'claudeBridgeMode' : 'serverBridgeMode';
+  const key = 'serverBridgeMode';
   if (explicit) {
     if (opts.persist === true) savePreferences({ [key]: explicit });
     return explicit;
   }
-  return loadPreferences()[key] ?? (command === 'claude' ? 'endpoint' : 'proxy');
+  return loadPreferences()[key] ?? 'proxy';
 }
 
-const MAX_RECENT_MODELS = 3;
 const MAX_RECENT_LAUNCH_FOLDERS = 6;
 
 export function recordLaunchFolder(folder: string): string[] {
@@ -156,21 +156,6 @@ export function recordLaunchFolder(folder: string): string[] {
     const next = [trimmed, ...prev.filter(path => path !== trimmed)].slice(0, MAX_RECENT_LAUNCH_FOLDERS);
     config.recentLaunchFolders = next;
     return next;
-  });
-}
-
-export function recordLaunchSelection(
-  _agent: 'claude',
-  providerId: string,
-  modelId: string,
-  prefs: UserPreferences,
-): void {
-  const prevRecent = prefs.recentModelsByProvider?.[providerId] ?? [];
-  const updatedRecent = [modelId, ...prevRecent.filter(id => id !== modelId)].slice(0, MAX_RECENT_MODELS);
-  savePreferences({
-    lastProvider: providerId,
-    lastModel: modelId,
-    recentModelsByProvider: { ...prefs.recentModelsByProvider, [providerId]: updatedRecent },
   });
 }
 

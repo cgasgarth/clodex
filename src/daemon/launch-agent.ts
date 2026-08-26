@@ -11,8 +11,6 @@ import { getAppHome, getDaemonLaunchAgentPath } from '../config/paths.js';
 
 const DAEMON_LAUNCH_AGENT_LABEL = 'com.clodex.daemon';
 const DAEMON_ENV_PASSTHROUGH = [
-  'CLODEX_OPENAI_COMPACTION',
-  'CLODEX_OPENAI_COMPACT_THRESHOLD',
   'CLODEX_STREAM_KEEPALIVE_INTERVAL_MS',
   'CLODEX_LOG_REQUEST_PREVIEW',
   'CLODEX_TRACE',

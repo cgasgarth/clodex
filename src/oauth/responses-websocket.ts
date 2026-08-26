@@ -110,7 +110,7 @@ export function createResponsesWebSocketFetch(
   let standaloneCompactionNotFound = false;
   const resolvedOptions = resolveWebSocketOptions(options);
   // Durable native state must never remain active after the user disables the
-  // native compaction opt-in, even if a caller accidentally supplies a path.
+  // native compaction setting, even if a caller accidentally supplies a path.
   const checkpointStoreDir = checkpointStoreDirectory(options);
 
   // SAFETY: This async implementation matches the provider-utils FetchFunction contract.

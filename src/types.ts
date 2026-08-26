@@ -6,7 +6,6 @@ type StarterCommand =
   | 'root'
   | 'start'
   | 'stop'
-  | 'claude'
   | 'server'
   | 'daemon'
   | 'accounts'
@@ -86,8 +85,6 @@ export interface UserPreferences {
   recentModelsByProvider?: Record<string, string[]>;
   favoriteModels?: FavoriteModel[];
   modelAliases?: ModelAlias[];
-  /** Remembered `clodex claude` endpoint selection from older configurations. */
-  claudeBridgeMode?: BridgeMode;
   /** Remembered bridge mode for `clodex server` (set by --endpoint / --proxy). */
   serverBridgeMode?: BridgeMode;
   /** Manual binary path overrides (e.g. the claude binary). */
@@ -95,6 +92,8 @@ export interface UserPreferences {
   recentLaunchFolders?: string[];
   /** Daemon-wide Secondwind tool-output optimization mode. */
   secondwindMode?: SecondwindMode;
+  /** Daemon-owned native OpenAI/Codex compaction. Defaults to enabled. */
+  nativeCompactionEnabled?: boolean;
   /** Structured WebSocket diagnostics retained by the daemon. */
   diagnosticLogMode?: DiagnosticLogMode;
   server?: {
@@ -114,15 +113,8 @@ export interface ParsedArgs {
   command: StarterCommand;
   showHelp: boolean;
   showVersion: boolean;
-  dryRun: boolean;
   trace: boolean;
   claudeArgs: string[];
-  /** clodex boot provider (claude); not passed to child CLI */
-  launchProvider?: string;
-  /** clodex boot model (claude); not passed to child CLI */
-  launchModel?: string;
-  /** Request Fast processing for OpenAI OAuth routes in this Claude launch. */
-  fast?: boolean;
   /** Explicit bridge mode from --endpoint / --proxy — applies to this run only. */
   bridgeMode?: BridgeMode;
   /** --save-mode: persist the explicit bridge mode as this command's default. */

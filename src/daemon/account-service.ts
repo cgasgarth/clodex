@@ -320,6 +320,7 @@ export class DaemonAccountService implements DaemonAccountController {
     ticket: string | undefined,
     providerId: ManagedOAuthProviderId = 'openai-oauth',
   ): DaemonAccountRecord | null {
+    if (!ticket) return this.store.selected(providerId);
     const launch = this.launchForTicket(ticket);
     if (!launch) return null;
     const id = launch.pinnedAccountIds[providerId]
@@ -344,7 +345,7 @@ export class DaemonAccountService implements DaemonAccountController {
     const account = this.accountForTicket(ticket, providerId);
     if (!account) {
       throw new Error(
-        `The ${providerDisplayName(providerId)} launch ticket is missing or expired, or no account is selected`,
+        `The ${providerDisplayName(providerId)} launch ticket is invalid or no account is selected`,
       );
     }
     const apiKey = await this.dependencies.resolveCredential(providerId, account.authRef);

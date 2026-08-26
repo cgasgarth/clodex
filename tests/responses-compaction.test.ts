@@ -16,45 +16,16 @@ describe('Responses standalone compaction', () => {
     expect(RESPONSES_COMPACT_TIMEOUT_MS).toBe(10 * 60_000);
   });
 
-  it('is opt-in and defaults enabled GPT sessions to 350K within the safe model window', () => {
-    expect(resolveOpenAiCompactionThreshold(272_000, {})).toBeUndefined();
-    expect(resolveOpenAiCompactionThreshold(272_000, {
-      CLODEX_OPENAI_COMPACTION: '0',
-    })).toBeUndefined();
-    expect(resolveOpenAiCompactionThreshold(272_000, {
-      CLODEX_OPENAI_COMPACTION: 'true',
-      CLODEX_OPENAI_COMPACT_THRESHOLD: '12345',
-    })).toBe(12_345);
-    expect(resolveOpenAiCompactionThreshold(128_000, {
-      CLODEX_OPENAI_COMPACTION: 'true',
-      CLODEX_OPENAI_COMPACT_THRESHOLD: '278000',
-    })).toBe(115_200);
-    expect(resolveOpenAiCompactionThreshold(1_000_000, {
-      CLODEX_OPENAI_COMPACTION: 'true',
-      CLODEX_OPENAI_COMPACT_THRESHOLD: '278000',
-    })).toBe(278_000);
-    expect(resolveOpenAiCompactionThreshold(undefined, {
-      CLODEX_OPENAI_COMPACTION: 'true',
-      CLODEX_OPENAI_COMPACT_THRESHOLD: '278000',
-    })).toBe(278_000);
-    expect(resolveOpenAiCompactionThreshold(272_000, {
-      CLODEX_OPENAI_COMPACTION: 'true',
-      CLODEX_OPENAI_COMPACT_THRESHOLD: 'not-a-token-count',
-    })).toBe(Math.floor(272_000 * OPENAI_COMPACTION_MAX_CONTEXT_RATIO));
-    expect(resolveOpenAiCompactionThreshold(272_000, {
-      CLODEX_OPENAI_COMPACTION: 'true',
-      CLODEX_OPENAI_COMPACT_THRESHOLD: '-1',
-    })).toBe(Math.floor(272_000 * OPENAI_COMPACTION_MAX_CONTEXT_RATIO));
-    expect(resolveOpenAiCompactionThreshold(272_000, {
-      CLODEX_OPENAI_COMPACTION: 'true',
-      CLODEX_OPENAI_COMPACT_THRESHOLD: '1.5',
-    })).toBe(Math.floor(272_000 * OPENAI_COMPACTION_MAX_CONTEXT_RATIO));
-    expect(resolveOpenAiCompactionThreshold(1_000_000, {
-      CLODEX_OPENAI_COMPACTION: 'true',
-    })).toBe(OPENAI_COMPACTION_DEFAULT_THRESHOLD);
-    expect(resolveOpenAiCompactionThreshold(undefined, {
-      CLODEX_OPENAI_COMPACTION: 'true',
-    })).toBeUndefined();
+  it('defaults on at 350K within the safe model window and accepts a daemon disable', () => {
+    expect(resolveOpenAiCompactionThreshold(272_000)).toBe(
+      Math.floor(272_000 * OPENAI_COMPACTION_MAX_CONTEXT_RATIO),
+    );
+    expect(resolveOpenAiCompactionThreshold(128_000)).toBe(115_200);
+    expect(resolveOpenAiCompactionThreshold(1_000_000)).toBe(
+      OPENAI_COMPACTION_DEFAULT_THRESHOLD,
+    );
+    expect(resolveOpenAiCompactionThreshold(undefined)).toBeUndefined();
+    expect(resolveOpenAiCompactionThreshold(272_000, false)).toBeUndefined();
   });
 
   it('rearms above an opaque post-compaction floor without crossing the hard window', () => {

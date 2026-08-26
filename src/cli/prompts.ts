@@ -1,20 +1,13 @@
 // src/cli/prompts.ts
 import * as p from '@clack/prompts';
 import pc from 'picocolors';
-import type { UserPreferences, ConflictInfo, LocalProvider, LocalProviderModel } from '../types.js';
+import type { UserPreferences, LocalProvider, LocalProviderModel } from '../types.js';
 import {
-  confirmLaunchMessage,
-  fmtModel,
   modelSelectOption,
   navOption,
-  printEnvConflictPanel,
-  relayOutro,
-  formatModelLabel,
 } from '../ui/prompts.js';
 import { scoreModelSearch } from '../models/search.js';
 
-const BROWSE_ALL = '__browse_all__';
-const MAX_RECENT = 3;
 /** Providers with more models than this offer search or paginated browse. */
 export const MODEL_SEARCH_THRESHOLD = 25;
 /** Models shown per page when browsing large catalogs. */
@@ -288,10 +281,6 @@ async function selectModelWithSearch<T extends ModelSearchable & { id: string }>
   return selectLargeCatalog(models, orderedBrowse, toOption, message, initialModelId);
 }
 
-function noteEnvConflicts(conflicts: ConflictInfo[]): void {
-  printEnvConflictPanel(conflicts);
-}
-
 function modelToOption(model: LocalProviderModel, hint?: string) {
   return modelSelectOption(model, hint);
 }
@@ -306,75 +295,4 @@ export async function browseAllModels(
     'Which model?',
     prefs.lastModel,
   );
-}
-
-export async function pickLocalModel(
-  provider: LocalProvider,
-  conflicts: ConflictInfo[],
-  prefs: UserPreferences,
-): Promise<LocalProviderModel | 'back' | null> {
-  // Show recently used models for this provider if we have any.
-  const recentIds = (prefs.recentModelsByProvider?.[provider.id] ?? []).slice(0, MAX_RECENT);
-  const recentModels = recentIds
-    .map(id => provider.models.find(m => m.id === id))
-    .filter((m): m is LocalProviderModel => m !== undefined);
-
-  let selectedModel: LocalProviderModel | null = null;
-
-  while (true) {
-    if (recentModels.length > 0) {
-      const options = [
-        ...recentModels.map(m => modelToOption(m, 'recent')),
-        navOption(BROWSE_ALL, 'Browse all models →', `${provider.models.length} available`),
-        navOption('__back__', '← Go back', 'Select a different provider'),
-      ];
-
-      const picked = await p.select({
-        message: 'Which model?',
-        options,
-        initialValue: recentModels[0]!.id,
-      });
-
-      if (p.isCancel(picked) || picked === '__back__') {
-        return 'back';
-      }
-
-      if (picked === BROWSE_ALL) {
-        const browsed = await browseAllModels(provider, prefs);
-        if (browsed === 'back') {
-          continue;
-        }
-        if (!browsed) return null;
-        selectedModel = browsed;
-        break;
-      } else {
-        selectedModel = recentModels.find(m => m.id === picked)!;
-        break;
-      }
-    } else {
-      const browsed = await browseAllModels(provider, prefs);
-      if (browsed === 'back') {
-        return 'back';
-      }
-      if (!browsed) return null;
-      selectedModel = browsed;
-      break;
-    }
-  }
-
-  noteEnvConflicts(conflicts);
-
-  const modelLabel = formatModelLabel(selectedModel);
-  const confirmed = await p.confirm({
-    message: confirmLaunchMessage('Claude Code', modelLabel, selectedModel.id, provider.name),
-    initialValue: true,
-  });
-
-  if (p.isCancel(confirmed) || !confirmed) {
-    p.cancel('Cancelled.');
-    return null;
-  }
-
-  relayOutro('Launching', fmtModel(modelLabel, selectedModel.id));
-  return selectedModel;
 }

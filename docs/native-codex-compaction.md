@@ -1,34 +1,24 @@
-# Experimental native OpenAI/Codex compaction
+# Native OpenAI/Codex compaction
 
-Native compaction is an experimental, opt-in feature for ChatGPT/Codex OAuth
+Native compaction is enabled by default for ChatGPT/Codex OAuth
 Responses models. It replaces part of a long OpenAI-side response chain with
 OpenAI's opaque `compaction` item.
 
-It is off by default because Claude Code and OpenAI maintain different views of
-the conversation. OpenAI can compact its chain without shrinking Claude Code's
-local transcript. If the live OpenAI state is later lost, Claude may try to
-replay a transcript that no longer fits the model's context window.
+Claude Code and OpenAI maintain different views of the conversation. OpenAI can
+compact its chain without shrinking Claude Code's local transcript. If live
+OpenAI state is later lost, Claude may try to replay a transcript that no
+longer fits the model's context window.
 
-## Enable it
+## Daemon setting
 
-Set the opt-in flag in the environment that launches Clodex:
-
-```sh
-CLODEX_OPENAI_COMPACTION=1 clodex claude
-```
+Open bare `clodex`, open the Secondwind view, and press `c` to toggle native
+compaction. The setting persists in `~/.clodex/config.json`. A changed value
+restarts the daemon so every transport and checkpoint uses one policy. An
+unchanged value is a no-op.
 
 The default trigger is 350,000 input tokens, capped at 90% of a smaller model's
-advertised context window. A positive integer override can be used in
-production or tests:
-
-```sh
-CLODEX_OPENAI_COMPACTION=1 \
-CLODEX_OPENAI_COMPACT_THRESHOLD=350000 \
-clodex claude
-```
-
-`CLODEX_OPENAI_COMPACT_THRESHOLD` does not enable the feature by itself.
-Invalid, fractional, zero, and negative thresholds are ignored.
+advertised context window. Clodex has no native-compaction environment flag or
+threshold override.
 
 After compaction, Clodex records the first real model-input count as the opaque
 compaction floor. It rearms automatic compaction only after the context grows by
@@ -53,9 +43,9 @@ Clodex the canonical state needed for durable checkpoint recovery.
 
 ## Clodex-owned context lifecycle
 
-Clodex-launched OpenAI OAuth children set Claude Code's supported
-`DISABLE_AUTO_COMPACT=1` switch. Manual `/compact` remains available. Native
-OpenAI compaction at the configured threshold owns the model-facing chain,
+Claude settings set Claude Code's supported `DISABLE_AUTO_COMPACT=1` switch.
+Manual `/compact` remains available. Native OpenAI compaction at the fixed
+threshold owns the model-facing chain,
 with the advertised model window retained as the hard provider ceiling and
 recovery boundary.
 
@@ -65,7 +55,7 @@ Claude a synthetic checkpoint marker and stores the exact marker hash beside
 the opaque state. Claude keeps its normal compacted-transcript UI/resume shape,
 while the next request reattaches to the native checkpoint.
 
-Enabling native compaction also opts into durable recovery checkpoints under
+Native compaction uses durable recovery checkpoints under
 `~/.clodex/responses-checkpoints`. These files can contain retained user
 messages, assistant/tool state, and OpenAI's opaque compaction item. Clodex
 creates the directory with mode `0700` and files with mode `0600`, rejects

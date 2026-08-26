@@ -12,6 +12,7 @@ import {
   API_PRICING_SOURCE,
 } from '../daemon/api-pricing.js';
 import type { SecondwindSnapshot } from '../daemon/secondwind.js';
+import type { NativeCompactionSnapshot } from '../daemon/control-api.js';
 import type { DiagnosticLogMode, SecondwindMode } from '../types.js';
 import {
   accountDisplayName,
@@ -202,6 +203,7 @@ function Dashboard(): React.ReactNode {
   const [diagnostics, setDiagnostics] = useState<Diagnostic[]>([]);
   const [diagnosticLogMode, setDiagnosticLogMode] = useState<DiagnosticLogMode>('error');
   const [secondwind, setSecondwind] = useState<SecondwindSnapshot | null>(null);
+  const [nativeCompaction, setNativeCompaction] = useState<NativeCompactionSnapshot | null>(null);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [message, setMessage] = useState('Connecting to Clodex daemon…');
   const [loading, setLoading] = useState(false);
@@ -211,6 +213,8 @@ function Dashboard(): React.ReactNode {
   const [deviceCode, setDeviceCode] = useState<DeviceCodePrompt>();
   const [secondwindAction, setSecondwindAction] = useState(false);
   const [pendingSecondwindMode, setPendingSecondwindMode] = useState<SecondwindMode>();
+  const [nativeCompactionAction, setNativeCompactionAction] = useState(false);
+  const [pendingNativeCompaction, setPendingNativeCompaction] = useState<boolean>();
   const refresh = useCallback(async () => {
     if (refreshInFlight.current) return;
     refreshInFlight.current = true;
@@ -229,6 +233,7 @@ function Dashboard(): React.ReactNode {
       if (snapshot.diagnostics) setDiagnostics(snapshot.diagnostics);
       if (snapshot.diagnosticLogMode) setDiagnosticLogMode(snapshot.diagnosticLogMode);
       if (snapshot.secondwind) setSecondwind(snapshot.secondwind);
+      if (snapshot.nativeCompaction) setNativeCompaction(snapshot.nativeCompaction);
       const warnings = [...snapshot.warnings];
       const activeAccount = snapshot.accounts?.find(account => account.selected);
       try {
@@ -317,6 +322,22 @@ function Dashboard(): React.ReactNode {
     ).finally(() => setSecondwindAction(false));
   }, [secondwind?.mode, secondwindAction]);
 
+  const setNativeCompactionEnabled = useCallback((enabled: boolean) => {
+    if (nativeCompactionAction || nativeCompaction?.enabled === enabled) return;
+    setNativeCompactionAction(true);
+    setMessage(`${enabled ? 'Enabling' : 'Disabling'} native Codex compaction…`);
+    daemonControlRequest<NativeCompactionSnapshot>('/v1/native-compaction', {
+      method: 'POST',
+      body: { enabled },
+    }).then(
+      snapshot => {
+        setNativeCompaction(snapshot);
+        setMessage(`Native Codex compaction is ${snapshot.enabled ? 'on' : 'off'} · daemon restarting…`);
+      },
+      error => setMessage(error instanceof Error ? error.message : String(error)),
+    ).finally(() => setNativeCompactionAction(false));
+  }, [nativeCompaction?.enabled, nativeCompactionAction]);
+
   const logout = useCallback((account: Account) => {
     if (accountAction) return;
     setAccountAction(true);
@@ -387,6 +408,17 @@ function Dashboard(): React.ReactNode {
       }
       return;
     }
+    if (pendingNativeCompaction !== undefined) {
+      if (key.return) {
+        const enabled = pendingNativeCompaction;
+        setPendingNativeCompaction(undefined);
+        setNativeCompactionEnabled(enabled);
+      } else {
+        setPendingNativeCompaction(undefined);
+        setMessage('Native compaction change cancelled.');
+      }
+      return;
+    }
     if (input === 'q' || key.escape) {
       exit();
       return;
@@ -396,6 +428,7 @@ function Dashboard(): React.ReactNode {
       setPendingLogoutId(undefined);
       setPendingRestart(false);
       setPendingSecondwindMode(undefined);
+      setPendingNativeCompaction(undefined);
       return;
     }
     if (input === 'r') {
@@ -438,7 +471,11 @@ function Dashboard(): React.ReactNode {
       }
     }
     if (view === 'secondwind' && secondwind) {
-      if (secondwindAction) return;
+      if (secondwindAction || nativeCompactionAction) return;
+      if (input === 'c' && nativeCompaction) {
+        setPendingNativeCompaction(!nativeCompaction.enabled);
+        return;
+      }
       if (input === 'o') {
         if (secondwind.mode !== 'off') setPendingSecondwindMode('off');
         return;
@@ -792,7 +829,7 @@ function Dashboard(): React.ReactNode {
       </Box>
     );
   } else {
-    controls = `←/→ choose · o off · s shadow · n on · Enter confirm · ${VIEW_SWITCH_HINT} · r refresh · q quit`;
+    controls = `c toggle compaction · ←/→ Secondwind · o off · s shadow · n on · Enter confirm · ${VIEW_SWITCH_HINT} · r refresh · q quit`;
     const modeColor = secondwind?.mode === 'on'
       ? 'green'
       : secondwind?.mode === 'shadow'
@@ -800,6 +837,28 @@ function Dashboard(): React.ReactNode {
         : undefined;
     content = (
       <>
+        <Box borderStyle="round" paddingX={1} flexDirection="column">
+          <Text bold>Native Codex compaction</Text>
+          <Text>
+            Daemon setting: <Text bold color={nativeCompaction?.enabled ? 'green' : undefined}>
+              {nativeCompaction?.enabled === undefined
+                ? 'unavailable'
+                : nativeCompaction.enabled ? 'on' : 'off'}
+            </Text>
+            {' · '}default on
+          </Text>
+          <Text dimColor>Changes restart the daemon so every transport uses one checkpoint policy.</Text>
+        </Box>
+        {pendingNativeCompaction !== undefined && (
+          <Box borderStyle="round" borderColor="yellow" paddingX={1} flexDirection="column">
+            <Text bold color="yellow">Confirm native compaction change</Text>
+            <Text>
+              Change <Text bold>{nativeCompaction?.enabled ? 'on' : 'off'}</Text>
+              {' → '}<Text bold>{pendingNativeCompaction ? 'on' : 'off'}</Text> and restart the daemon?
+            </Text>
+            <Text dimColor>Press Enter to confirm; any other key cancels.</Text>
+          </Box>
+        )}
         <Box borderStyle="round" paddingX={1} flexDirection="column">
           <Text bold>Secondwind tool-output optimization</Text>
           <Text>
@@ -900,6 +959,8 @@ function Dashboard(): React.ReactNode {
           ? ' · account action in progress…'
           : secondwindAction
             ? ' · saving Secondwind mode…'
+            : nativeCompactionAction
+              ? ' · saving native compaction…'
             : loading
               ? ' · refreshing…'
               : ''}

@@ -9,7 +9,7 @@
 //      spawns (agents view sessions, background agents). First arg is the
 //      claude binary to exec.
 //   2. Direct terminal use: `clodex-claude [args...]` — the claude binary is
-//      discovered the same way `clodex claude` discovers it
+//      discovered from the same runtime record used by plain Claude Code
 //      (CLODEX_CLAUDE_PATH override, config override, PATH, fallbacks).
 //
 // With a live proxy-mode server: HTTPS_PROXY/HTTP_PROXY + NODE_EXTRA_CA_CERTS

@@ -53,12 +53,22 @@ interface DaemonDiagnosticLogController {
   setMode(mode: DiagnosticLogMode): void;
 }
 
+export interface NativeCompactionSnapshot {
+  enabled: boolean;
+}
+
+interface DaemonNativeCompactionController {
+  snapshot(): NativeCompactionSnapshot;
+  setEnabled(enabled: boolean): boolean;
+}
+
 export interface DaemonControlApiOptions {
   socketPath: string;
   runtime: DaemonRuntimeState;
   collector: DaemonInferenceCollector;
   accounts: DaemonAccountController;
   secondwind: DaemonSecondwindController;
+  nativeCompaction: DaemonNativeCompactionController;
   diagnosticLogs: DaemonDiagnosticLogController;
   requestRestart: () => void;
   requestStop: () => void;
@@ -174,6 +184,32 @@ export async function dispatchDaemonControlRequest(
       }
       if (request.method === 'GET' && url.pathname === '/v1/secondwind') {
         return sendJson(200, options.secondwind.snapshot());
+      }
+      if (request.method === 'GET' && url.pathname === '/v1/native-compaction') {
+        return sendJson(200, options.nativeCompaction.snapshot());
+      }
+      if (request.method === 'POST' && url.pathname === '/v1/native-compaction') {
+        const body = await readJsonBody(request);
+        const enabled = body && isObject(body)
+          ? diagnosticRecord(body).enabled
+          : undefined;
+        if (!isBoolean(enabled)) {
+          return sendJson(400, { error: 'Native compaction enabled must be a boolean' });
+        }
+        const current = options.nativeCompaction.snapshot();
+        if (enabled !== current.enabled) {
+          const activeSessions = options.collector.sessions.snapshot()
+            .filter(session => session.activeRequests > 0).length;
+          const inFlightWebSockets = responsesWebSocketPoolSnapshot().inFlight;
+          if (activeSessions > 0 || inFlightWebSockets > 0) {
+            return sendJson(409, {
+              error: 'Native compaction cannot change while requests are in flight',
+            });
+          }
+        }
+        const changed = options.nativeCompaction.setEnabled(enabled);
+        if (changed) setTimeout(options.requestRestart, 25).unref();
+        return sendJson(changed ? 202 : 200, options.nativeCompaction.snapshot());
       }
       if (request.method === 'POST' && url.pathname === '/v1/secondwind/mode') {
         const body = await readJsonBody(request);

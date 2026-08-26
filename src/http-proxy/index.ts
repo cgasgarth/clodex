@@ -286,7 +286,7 @@ export async function runHttpProxyServerCommand(
   console.log(pc.dim('Press Ctrl+C to stop.'));
 
   // Advertise the standalone server for discovery (e.g. by generic wrappers).
-  // `clodex claude` uses the persistent daemon endpoint instead. --no-discovery
+  // Plain Claude Code uses the persistent daemon endpoint instead. --no-discovery
   // / CLODEX_NO_DISCOVERY opts this standalone server out.
   if (!noDiscovery) {
     registerServerRuntimeState({

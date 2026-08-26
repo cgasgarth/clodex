@@ -9,7 +9,6 @@ ${pc.bold('Usage:')}
   clodex
   clodex start
   clodex stop
-  clodex claude [options] [claude-flags]
   clodex daemon <install|run|status|restart|stop|uninstall>
   clodex accounts <list|add|select|remove|usage>
   clodex server [options]
@@ -27,7 +26,6 @@ ${pc.bold('Commands:')}
   (none)      Open the live daemon dashboard
   start       Start the persistent daemon without opening the dashboard
   stop        Stop the persistent daemon
-  claude      Launch Claude Code bridged to OpenAI models
   daemon      Manage the persistent per-user Clodex service
   accounts    Manage OpenAI and SuperGrok logins (manual switching only)
   server      Run a foreground gateway (endpoint or proxy mode)
@@ -35,70 +33,18 @@ ${pc.bold('Commands:')}
   favorites   Alias for models
   providers   Add or configure OpenAI and Grok providers
 
-${pc.bold('Claude transport:')}
-  clodex claude always uses the persistent daemon's single local endpoint.
+${pc.bold('Claude Code:')}
+  Configure ~/.claude/settings.json once, then start the unmodified Claude Code
+  binary with plain claude. A SessionStart hook can start Clodex when needed.
 
 ${pc.bold('Server bridge modes:')}
   clodex server supports endpoint and proxy modes for standalone gateway use.
 
 ${pc.bold('Examples:')}
-  clodex claude
+  clodex start
+  claude
   clodex models
-  clodex server
-  clodex claude -c
-  clodex claude -- --print "hello"`;
-}
-
-export function claudeHelpText(): string {
-  return `${pc.bold('clodex claude')} v${VERSION}
-Launch Claude Code bridged to OpenAI models.
-
-${pc.bold('Usage:')}
-  clodex claude [options] [claude-flags]
-  clodex claude --help
-  clodex claude --version
-
-${pc.bold('Options:')}
-  --endpoint   Accepted for compatibility; the daemon always uses its endpoint
-  --save-mode  Accepted with --endpoint for compatibility
-  --dry-run    Run the wizard but show a preview instead of launching Claude Code
-  --trace      Write debug logs to ~/.clodex/logs/ and show errors on exit
-  --fast       Request Fast processing for OpenAI OAuth models in this launch
-  --provider   Boot provider id (skip wizard when paired with --model or in print mode)
-  --model      Boot model id (skip wizard when paired with --provider or in print mode)
-  --help       Show this command help
-  --version    Show version
-
-${pc.bold('Providers:')}
-  openai         OpenAI API key (platform.openai.com)
-  openai-oauth   ChatGPT/Codex plan OAuth — sign in with clodex accounts add openai
-  xai-oauth      SuperGrok subscription OAuth — sign in with clodex accounts add xai
-
-${pc.bold('Model switching:')}
-  Run clodex models to save favorites (max ${MAX_MODEL_CATALOG}).
-  When favorites exist, the daemon endpoint exposes a multi-route catalog and
-  Claude Code /model lists your starting model plus favorites for live switching.
-  With no favorites, launch uses a single model.
-
-${pc.bold('Transport:')}
-  Every Claude launch uses the persistent daemon's single endpoint.
-  Standalone proxy mode remains available through clodex server --proxy.
-
-${pc.bold('Note:')}
-  Claude Code may save the launched model to ~/.claude/settings.json.
-  Bare claude later can still show that model — reset with claude --model sonnet.
-
-${pc.bold('Examples:')}
-  clodex claude
-  clodex claude -c
-  clodex claude --resume abc-123
-  clodex claude --dry-run -c
-  clodex claude --trace --resume abc-123
-  clodex claude --endpoint
-  clodex claude --endpoint --save-mode
-  clodex claude --provider openai-oauth --model gpt-5.6-sol
-  clodex claude -- --print "hello"
-  clodex claude -- --dangerously-skip-permissions`;
+  clodex server`;
 }
 
 export function serverHelpText(): string {
@@ -210,7 +156,7 @@ ${pc.bold('How it works:')}
 ${pc.bold('Examples:')}
   clodex favorites
   clodex models --alias sol=clodex:openai-oauth:gpt-5.6-sol
-  clodex claude    # switch menu active when favorites are set`;
+  claude           # use the native /model picker after settings setup`;
 }
 
 export function printHelp(text: string): void {

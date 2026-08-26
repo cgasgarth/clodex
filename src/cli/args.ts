@@ -4,9 +4,8 @@ import type { ParsedArgs } from '../types.js';
 import { restartDaemonIfRunning } from '../daemon/index.js';
 import { getConfigPath, getProvidersPath } from '../config/paths.js';
 import { resolveCliRuntimePaths } from './runtime-paths.js';
-
-const STARTER_CLAUDE_FLAGS = new Set(['--dry-run', '--trace', '--fast', '--endpoint', '--proxy', '--save-mode', '--help', '-h', '--version', '-v']);
-const CLODEX_LAUNCH_FLAGS = new Set(['--provider', '--model']);
+import { loadHttpProxyRoutes } from '../http-proxy/index.js';
+import { syncClaudeModelPickerSettings } from '../runtime/claude-settings.js';
 
 function readCatalogFile(path: string): string {
   try {
@@ -28,6 +27,17 @@ export async function runCatalogCommand(
   const result = await run();
   if (result !== 0 || daemonCatalogSnapshot() === before) return result;
   try {
+    const catalog = await loadHttpProxyRoutes();
+    syncClaudeModelPickerSettings(catalog.routes, catalog.aliases);
+  } catch (error) {
+    p.log.error(
+      `Saved the catalog, but Claude settings could not update: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+    return 1;
+  }
+  try {
     const restarted = await restartDaemonIfRunning(cliPath);
     if (restarted) p.log.info('Reloaded the persistent daemon catalog.');
   } catch (error) {
@@ -38,47 +48,6 @@ export async function runCatalogCommand(
     );
   }
   return result;
-}
-
-function parseClodexLaunchFlag(
-  arg: string,
-  rest: string[],
-  index: number,
-  parsed: ParsedArgs,
-): number | 'error' {
-  if (arg === '--provider' || arg === '--model') {
-    const value = rest[index + 1];
-    if (!value || value.startsWith('-')) {
-      parsed.error = `Missing value for ${arg}`;
-      return 'error';
-    }
-    if (arg === '--provider') parsed.launchProvider = value;
-    else parsed.launchModel = value;
-    return index + 1;
-  }
-  if (arg.startsWith('--provider=')) {
-    parsed.launchProvider = arg.slice('--provider='.length);
-    return index;
-  }
-  if (arg.startsWith('--model=')) {
-    parsed.launchModel = arg.slice('--model='.length);
-    return index;
-  }
-  return index;
-}
-
-function tryConsumeClodexLaunchFlag(
-  arg: string,
-  rest: string[],
-  index: number,
-  parsed: ParsedArgs,
-): { next: number } | { error: true } | null {
-  if (!CLODEX_LAUNCH_FLAGS.has(arg) && !arg.startsWith('--provider=') && !arg.startsWith('--model=')) {
-    return null;
-  }
-  const next = parseClodexLaunchFlag(arg, rest, index, parsed);
-  if (next === 'error') return { error: true };
-  return { next };
 }
 
 function consumeServerOptionValue(
@@ -127,7 +96,6 @@ function emptyParsed(command: ParsedArgs['command']): ParsedArgs {
     command,
     showHelp: false,
     showVersion: false,
-    dryRun: false,
     trace: false,
     claudeArgs: [],
   };
@@ -148,9 +116,7 @@ function consumeBridgeModeFlag(arg: string, parsed: ParsedArgs): boolean {
 /** --save-mode is only meaningful with an explicit mode supported by the command. */
 function validateSaveModeFlag(parsed: ParsedArgs): void {
   if (parsed.saveBridgeMode && !parsed.bridgeMode && !parsed.error) {
-    parsed.error = parsed.command === 'claude'
-      ? '--save-mode is retained for compatibility and must be combined with --endpoint'
-      : '--save-mode saves the server bridge mode — combine it with --endpoint or --proxy';
+    parsed.error = '--save-mode saves the server bridge mode — combine it with --endpoint or --proxy';
   }
 }
 
@@ -277,42 +243,8 @@ export function parseArgs(args: string[]): ParsedArgs {
     return parsed;
   }
 
-  if (first !== 'claude') {
-    return {
-      ...emptyParsed('root'),
-      error: first?.startsWith('-') ? `Unknown root option: ${first}` : `Unknown command: ${first}`,
-    };
-  }
-
-  const parsed = emptyParsed('claude');
-  for (let i = 0; i < rest.length; i += 1) {
-    const arg = rest[i]!;
-    if (arg === '--') {
-      parsed.claudeArgs.push(...rest.slice(i + 1));
-      break;
-    }
-
-    const consumed = tryConsumeClodexLaunchFlag(arg, rest, i, parsed);
-    if (consumed !== null) {
-      if ('error' in consumed) return parsed;
-      i = consumed.next;
-      continue;
-    }
-
-    if (!STARTER_CLAUDE_FLAGS.has(arg)) {
-      parsed.claudeArgs.push(arg);
-      continue;
-    }
-
-    if (arg === '--dry-run') parsed.dryRun = true;
-    if (arg === '--trace') parsed.trace = true;
-    if (arg === '--fast') parsed.fast = true;
-    consumeBridgeModeFlag(arg, parsed);
-    if (arg === '--save-mode') parsed.saveBridgeMode = true;
-    if (arg === '--help' || arg === '-h') parsed.showHelp = true;
-    if (arg === '--version' || arg === '-v') parsed.showVersion = true;
-  }
-
-  validateSaveModeFlag(parsed);
-  return parsed;
+  return {
+    ...emptyParsed('root'),
+    error: first?.startsWith('-') ? `Unknown root option: ${first}` : `Unknown command: ${first}`,
+  };
 }

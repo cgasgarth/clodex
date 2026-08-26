@@ -7,7 +7,6 @@ function isJsonObject(value: JsonValue): value is JsonObject {
   return isObject(value) && !Array.isArray(value);
 }
 
-const ENABLED_VALUES = new Set(['1', 'true', 'on', 'enabled']);
 const COMPACT_BODY_FIELDS = [
   'model',
   'input',
@@ -27,6 +26,16 @@ const OPENAI_COMPACTION_REARM_MIN_TOKENS = 16_000;
 // Native compaction on a large context can legitimately take several minutes.
 // Prefer preserving the thread over failing a healthy but slow compaction.
 export const RESPONSES_COMPACT_TIMEOUT_MS = NATIVE_COMPACTION_TIMEOUT_MS;
+
+let nativeCompactionEnabled = true;
+
+function isNativeCompactionEnabled(): boolean {
+  return nativeCompactionEnabled;
+}
+
+export function setNativeCompactionEnabled(enabled: boolean): void {
+  nativeCompactionEnabled = enabled;
+}
 
 export interface ResponsesCompactionUsage {
   inputTokens: number;
@@ -95,18 +104,14 @@ export class ResponsesCompactionError extends Error {
 }
 
 /**
- * Resolve the native-compaction threshold. Opted-in GPT models compact at
+ * Resolve the native-compaction threshold. Enabled GPT models compact at
  * 350K input tokens, capped at 90% of smaller advertised context windows.
- *
- * Native compaction is experimental and off by default. Set
- * CLODEX_OPENAI_COMPACTION=1 to opt in.
  */
 export function resolveOpenAiCompactionThreshold(
   contextWindow: number | undefined,
-  env: NodeJS.ProcessEnv = process.env,
+  enabled = isNativeCompactionEnabled(),
 ): number | undefined {
-  const configured = env.CLODEX_OPENAI_COMPACTION?.trim().toLowerCase();
-  if (!configured || !ENABLED_VALUES.has(configured)) return undefined;
+  if (!enabled) return undefined;
 
   const usableContextWindow = isNumber(contextWindow)
     && Number.isFinite(contextWindow)
@@ -116,16 +121,6 @@ export function resolveOpenAiCompactionThreshold(
   const modelSafeThreshold = usableContextWindow === undefined
     ? undefined
     : Math.floor(usableContextWindow * OPENAI_COMPACTION_MAX_CONTEXT_RATIO);
-  const explicit = env.CLODEX_OPENAI_COMPACT_THRESHOLD?.trim();
-  if (explicit) {
-    const parsed = Number(explicit);
-    if (Number.isSafeInteger(parsed) && parsed > 0) {
-      return modelSafeThreshold === undefined
-        ? parsed
-        : Math.min(parsed, modelSafeThreshold);
-    }
-  }
-
   return modelSafeThreshold === undefined
     ? undefined
     : Math.min(OPENAI_COMPACTION_DEFAULT_THRESHOLD, modelSafeThreshold);

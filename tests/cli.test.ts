@@ -1,10 +1,8 @@
 // tests/cli.test.ts
 import { describe, it, expect, vi, afterEach } from 'bun:test';
 import {
-  catalogUsesClodexCompaction,
   parseArgs,
   rootHelpText,
-  claudeHelpText,
   serverHelpText,
   modelsHelpText,
   main,
@@ -15,35 +13,12 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe('catalogUsesClodexCompaction', () => {
-  const nativeRoute = {
-    providerId: 'openai-oauth',
-    modelFormat: 'openai' as const,
-    contextWindow: 272_000,
-  };
-
-  it('requires every selectable model to use enabled native OpenAI compaction', () => {
-    const enabled = { CLODEX_OPENAI_COMPACTION: '1' };
-    expect(catalogUsesClodexCompaction([nativeRoute, nativeRoute], enabled)).toBe(true);
-    expect(catalogUsesClodexCompaction([
-      nativeRoute,
-      { providerId: 'anthropic', modelFormat: 'anthropic', contextWindow: 200_000 },
-    ], enabled)).toBe(false);
-    expect(catalogUsesClodexCompaction([
-      { providerId: 'xai-oauth', modelFormat: 'openai', contextWindow: 500_000 },
-    ], enabled)).toBe(false);
-    expect(catalogUsesClodexCompaction([nativeRoute], {})).toBe(false);
-    expect(catalogUsesClodexCompaction([], enabled)).toBe(false);
-  });
-});
-
 describe('parseArgs', () => {
   it('parses bare root command as the dashboard', () => {
     expect(parseArgs([])).toEqual({
       command: 'root',
       showHelp: false,
       showVersion: false,
-      dryRun: false,
       trace: false,
       claudeArgs: [],
     });
@@ -64,26 +39,7 @@ describe('parseArgs', () => {
     );
   });
 
-  it('parses claude command with no passthrough args', () => {
-    expect(parseArgs(['claude'])).toMatchObject({
-      command: 'claude',
-      showHelp: false,
-      dryRun: false,
-      trace: false,
-      claudeArgs: [],
-    });
-  });
-
-  it('parses bridge-mode flags on claude and server', () => {
-    expect(parseArgs(['claude', '--proxy', '-c'])).toMatchObject({
-      command: 'claude',
-      bridgeMode: 'proxy',
-      claudeArgs: ['-c'],
-    });
-    expect(parseArgs(['claude', '--endpoint'])).toMatchObject({
-      command: 'claude',
-      bridgeMode: 'endpoint',
-    });
+  it('parses bridge-mode flags on the standalone server', () => {
     expect(parseArgs(['server', '--proxy'])).toMatchObject({
       command: 'server',
       bridgeMode: 'proxy',
@@ -93,28 +49,16 @@ describe('parseArgs', () => {
       bridgeMode: 'endpoint',
     });
     // bare commands leave bridgeMode undefined so the saved default applies
-    expect(parseArgs(['claude']).bridgeMode).toBeUndefined();
     expect(parseArgs(['server']).bridgeMode).toBeUndefined();
   });
 
   it('rejects the removed --http-proxy alias', () => {
-    // claude passes unknown flags through to Claude Code rather than erroring
-    expect(parseArgs(['claude', '--http-proxy'])).toMatchObject({
-      command: 'claude',
-      claudeArgs: ['--http-proxy'],
-    });
-    expect(parseArgs(['claude', '--http-proxy']).bridgeMode).toBeUndefined();
     expect(parseArgs(['server', '--http-proxy'])).toMatchObject({
       error: 'Unknown server option: --http-proxy',
     });
   });
 
   it('parses --save-mode only together with a bridge-mode flag', () => {
-    expect(parseArgs(['claude', '--proxy', '--save-mode'])).toMatchObject({
-      command: 'claude',
-      bridgeMode: 'proxy',
-      saveBridgeMode: true,
-    });
     expect(parseArgs(['server', '--endpoint', '--save-mode'])).toMatchObject({
       command: 'server',
       bridgeMode: 'endpoint',
@@ -125,48 +69,7 @@ describe('parseArgs', () => {
       bridgeMode: 'proxy',
       saveBridgeMode: true,
     });
-    // --save-mode without a mode flag is an error with command-specific guidance
-    expect(parseArgs(['claude', '--save-mode']).error).toContain('--endpoint');
-    expect(parseArgs(['claude', '--save-mode']).error).not.toContain('--proxy');
     expect(parseArgs(['server', '--save-mode']).error).toContain('--endpoint or --proxy');
-  });
-
-  it('parses claude dry-run, trace, and passthrough flags', () => {
-    expect(parseArgs(['claude', '--dry-run', '-c'])).toMatchObject({
-      command: 'claude',
-      dryRun: true,
-      claudeArgs: ['-c'],
-    });
-    expect(parseArgs(['claude', '--trace', '--resume', 'abc-123'])).toMatchObject({
-      command: 'claude',
-      trace: true,
-      claudeArgs: ['--resume', 'abc-123'],
-    });
-    expect(parseArgs(['claude', '--', '--print', 'hello'])).toMatchObject({
-      command: 'claude',
-      claudeArgs: ['--print', 'hello'],
-    });
-    expect(parseArgs(['claude', '--fast', '-c'])).toMatchObject({
-      command: 'claude',
-      fast: true,
-      claudeArgs: ['-c'],
-    });
-  });
-
-  it('parses claude boot provider/model flags', () => {
-    expect(parseArgs(['claude', '--provider', 'openai-oauth', '--model', 'gpt-5.6-sol'])).toMatchObject({
-      command: 'claude',
-      launchProvider: 'openai-oauth',
-      launchModel: 'gpt-5.6-sol',
-      claudeArgs: [],
-    });
-    expect(parseArgs(['claude', '--provider=openai', '--model=gpt-5.5'])).toMatchObject({
-      launchProvider: 'openai',
-      launchModel: 'gpt-5.5',
-    });
-    expect(parseArgs(['claude', '--provider'])).toMatchObject({
-      error: 'Missing value for --provider',
-    });
   });
 
   it('parses server options', () => {
@@ -200,7 +103,7 @@ describe('parseArgs', () => {
   });
 
   it('rejects stripped commands', () => {
-    for (const cmd of ['ui', 'gemini', 'codex', 'codex-app', 'chatgpt', 'agy', 'antigravity', 'antigravity-ide', 'claude-app']) {
+    for (const cmd of ['claude', 'ui', 'gemini', 'codex', 'codex-app', 'chatgpt', 'agy', 'antigravity', 'antigravity-ide', 'claude-app']) {
       expect(parseArgs([cmd]).error, cmd).toBe(`Unknown command: ${cmd}`);
     }
   });
@@ -211,7 +114,7 @@ describe('parseArgs', () => {
 });
 
 describe('help text', () => {
-  const helps = [rootHelpText(), claudeHelpText(), serverHelpText(), modelsHelpText()];
+  const helps = [rootHelpText(), serverHelpText(), modelsHelpText()];
 
   it('brands every help screen as clodex', () => {
     for (const help of helps) {
@@ -234,27 +137,18 @@ describe('help text', () => {
     }
   });
 
-  it('documents the single Claude endpoint and standalone server bridge modes', () => {
+  it('documents plain Claude startup and standalone server bridge modes', () => {
     const root = rootHelpText();
-    expect(root).toContain('clodex claude');
+    expect(root).toContain('plain claude');
+    expect(root).not.toContain('clodex claude');
     expect(root).toContain('clodex server');
     expect(root).toContain('clodex models');
     expect(root).toContain('clodex providers');
-    expect(root).toContain('single local endpoint');
     expect(root).toContain('standalone gateway');
     expect(serverHelpText()).toContain('--endpoint');
     expect(serverHelpText()).toContain('--proxy');
-    expect(claudeHelpText()).toContain('--save-mode');
-    expect(claudeHelpText()).toContain('--fast');
-    expect(claudeHelpText()).not.toContain('clodex claude --proxy');
     expect(serverHelpText()).toContain('--save-mode');
-    expect(claudeHelpText()).toContain('single endpoint');
     expect(serverHelpText()).toContain('--no-discovery');
-  });
-
-  it('documents SuperGrok as a Claude launch provider', () => {
-    expect(claudeHelpText()).toContain('xai-oauth');
-    expect(claudeHelpText()).toContain('clodex accounts add xai');
   });
 
   it('no longer mentions the removed --http-proxy alias', () => {
