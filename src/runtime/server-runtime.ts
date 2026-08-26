@@ -12,7 +12,7 @@
 // prune dead-pid records while they hold the write lock.
 //
 // Concurrency: read-modify-write cycles are serialized by a short-lived pid
-// lock (~/.clodex/server-runtime.lock — same pattern as the patcher's
+// lock (~/.clodex/server-runtime.lock — same exclusive-create pattern as the
 // patch.lock: O_EXCL create, pid + staleness, ESRCH liveness) and the file is
 // replaced via write-temp-then-rename so a reader never sees a torn write. A
 // crashed lock holder cannot deadlock registration: the lock goes stale after
@@ -133,7 +133,7 @@ export function isPidAlive(
   }
 }
 
-// ── Write lock (pid + staleness, patcher pattern) ───────────────────────────
+// ── Write lock (pid + staleness) ────────────────────────────────────────────
 
 const RUNTIME_LOCK_STALE_MS = 10_000;
 const RUNTIME_LOCK_WAIT_MS = 500;

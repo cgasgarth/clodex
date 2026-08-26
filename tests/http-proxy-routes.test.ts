@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'bun:test';
 import { buildHttpProxyRoutes, httpProxyModelId } from '../src/http-proxy/routes.js';
-import { buildPatchModelConfig } from '../src/patcher/index.js';
 import type { LocalProvider } from '../src/types.js';
 
 const providers: LocalProvider[] = [
@@ -142,19 +141,4 @@ describe('HTTP proxy routes', () => {
     expect(result.unavailableAliases).toEqual([]);
   });
 
-  it('uses the same canonical alias for patch identity and proxy routing', () => {
-    const favorite = { providerId: 'groq', modelId: 'llama-3.3-70b' };
-    const aliases = [{ name: 'LLaMa', ...favorite }];
-    const routes = buildHttpProxyRoutes(providers, [favorite], aliases);
-    const patch = buildPatchModelConfig(
-      [favorite],
-      aliases,
-      () => ({ contextWindow: 1_000_000, displayName: 'Llama 3.3 70B' }),
-    );
-
-    expect(routes.aliases[0]?.name).toBe(
-      patch.config['clodex:groq:llama-3.3-70b']?.alias,
-    );
-    expect(routes.aliases[0]?.sourceNames).toEqual(['LLaMa']);
-  });
 });

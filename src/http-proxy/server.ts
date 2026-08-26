@@ -1172,7 +1172,7 @@ export async function startHttpProxy(options: HttpProxyOptions): Promise<HttpPro
         // for this local hop, but their JSON model value is not rewritten.
         // Claude Code resolves context windows from the response model field, so
         // substituting the canonical route id here breaks its window lookup for
-        // patched/alias model ids (wrong auto-compact threshold → agent death).
+        // alias model ids (wrong auto-compact threshold → agent death).
         await forwardToAdapter(
           req,
           res,

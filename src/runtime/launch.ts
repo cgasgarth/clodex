@@ -43,15 +43,9 @@ const FALLBACK_CLAUDE_VERSION = '2.1.183';
 const VERSION_PROBE_TIMEOUT_MS = 30_000;
 
 /**
- * Probe `--version` of ONE SPECIFIC claude binary, returning null when it cannot
- * be executed or prints nothing version-shaped.
- *
- * Callers that key destructive state on the answer — the patcher names its
- * pristine backups after this version and restores them over the live install —
- * MUST use this and fail loudly on null. A guessed version tags a backup with
- * bytes it does not contain, and restoring it downgrades the user's Claude Code.
+ * Probe one Claude binary. Return null when it cannot run or has no version.
  */
-export function getClaudeVersionForBinary(binaryPath: string): string | null {
+function getClaudeVersionForBinary(binaryPath: string): string | null {
   try {
     // POSIX: exec the file directly so a path containing spaces still works.
     // Windows: `claude` is often a .cmd shim, which needs a shell — keep the

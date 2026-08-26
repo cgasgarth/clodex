@@ -53,12 +53,11 @@ Clodex the canonical state needed for durable checkpoint recovery.
 
 ## Clodex-owned context lifecycle
 
-Clodex-launched OpenAI OAuth children set `CLODEX_NATIVE_CONTEXT_OWNER=1`.
-The patched Claude binary then leaves automatic/precomputed compaction, the
-local blocking guard, and Claude's local context-window override disabled for
-that child. Manual `/compact` remains available. Native OpenAI compaction at
-the configured threshold owns the model-facing chain, with the advertised
-model window retained as the hard provider ceiling and recovery boundary.
+Clodex-launched OpenAI OAuth children set Claude Code's supported
+`DISABLE_AUTO_COMPACT=1` switch. Manual `/compact` remains available. Native
+OpenAI compaction at the configured threshold owns the model-facing chain,
+with the advertised model window retained as the hard provider ceiling and
+recovery boundary.
 
 Automatic native compaction does not rewrite Claude's local transcript. Manual
 `/compact` does: after OpenAI returns canonical compacted state, Clodex gives

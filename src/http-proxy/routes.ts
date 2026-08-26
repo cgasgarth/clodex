@@ -19,10 +19,10 @@ export function httpProxyModelId(providerId: string, modelId: string): string {
 /**
  * Canonical human-readable model label — `GPT-5.6 Sol (OpenAI (ChatGPT))`.
  * This is what `clodex server` prints at startup and what `clodex models --list`
- * shows; `clodex patch` bakes the same string into the /model picker so every
+ * shows; the native Claude model picker uses the same string so every
  * surface names a model identically.
  */
-export function httpProxyDisplayName(
+function httpProxyDisplayName(
   model: Pick<LocalProviderModel, 'id' | 'name'>,
   providerName: string,
 ): string {

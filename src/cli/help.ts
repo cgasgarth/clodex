@@ -13,7 +13,6 @@ ${pc.bold('Usage:')}
   clodex daemon <install|run|status|restart|stop|uninstall>
   clodex accounts <list|add|select|remove|usage>
   clodex server [options]
-  clodex patch [--restore]
   clodex models
   clodex favorites
   clodex providers
@@ -32,7 +31,6 @@ ${pc.bold('Commands:')}
   daemon      Manage the persistent per-user Clodex service
   accounts    Manage OpenAI and SuperGrok logins (manual switching only)
   server      Run a foreground gateway (endpoint or proxy mode)
-  patch       Patch the Claude Code binary so clodex models are first-class
   models      Manage favorite models and aliases (max ${MAX_MODEL_CATALOG})
   favorites   Alias for models
   providers   Add or configure OpenAI and Grok providers
@@ -46,7 +44,6 @@ ${pc.bold('Server bridge modes:')}
 ${pc.bold('Examples:')}
   clodex claude
   clodex models
-  clodex patch
   clodex server
   clodex claude -c
   clodex claude -- --print "hello"`;
@@ -207,37 +204,13 @@ ${pc.bold('Behavior:')}
 ${pc.bold('How it works:')}
   claude and server use the global favorites list.
   Favorites appear in the /model switch menu (endpoint mode) and are routable
-  by name in proxy mode. clodex patch bakes favorites + aliases into the
-  Claude Code binary so they pass model validation and report real context.
+  by name in proxy mode. Claude Code receives the same favorites and aliases
+  through its native model picker settings.
 
 ${pc.bold('Examples:')}
   clodex favorites
   clodex models --alias sol=clodex:openai-oauth:gpt-5.6-sol
   clodex claude    # switch menu active when favorites are set`;
-}
-
-export function patchHelpText(): string {
-  return `${pc.bold('clodex patch')} v${VERSION}
-Patch the installed Claude Code binary so clodex favorites and aliases are
-first-class: accepted by the Agent tool, listed in /model, resolved to their
-real ids, and reporting the correct context window.
-
-${pc.bold('Usage:')}
-  clodex patch
-  clodex patch --restore
-  clodex patch --help
-
-${pc.bold('Options:')}
-  --restore    Restore the pristine (unpatched) Claude Code binary
-  --trace      Show per-patch-site results (OK/SKIP/FAIL)
-
-${pc.bold('Behavior:')}
-  The patch map is built automatically from your clodex favorites and aliases
-  (clodex models); context windows come from provider metadata. A pristine
-  per-version backup is kept, and a manifest (~/.clodex/patch-state.json)
-  makes re-runs no-ops until your config or Claude Code version changes —
-  then the binary is restored first and re-patched fresh.
-  Run clodex patch again after every claude update.`;
 }
 
 export function printHelp(text: string): void {

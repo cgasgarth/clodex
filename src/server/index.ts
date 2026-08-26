@@ -445,8 +445,8 @@ export async function runServerCommand(options: ServerCommandOptions = {}): Prom
 
   const gateway = runConfig.maskGatewayIds ? { maskGatewayIds: true as const } : undefined;
   // Saved short aliases (clodex models --alias) are accepted as request model
-  // ids — the same alias table the proxy-mode MITM resolves — so a patched
-  // Claude Code or a direct API client can send e.g. "luna". They are never
+  // ids — the same alias table the proxy-mode MITM resolves — so Claude Code
+  // or a direct API client can send e.g. "luna". They are never
   // advertised in /models listings; see createGatewayModelCatalog.
   const normalizedAliases = normalizeModelAliases(loadPreferences().modelAliases);
   const baseCatalog = createGatewayModelCatalog(models, gateway);

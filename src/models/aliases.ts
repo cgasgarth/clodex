@@ -4,7 +4,7 @@ import { stripOneMContextSuffix } from './context-model-id.js';
 import type { JsonValue } from '../oauth/responses-websocket/types.js';
 
 const MODEL_ALIAS_PATTERN = /^[a-z0-9][a-z0-9._-]{0,63}$/;
-// Derived from Claude Code v2.1.245's built-in model resolver and sentinels.
+// Claude Code built-in model names cannot be reassigned to Clodex routes.
 const RESERVED_MODEL_ALIASES = new Set([
   'sonnet',
   'opus',
@@ -56,7 +56,7 @@ interface NormalizedModelAliasSource {
   sources: StoredModelAlias[];
 }
 
-export interface ModelAliasRejection {
+interface ModelAliasRejection {
   alias: StoredModelAlias;
   reason: ModelAliasRejectionReason;
 }
@@ -65,7 +65,7 @@ export function canonicalModelAliasName(name: string): string {
   return name.trim().toLowerCase();
 }
 
-export function isReservedModelAlias(name: string): boolean {
+function isReservedModelAlias(name: string): boolean {
   return RESERVED_MODEL_ALIASES.has(
     stripOneMContextSuffix(canonicalModelAliasName(name)),
   );
@@ -117,7 +117,7 @@ export function describeModelAliasRejection(reason: ModelAliasRejectionReason): 
 }
 
 /**
- * Produce the lowercase alias view consumed by patching and routing.
+ * Produce the lowercase alias view consumed by routing and native picker settings.
  *
  * Equivalent duplicates collapse to their first occurrence. If one canonical
  * name points at multiple targets, every occurrence is rejected so array order

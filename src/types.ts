@@ -11,8 +11,7 @@ type StarterCommand =
   | 'daemon'
   | 'accounts'
   | 'models'
-  | 'providers'
-  | 'patch';
+  | 'providers';
 
 export interface ModelCost {
   input: number;
@@ -152,8 +151,6 @@ export interface ParsedArgs {
   favoritesAlias?: string;
   /** Remove a saved short proxy-mode model alias. */
   favoritesUnalias?: string;
-  /** clodex patch: restore the pristine Claude Code binary. */
-  patchRestore?: boolean;
   error?: string;
 }
 

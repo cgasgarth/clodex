@@ -45,8 +45,6 @@ describe('computeWrapperEnv', () => {
     expect(env['PATH']).toBe('/usr/bin');
     expect(env['CLAUDE_STREAM_IDLE_TIMEOUT_MS']).toBe(String(CLAUDE_STREAM_IDLE_TIMEOUT_MS));
     expect(env['CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK']).toBe('1');
-    expect(env['CLODEX_CLAUDE_FAST_MODE']).toBe('1');
-    expect(env['CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK']).toBe('1');
   });
 
   it('proxy-mode server removes Anthropic bypasses while preserving unrelated hosts', () => {
@@ -98,8 +96,6 @@ describe('computeWrapperEnv', () => {
     expect(env['ANTHROPIC_API_KEY']).toBe(LOCAL_GATEWAY_API_KEY);
     expect(env['CLAUDE_STREAM_IDLE_TIMEOUT_MS']).toBe(String(CLAUDE_STREAM_IDLE_TIMEOUT_MS));
     expect(env['CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK']).toBe('1');
-    expect(env['CLODEX_CLAUDE_FAST_MODE']).toBe('1');
-    expect(env['CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK']).toBe('1');
     expect(LOCAL_GATEWAY_API_KEY.length).toBeGreaterThan(0);
     for (const name of ['HTTPS_PROXY', 'HTTP_PROXY', 'https_proxy', 'http_proxy']) {
       expect(env[name]).toBeUndefined();

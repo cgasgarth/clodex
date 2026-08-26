@@ -45,34 +45,36 @@ function harness(initial: FavoriteModel[]) {
     ],
   };
   const replaceCatalog = vi.fn();
-  const applyPatch = vi.fn(async () => 0);
+  const syncSettings = vi.fn();
+  const loadRoutes = vi.fn(async (): Promise<LoadedHttpProxyRoutes> => {
+    const favorites = preferences.favoriteModels ?? [];
+    const routes = favorites
+      .filter(item => item.providerId === 'openai-oauth')
+      .map(item => route(item.modelId));
+    return {
+      routes,
+      aliases: [],
+      unavailable: [],
+      unsupported: [],
+      unavailableAliases: [],
+      favoriteCount: favorites.length,
+    };
+  });
   const dependencies: ModelServiceDependencies = {
     loadPreferences: () => structuredClone(preferences),
     saveFavorites: favoriteModels => {
       preferences = { ...preferences, favoriteModels };
     },
     loadModels: () => modelSeeds,
-    loadRoutes: async (): Promise<LoadedHttpProxyRoutes> => {
-      const favorites = preferences.favoriteModels ?? [];
-      const routes = favorites
-        .filter(item => item.providerId === 'openai-oauth')
-        .map(item => route(item.modelId));
-      return {
-        routes,
-        aliases: [],
-        unavailable: [],
-        unsupported: [],
-        unavailableAliases: [],
-        favoriteCount: favorites.length,
-      };
-    },
+    loadRoutes,
     liveAliases: () => [],
-    applyPatch,
+    syncSettings,
     replaceCatalog,
   };
   return {
     service: new DaemonClaudeModelService(dependencies),
-    applyPatch,
+    loadRoutes,
+    syncSettings,
     replaceCatalog,
     preferences: () => preferences,
   };
@@ -98,8 +100,8 @@ describe('daemon Claude model service', () => {
     ]);
   });
 
-  it('patches Claude and atomically replaces the live catalog after enabling a model', async () => {
-    const { service, applyPatch, replaceCatalog, preferences } = harness([
+  it('atomically replaces the live catalog after enabling a model', async () => {
+    const { service, replaceCatalog, syncSettings, preferences } = harness([
       { providerId: 'openai-oauth', modelId: 'gpt-5.6-sol' },
     ]);
 
@@ -110,7 +112,7 @@ describe('daemon Claude model service', () => {
       providerId: 'openai-oauth',
       modelId: 'gpt-5.6-luna',
     });
-    expect(applyPatch).toHaveBeenCalledOnce();
+    expect(syncSettings).toHaveBeenCalledOnce();
     expect(replaceCatalog).toHaveBeenCalledWith(
       expect.arrayContaining([
         expect.objectContaining({ realModelId: 'gpt-5.6-sol' }),
@@ -121,14 +123,14 @@ describe('daemon Claude model service', () => {
     );
   });
 
-  it('rolls configuration back and leaves the live catalog alone when patching fails', async () => {
+  it('rolls configuration back and leaves the live catalog alone when loading fails', async () => {
     const state = harness([
       { providerId: 'openai-oauth', modelId: 'gpt-5.6-sol' },
     ]);
-    state.applyPatch.mockResolvedValueOnce(1);
+    state.loadRoutes.mockRejectedValueOnce(new Error('catalog load failed'));
 
     await expect(state.service.setEnabled('gpt-5.6-luna', true))
-      .rejects.toThrow('Claude model list patch failed');
+      .rejects.toThrow('catalog load failed');
 
     expect(state.preferences().favoriteModels).toEqual([
       { providerId: 'openai-oauth', modelId: 'gpt-5.6-sol' },
@@ -147,6 +149,6 @@ describe('daemon Claude model service', () => {
     expect(state.preferences().favoriteModels).toEqual([
       { providerId: 'openai-oauth', modelId: 'gpt-5.6-sol' },
     ]);
-    expect(state.applyPatch).not.toHaveBeenCalled();
+    expect(state.loadRoutes).toHaveBeenCalledOnce();
   });
 });
