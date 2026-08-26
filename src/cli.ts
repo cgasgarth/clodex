@@ -6,19 +6,18 @@ import { resolveBridgeMode } from './config/config.js';
 import { VERSION } from './constants.js';
 import { runProvidersCommand, providersHelpText } from './cli/providers-command.js';
 import { refreshModelsDevCacheAsync } from './registry/models-dev.js';
-import { runPatchCommand } from './patcher/index.js';
 import { installOutboundProxyDispatcher } from './transport/outbound-proxy.js';
 import { daemonHelpText, ensureDaemonRunning, runDaemonCommand, stopDaemon } from './daemon/index.js';
 import { accountsHelpText, runAccountsCommand } from './daemon/account-command.js';
 import { parseArgs, runCatalogCommand } from './cli/args.js';
-import { claudeHelpText, modelsHelpText, patchHelpText, printHelp, rootHelpText, serverHelpText } from './cli/help.js';
+import { claudeHelpText, modelsHelpText, printHelp, rootHelpText, serverHelpText } from './cli/help.js';
 import { runModelsCommand } from './cli/models-command.js';
 import { runClaudeCommand } from './cli/claude-command.js';
 import { resolveCliRuntimePaths } from './cli/runtime-paths.js';
 
 export { parseArgs } from './cli/args.js';
-export { claudeHelpText, modelsHelpText, patchHelpText, rootHelpText, serverHelpText } from './cli/help.js';
-export { catalogUsesNativeContextOwner, reportInactiveCatalogAliases } from './cli/catalog-runtime.js';
+export { claudeHelpText, modelsHelpText, rootHelpText, serverHelpText } from './cli/help.js';
+export { catalogUsesClodexCompaction, reportInactiveCatalogAliases } from './cli/catalog-runtime.js';
 export { runModelsCommand } from './cli/models-command.js';
 export { runClaudeCommand } from './cli/claude-command.js';
 
@@ -170,18 +169,6 @@ export async function main(args: string[] = process.argv.slice(2)): Promise<numb
       process.env.CLODEX_TRACE = '1';
     }
     return runCatalogCommand(() => runProvidersCommand(parsed.claudeArgs), runtimePaths.cliPath);
-  }
-
-  if (parsed.command === 'patch') {
-    if (parsed.showVersion) {
-      console.log(VERSION);
-      return 0;
-    }
-    if (parsed.showHelp) {
-      printHelp(patchHelpText());
-      return 0;
-    }
-    return runPatchCommand({ restore: parsed.patchRestore, trace: parsed.trace });
   }
 
   if (parsed.showVersion) {

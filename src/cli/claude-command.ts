@@ -34,14 +34,14 @@ import {
   wantsCleanAgentStdout,
 } from '../runtime/launch-target.js';
 import { loadHttpProxyRoutes } from '../http-proxy/index.js';
-import { runLaunchPatchCheck } from '../patcher/index.js';
 import { ensureDaemonRunning } from '../daemon/index.js';
 import { daemonControlRequest } from '../daemon/control-client.js';
 import { LAUNCH_TICKET_HEADER, setAnthropicCustomHeader } from '../runtime/wrapper-env.js';
 import { getOrCreateProxyToken } from '../proxy/token.js';
-import { catalogUsesNativeContextOwner, launchClaudeViaCatalog } from './catalog-runtime.js';
+import { catalogUsesClodexCompaction, launchClaudeViaCatalog } from './catalog-runtime.js';
 import { resolveCliRuntimePaths } from './runtime-paths.js';
 import type { CliRuntimePaths } from './runtime-paths.js';
+import { syncClaudeModelPickerSettings } from '../runtime/claude-settings.js';
 
 interface LaunchAttachRequest {
   accountId?: string;
@@ -122,6 +122,12 @@ async function runClaudeDaemonEndpointCommand(
   }
 
   const loaded = await loadHttpProxyRoutes();
+  try {
+    syncClaudeModelPickerSettings(loaded.routes, loaded.aliases);
+  } catch (error) {
+    p.log.error(error instanceof Error ? error.message : String(error));
+    return 1;
+  }
   const requestedModel = requestedClaudeModel(claudeArgs);
   const defaultAlias = loaded.aliases[0]?.name ?? loaded.routes[0]?.aliasId;
   const launchModel = requestedModel ?? defaultAlias;
@@ -144,9 +150,8 @@ async function runClaudeDaemonEndpointCommand(
     runtime.port,
     route?.contextWindow,
     true,
-    catalogUsesNativeContextOwner(loaded.routes),
+    catalogUsesClodexCompaction(loaded.routes),
   );
-  if (parsed.fast) childEnv['CLODEX_CLAUDE_FAST_DEFAULT'] = '1';
   if (launchTicket) {
     childEnv['CLODEX_LAUNCH_TICKET'] = launchTicket;
     setAnthropicCustomHeader(childEnv, LAUNCH_TICKET_HEADER, launchTicket);
@@ -162,7 +167,11 @@ async function runClaudeDaemonEndpointCommand(
     ? prepareClaudeTraceLog(getSessionLogPath('claude-debug'))
     : undefined;
   const traceArgs = debugLogPath ? ['--debug-file', debugLogPath] : [];
-  const exitCode = await launchClaude(childEnv, launchModel, [...traceArgs, ...claudeArgs]);
+  const exitCode = await launchClaude(
+    childEnv,
+    launchModel,
+    [...traceArgs, ...claudeArgs],
+  );
   if (debugLogPath) printTraceLog(debugLogPath);
   return exitCode;
 }
@@ -192,9 +201,6 @@ export async function runClaudeCommand(
   if (parsed.bridgeMode === 'endpoint' && parsed.saveBridgeMode && !dryRun) {
     savePreferences({ claudeBridgeMode: 'endpoint' });
   }
-
-  // Launch-time patch check: prompt on TTY, notice otherwise. Never blocks the launch.
-  await runLaunchPatchCheck({ agentStdout, dryRun });
 
   if (
     !parsed.dryRun
@@ -521,11 +527,20 @@ export async function runClaudeCommand(
   if (selectedModel.modelFormat === 'anthropic' && !usesAnthropicProxy) {
     childEnv['CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS'] = '1';
   }
-  if (parsed.fast) childEnv['CLODEX_CLAUDE_FAST_DEFAULT'] = '1';
 
   const debugLogPath = prepareClaudeTraceLog();
   const traceArgs = trace ? ['--debug-file', debugLogPath] : [];
   if (trace) p.log.info(`Debug log: ${debugLogPath}`);
+  try {
+    syncClaudeModelPickerSettings([{
+      aliasId: selectedModel.id,
+      displayName: `${selectedModel.name || selectedModel.id} (${activeProvider.name})`,
+    }], []);
+  } catch (error) {
+    p.log.error(error instanceof Error ? error.message : String(error));
+    await proxyHandle?.close();
+    return 1;
+  }
 
   const exitCode = await launchClaude(
     childEnv,

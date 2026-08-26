@@ -1,13 +1,12 @@
 // tests/cli.test.ts
 import { describe, it, expect, vi, afterEach } from 'bun:test';
 import {
-  catalogUsesNativeContextOwner,
+  catalogUsesClodexCompaction,
   parseArgs,
   rootHelpText,
   claudeHelpText,
   serverHelpText,
   modelsHelpText,
-  patchHelpText,
   main,
 } from '../src/cli.js';
 import { VERSION } from '../src/constants.js';
@@ -16,7 +15,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe('catalogUsesNativeContextOwner', () => {
+describe('catalogUsesClodexCompaction', () => {
   const nativeRoute = {
     providerId: 'openai-oauth',
     modelFormat: 'openai' as const,
@@ -25,16 +24,16 @@ describe('catalogUsesNativeContextOwner', () => {
 
   it('requires every selectable model to use enabled native OpenAI compaction', () => {
     const enabled = { CLODEX_OPENAI_COMPACTION: '1' };
-    expect(catalogUsesNativeContextOwner([nativeRoute, nativeRoute], enabled)).toBe(true);
-    expect(catalogUsesNativeContextOwner([
+    expect(catalogUsesClodexCompaction([nativeRoute, nativeRoute], enabled)).toBe(true);
+    expect(catalogUsesClodexCompaction([
       nativeRoute,
       { providerId: 'anthropic', modelFormat: 'anthropic', contextWindow: 200_000 },
     ], enabled)).toBe(false);
-    expect(catalogUsesNativeContextOwner([
+    expect(catalogUsesClodexCompaction([
       { providerId: 'xai-oauth', modelFormat: 'openai', contextWindow: 500_000 },
     ], enabled)).toBe(false);
-    expect(catalogUsesNativeContextOwner([nativeRoute], {})).toBe(false);
-    expect(catalogUsesNativeContextOwner([], enabled)).toBe(false);
+    expect(catalogUsesClodexCompaction([nativeRoute], {})).toBe(false);
+    expect(catalogUsesClodexCompaction([], enabled)).toBe(false);
   });
 });
 
@@ -200,13 +199,6 @@ describe('parseArgs', () => {
     expect(parseArgs(['models', '--agy'])).toMatchObject({ error: 'Unknown models option: --agy' });
   });
 
-  it('parses the patch command', () => {
-    expect(parseArgs(['patch'])).toMatchObject({ command: 'patch', showHelp: false });
-    expect(parseArgs(['patch', '--restore'])).toMatchObject({ command: 'patch', patchRestore: true });
-    expect(parseArgs(['patch', '--help'])).toMatchObject({ command: 'patch', showHelp: true });
-    expect(parseArgs(['patch', '--bogus'])).toMatchObject({ error: 'Unknown patch option: --bogus' });
-  });
-
   it('rejects stripped commands', () => {
     for (const cmd of ['ui', 'gemini', 'codex', 'codex-app', 'chatgpt', 'agy', 'antigravity', 'antigravity-ide', 'claude-app']) {
       expect(parseArgs([cmd]).error, cmd).toBe(`Unknown command: ${cmd}`);
@@ -219,7 +211,7 @@ describe('parseArgs', () => {
 });
 
 describe('help text', () => {
-  const helps = [rootHelpText(), claudeHelpText(), serverHelpText(), modelsHelpText(), patchHelpText()];
+  const helps = [rootHelpText(), claudeHelpText(), serverHelpText(), modelsHelpText()];
 
   it('brands every help screen as clodex', () => {
     for (const help of helps) {
@@ -246,7 +238,6 @@ describe('help text', () => {
     const root = rootHelpText();
     expect(root).toContain('clodex claude');
     expect(root).toContain('clodex server');
-    expect(root).toContain('clodex patch');
     expect(root).toContain('clodex models');
     expect(root).toContain('clodex providers');
     expect(root).toContain('single local endpoint');
@@ -259,7 +250,6 @@ describe('help text', () => {
     expect(serverHelpText()).toContain('--save-mode');
     expect(claudeHelpText()).toContain('single endpoint');
     expect(serverHelpText()).toContain('--no-discovery');
-    expect(patchHelpText()).toContain('--restore');
   });
 
   it('documents SuperGrok as a Claude launch provider', () => {
@@ -291,10 +281,4 @@ describe('main dispatch', () => {
     expect(log.mock.calls.some(call => String(call[0]).includes('clodex'))).toBe(true);
   });
 
-  it('prints patch help', async () => {
-    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
-    const code = await main(['patch', '--help']);
-    expect(code).toBe(0);
-    expect(log.mock.calls.some(call => String(call[0]).includes('clodex patch'))).toBe(true);
-  });
 });

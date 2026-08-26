@@ -4,7 +4,6 @@ import {
   createLanguageModel,
   deepMergeProviderOptions,
   effortProviderOptions,
-  getPatchReasoningCapabilities,
   getReasoningCapabilities,
   isSdkMigratedNpm,
   maxToolsForNpm,
@@ -174,59 +173,6 @@ describe('getReasoningCapabilities', () => {
     const caps = getReasoningCapabilities('@ai-sdk/openai', 'gpt-5.6-sol');
     expect(caps.levels).toEqual(['none', 'low', 'medium', 'high', 'xhigh', 'max']);
     expect(caps.defaultLevel).toBe('medium');
-  });
-
-  it('retains every GPT-5.6 effort level in patched-client metadata', () => {
-    const caps = getPatchReasoningCapabilities('@ai-sdk/openai', 'gpt-5.6-sol');
-    expect(caps.levels).toEqual(['none', 'low', 'medium', 'high', 'xhigh', 'max']);
-    expect(caps.defaultLevel).toBe('medium');
-  });
-
-  it('does not advertise GPT-5.5 levels that change on the patched-client wire', () => {
-    const caps = getPatchReasoningCapabilities('@ai-sdk/openai', 'gpt-5.5');
-    expect(caps.levels).toEqual(['low', 'medium', 'high']);
-    expect(caps.defaultLevel).toBe('medium');
-  });
-
-  it.each(['gpt-5', 'o1'])(
-    'does not advertise effort when %s emits no provider option',
-    modelId => {
-      const caps = getPatchReasoningCapabilities('@ai-sdk/openai', modelId, {
-        reasoning: true,
-      });
-      expect(caps.levels).toEqual([]);
-    },
-  );
-
-  it('does not advertise a Kimi level that duplicates another wire option', () => {
-    const caps = getPatchReasoningCapabilities(
-      '@ai-sdk/openai-compatible',
-      'kimi-k2-thinking',
-    );
-    expect(caps.levels).toEqual(['low', 'medium', 'high']);
-    expect(caps.defaultLevel).toBe('high');
-  });
-
-  it('does not advertise effort when model metadata explicitly disables reasoning', () => {
-    const caps = getPatchReasoningCapabilities(
-      '@ai-sdk/openai-compatible',
-      'kimi-k2',
-      { reasoning: false },
-    );
-    expect(caps.levels).toEqual([]);
-    expect(caps.mode).toBe('none');
-  });
-
-  it('honors an explicit effort parameter even when broad reasoning metadata is false', () => {
-    const caps = getPatchReasoningCapabilities(
-      '@ai-sdk/openai-compatible',
-      'custom-model',
-      {
-        reasoning: false,
-        supportedParameters: ['reasoning_effort'],
-      },
-    );
-    expect(caps.levels).toEqual(['low', 'medium', 'high']);
   });
 
   it('returns the documented SuperGrok effort levels for Grok 4.6', () => {

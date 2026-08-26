@@ -89,8 +89,6 @@ bun run build
 bun run test
 bun run typecheck
 bun run dev
-
-bun test tests/patcher.test.ts
 ```
 
 Development and the published CLI require **Bun 1.4.0 or newer**. CI uses Bun

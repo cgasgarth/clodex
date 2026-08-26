@@ -4,7 +4,6 @@ import { resolveContextWindow } from '../models/context-window.js';
 import type { ConflictInfo } from '../types.js';
 import {
   applyClaudeProxyReliabilityEnv,
-  applyClodexClaudeFastModeEnv,
   removeAnthropicProxyBypass,
 } from '../runtime/wrapper-env.js';
 
@@ -28,7 +27,6 @@ function applyClaudeCodeThirdPartyCompat(env: NodeJS.ProcessEnv): void {
   // reasoning turns can legitimately stay quiet longer, so clodex launches use
   // the supported env override rather than changing provider or daemon timers.
   applyClaudeProxyReliabilityEnv(env);
-  applyClodexClaudeFastModeEnv(env);
 }
 
 export function buildChildEnv(
@@ -38,7 +36,7 @@ export function buildChildEnv(
   proxyPort?: number,
   contextWindow?: number,
   enableGatewayDiscovery?: boolean,
-  nativeContextOwner = false,
+  clodexCompactionOwner = false,
 ): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...process.env };
   for (const name of CONFLICTING_ENV_VARS) {
@@ -57,10 +55,9 @@ export function buildChildEnv(
   // lever and it reflects the model you started with.
   // Third-party routes also require a `[1m]` model-id suffix for 1M+ windows in the UI.
   env['CLAUDE_CODE_MAX_CONTEXT_TOKENS'] = String(resolveContextWindow(bareModel, contextWindow));
-  // Native Responses compaction owns the model-facing context for translated
-  // routes; Claude's local transcript counter must not auto-compact or block it.
-  delete env['CLODEX_NATIVE_CONTEXT_OWNER'];
-  if (nativeContextOwner) env['CLODEX_NATIVE_CONTEXT_OWNER'] = '1';
+  // Keep manual /compact, but stop Claude's automatic compactor when native
+  // Responses compaction owns the model-facing context.
+  if (clodexCompactionOwner) env['DISABLE_AUTO_COMPACT'] = '1';
   if (enableGatewayDiscovery) {
     env['CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY'] = '1';
   }
@@ -92,6 +89,5 @@ export function buildHttpProxyChildEnv(proxyPort: number, caCertPath: string): N
   env['NODE_EXTRA_CA_CERTS'] = caCertPath;
   removeAnthropicProxyBypass(env);
   applyClaudeProxyReliabilityEnv(env);
-  applyClodexClaudeFastModeEnv(env);
   return env;
 }

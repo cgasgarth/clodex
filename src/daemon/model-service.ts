@@ -7,10 +7,10 @@ import {
   type LoadedHttpProxyRoutes,
 } from '../http-proxy/index.js';
 import { normalizeModelAliases } from '../models/aliases.js';
-import { runPatchCommand } from '../patcher/index.js';
 import type { ProxyHandle } from '../proxy/index.js';
 import { loadRegistry } from '../registry/io.js';
 import type { FavoriteModel, UserPreferences } from '../types.js';
+import { syncClaudeModelPickerSettings } from '../runtime/claude-settings.js';
 
 const OPENAI_PROVIDER_ID = 'openai-oauth';
 
@@ -38,7 +38,7 @@ export interface ModelServiceDependencies {
   }>;
   loadRoutes: () => Promise<LoadedHttpProxyRoutes>;
   liveAliases: (loaded: LoadedHttpProxyRoutes) => Parameters<ProxyHandle['replaceCatalog']>[2];
-  applyPatch: () => Promise<number>;
+  syncSettings: (loaded: LoadedHttpProxyRoutes) => void;
   replaceCatalog: ProxyHandle['replaceCatalog'];
 }
 
@@ -52,7 +52,7 @@ function defaultDependencies(endpoint: ProxyHandle): ModelServiceDependencies {
     },
     loadRoutes: loadHttpProxyRoutes,
     liveAliases: loaded => liveProxyModelAliases(loaded),
-    applyPatch: () => runPatchCommand({}),
+    syncSettings: loaded => syncClaudeModelPickerSettings(loaded.routes, loaded.aliases),
     replaceCatalog: endpoint.replaceCatalog,
   };
 }
@@ -122,9 +122,7 @@ export class DaemonClaudeModelService {
       if (loaded.routes.length === 0) {
         throw new Error('At least one compatible Claude model must remain enabled');
       }
-      if (await this.dependencies.applyPatch() !== 0) {
-        throw new Error('Claude model list patch failed');
-      }
+      this.dependencies.syncSettings(loaded);
       this.dependencies.replaceCatalog(
         loaded.routes,
         loaded.routes[0]!.aliasId,

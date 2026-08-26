@@ -277,18 +277,6 @@ export function parseArgs(args: string[]): ParsedArgs {
     return parsed;
   }
 
-  if (first === 'patch') {
-    const parsed = emptyParsed('patch');
-    for (const arg of rest) {
-      if (arg === '--help' || arg === '-h') parsed.showHelp = true;
-      else if (arg === '--version' || arg === '-v') parsed.showVersion = true;
-      else if (arg === '--restore') parsed.patchRestore = true;
-      else if (arg === '--trace') parsed.trace = true;
-      else if (!parsed.error) parsed.error = `Unknown patch option: ${arg}`;
-    }
-    return parsed;
-  }
-
   if (first !== 'claude') {
     return {
       ...emptyParsed('root'),

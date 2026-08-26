@@ -967,7 +967,7 @@ function Dashboard(): React.ReactNode {
         <Box borderStyle="round" paddingX={1} flexDirection="column">
           <Text bold>Claude OpenAI model list</Text>
           <Text dimColor>
-            Routes change immediately; the patched picker changes for new Claude launches.
+            Routes change immediately; the native picker changes for new Claude launches.
           </Text>
           {models.length === 0
             ? <Text dimColor>No OpenAI models are available in the provider registry.</Text>

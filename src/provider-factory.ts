@@ -816,43 +816,6 @@ export function getReasoningCapabilities(
   return EMPTY_REASONING;
 }
 
-/**
- * Capabilities safe to advertise through the patched client's native effort UI.
- *
- * Provider capabilities describe accepted Clodex inputs, including values that
- * a provider adapter may approximate on the wire. Native client metadata must
- * be stricter: every advertised level must emit a distinct provider option so
- * the selected effort cannot silently collapse onto another choice.
- */
-export function getPatchReasoningCapabilities(
-  npm: string,
-  modelId: string,
-  metadata?: ReasoningMetadata,
-): ReasoningCapabilities {
-  if (
-    metadata?.reasoning === false
-    && !hasSupportedParameter(metadata, 'reasoning_effort')
-    && !hasSupportedParameter(metadata, 'reasoning')
-  ) {
-    return EMPTY_REASONING;
-  }
-
-  const capabilities = getReasoningCapabilities(npm, modelId, metadata);
-  const seenProviderOptions = new Set<string>();
-
-  return {
-    ...capabilities,
-    levels: capabilities.levels.filter(level => {
-      const providerOptions = effortProviderOptions(npm, level, modelId, metadata);
-      if (!providerOptions) return false;
-      const fingerprint = JSON.stringify(providerOptions);
-      if (seenProviderOptions.has(fingerprint)) return false;
-      seenProviderOptions.add(fingerprint);
-      return true;
-    }),
-  };
-}
-
 /** Per-provider providerOptions for user-selected reasoning effort. */
 export function effortProviderOptions(
   npm: string,

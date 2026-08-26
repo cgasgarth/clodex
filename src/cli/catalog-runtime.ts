@@ -10,6 +10,7 @@ import {
   printTraceLog,
 } from '../observability/trace-log.js';
 import { resolveOpenAiCompactionThreshold } from '../oauth/responses-compaction.js';
+import { syncClaudeModelPickerSettings } from '../runtime/claude-settings.js';
 
 export function reportInactiveCatalogAliases(modelAliases: ProxyModelAlias[]): void {
   const unavailableAliases = modelAliases.filter(alias => alias.unavailableReason !== undefined);
@@ -31,7 +32,7 @@ export function reportInactiveCatalogAliases(modelAliases: ProxyModelAlias[]): v
   );
 }
 
-export function catalogUsesNativeContextOwner(
+export function catalogUsesClodexCompaction(
   catalogRoutes: Array<Pick<ProxyRoute, 'providerId' | 'modelFormat' | 'contextWindow'>>,
   env: NodeJS.ProcessEnv = process.env,
 ): boolean {
@@ -51,10 +52,21 @@ export async function launchClaudeViaCatalog(
   fastByDefault = false,
 ): Promise<number> {
   reportInactiveCatalogAliases(modelAliases);
+  const launchRoutes = fastByDefault
+    ? catalogRoutes.map(route => route.providerId === 'openai-oauth' && route.authType === 'oauth'
+      ? { ...route, processingMode: 'fast' as const }
+      : route)
+    : catalogRoutes;
+  try {
+    syncClaudeModelPickerSettings(launchRoutes, modelAliases);
+  } catch (error) {
+    p.log.error(error instanceof Error ? error.message : String(error));
+    return 1;
+  }
   let proxyHandle: ProxyHandle;
   try {
     proxyHandle = await startProxyCatalog(
-      catalogRoutes,
+      launchRoutes,
       startingRoute.aliasId,
       trace,
       undefined,
@@ -81,10 +93,8 @@ export async function launchClaudeViaCatalog(
     // The ownership flag is process-wide while /model can switch routes.
     // Suppress Claude's compactor only when every selectable route is covered
     // by Clodex native compaction; mixed catalogs must keep Claude's lifecycle.
-    catalogUsesNativeContextOwner(catalogRoutes),
+    catalogUsesClodexCompaction(catalogRoutes),
   );
-  if (fastByDefault) childEnv['CLODEX_CLAUDE_FAST_DEFAULT'] = '1';
-
   const debugLogPath = prepareClaudeTraceLog();
   const traceArgs = trace ? ['--debug-file', debugLogPath] : [];
   if (trace) p.log.info(`Debug log: ${debugLogPath}`);

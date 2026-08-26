@@ -4,7 +4,7 @@
   "publishConfig": {
     "access": "public"
   },
-  "description": "Bridge Claude Code to OpenAI and Grok models — OpenAI API key, ChatGPT OAuth, or SuperGrok OAuth, with prompt caching, auto-compaction, model switching, and a Claude Code binary patcher",
+  "description": "Bridge Claude Code to OpenAI and Grok models — OpenAI API key, ChatGPT OAuth, or SuperGrok OAuth, with prompt caching, auto-compaction, and model switching",
   "author": "Brandon Wallace",
   "license": "MIT",
   "keywords": [
@@ -67,7 +67,6 @@
     "picocolors": "1.1.1",
     "react": "19.2.8",
     "secondwind": "0.3.2",
-    "tweakcc": "https://github.com/cgasgarth/clodex-tweakcc/releases/download/v2.7.24/tweakcc-fixed-2.7.24.tgz",
     "undici": "8.10.0"
   },
   "devDependencies": {

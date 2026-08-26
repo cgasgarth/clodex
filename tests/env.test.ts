@@ -194,9 +194,9 @@ describe('buildChildEnv', () => {
     expect(buildChildEnv(UPSTREAM_URL, 'zzzz-unknown-model', 'k')['CLAUDE_CODE_MAX_CONTEXT_TOKENS']).toBe('200000');
   });
 
-  it('delegates context ownership only when requested for a native OpenAI route', () => {
-    expect(buildChildEnv(UPSTREAM_URL, 'custom-model', 'k')['CLODEX_NATIVE_CONTEXT_OWNER']).toBeUndefined();
-    expect(buildChildEnv(UPSTREAM_URL, 'custom-model', 'k', undefined, undefined, false, true)['CLODEX_NATIVE_CONTEXT_OWNER']).toBe('1');
+  it('keeps native Codex compaction automatic without Claude auto-compaction', () => {
+    expect(buildChildEnv(UPSTREAM_URL, 'custom-model', 'k')['DISABLE_AUTO_COMPACT']).toBeUndefined();
+    expect(buildChildEnv(UPSTREAM_URL, 'custom-model', 'k', undefined, undefined, false, true)['DISABLE_AUTO_COMPACT']).toBe('1');
   });
 
   it('uses explicit contextWindow override when provided', () => {
@@ -235,8 +235,6 @@ describe('buildChildEnv', () => {
     expect(env['ENABLE_TOOL_SEARCH']).toBe('true');
     expect(env['CLAUDE_CODE_SIMPLE_SYSTEM_PROMPT']).toBe('0');
     expect(env['CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK']).toBe('1');
-    expect(env['CLODEX_CLAUDE_FAST_MODE']).toBe('1');
-    expect(env['CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK']).toBe('1');
   });
 
   it('uses upstream URL when proxyPort is not provided', () => {
@@ -266,8 +264,6 @@ describe('buildHttpProxyChildEnv', () => {
       expect(env['ANTHROPIC_AUTH_TOKEN']).toBe('normal-auth-token');
       expect(env['ANTHROPIC_MODEL']).toBe('sonnet');
       expect(env['CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK']).toBe('1');
-      expect(env['CLODEX_CLAUDE_FAST_MODE']).toBe('1');
-      expect(env['CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK']).toBe('1');
       expect(env['NO_PROXY']).toBe('localhost,.internal.example');
       expect(env['no_proxy']).toBe('localhost,.internal.example');
     } finally {

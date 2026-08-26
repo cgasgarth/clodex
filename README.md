@@ -30,15 +30,15 @@ that every runtime artifact matches the checkout.
 
 ## Quick start
 
-This release supports Claude Code **2.1.245 only**. Clodex checks the installed
-version before it patches or launches Claude Code.
+Clodex uses Claude Code's supported settings and environment controls. It does
+not modify the Claude binary or pin one Claude Code release.
 
 Clodex targets **Bun 1.4.0**. Install or update Bun with `bun upgrade`; `bun
 --revision` shows the exact build in use. Compatibility PRs record the
 validated revision and run the full repository gate before installation.
 
-Install clodex, sign in to a provider, choose the models you want Claude to
-show, and patch Claude Code's model metadata:
+Install Clodex, sign in to a provider, and choose the models you want Claude
+Code to show:
 
 ```bash
 bun add --global @bman654/clodex
@@ -49,7 +49,6 @@ clodex models
 clodex models --alias sol=clodex:openai-oauth:gpt-5.6-sol
 clodex models --alias luna=clodex:openai-oauth:gpt-5.6-luna
 clodex models --alias terra=clodex:openai-oauth:gpt-5.6-terra
-clodex patch
 clodex claude
 ```
 
@@ -59,9 +58,9 @@ Inside Claude Code, `/model` switches between your enabled Codex models. Bare
 the dashboard.
 
 OAuth credentials are stored in the OS credential store. OpenAI API-key users can use
-`clodex providers add` instead. Favorites and aliases feed `/model`, routing,
-subagent model selection, and patching. Re-run `clodex patch` after Claude Code
-updates, or restore the pristine Claude binary with `clodex patch --restore`.
+`clodex providers add` instead. Favorites and aliases feed Claude Code's native
+`/model` picker, routing, and subagent model selection. Clodex does not modify
+the Claude Code binary or require a pinned Claude Code version.
 
 ## What you get inside Claude Code
 
@@ -70,7 +69,7 @@ updates, or restore the pristine Claude binary with `clodex patch --restore`.
 | Main sessions, subagents, workflows, and agent teams | Yes |
 | Claude Code system prompt, skills, tools, and model frontmatter | Yes |
 | Anthropic, OpenAI, and Grok models in the same Claude installation | Yes |
-| Correct per-model context windows in patched Claude Code | Yes |
+| Correct launch-model context window in Claude Code | Yes |
 | Persistent shared daemon and OpenAI WebSocket continuation | Yes |
 | Stable prompt-cache routing and explicit cache breakpoints | Yes |
 | Native OpenAI/Codex compaction with durable recovery | Optional |
@@ -202,7 +201,7 @@ supports active-account/all-account scope with `a`, plus day/last-7-days/last-30
 navigation with `Tab`, `Shift+Tab`, `←`, `→`, and `0`.
 Secondwind mode changes require confirmation. Secondwind processes every translated
 OpenAI and Grok request before provider translation. The Models view enables or disables
-models in the live route catalog and the patched picker used by new Claude launches.
+models in the live route catalog and native picker used by new Claude launches.
 The Diagnostics view switches between compact error-only logs and full lifecycle logs;
 full mode records native compaction start, completion, duration, and recovery details.
 
@@ -337,29 +336,10 @@ clodex server --endpoint --quick --providers favorites
 clodex server --proxy
 ```
 
-### `clodex patch [--restore]`
-
-Patch the installed Claude Code binary so clodex favorites and aliases are first-class: accepted by the Agent tool's model field, listed in `/model`, resolved to their real ids, and reporting the correct context window.
-
-| Flag | Effect |
-| --- | --- |
-| `--restore` | Restore the pristine (unpatched) Claude Code binary |
-| `--trace` | Show the underlying tweakcc output |
-| `--help` | Help |
-
-The patch map is built from your favorites and aliases; context windows come from provider metadata. This Clodex release supports Claude Code **2.1.245 only**. `clodex patch` rejects every other version before it reads, backs up, or changes the binary. `clodex patch --restore` remains available for recovery.
-
-A pristine content-addressed backup and `~/.clodex/patch-state.json` make unchanged re-runs no-ops. `clodex claude` checks compatibility and patch freshness at launch. Update Clodex before updating Claude Code when a newer Claude release appears.
-
-Claude Workflow normally stops an agent after 180 seconds without a semantic
-content event. Patched installations accept
-`CLODEX_WORKFLOW_STALL_TIMEOUT_MS` to increase that watchdog for models that
-spend longer generating buffered tool input. The patched default is 10 minutes;
-overrides are clamped to 3–30 minutes.
-
 ### `clodex models` / `clodex favorites`
 
-Manage favorite models (max 20) and short aliases. Favorites feed the endpoint-mode `/model` switch menu, proxy-mode routing, and the patcher. Saved to `~/.clodex/config.json`.
+Manage favorite models (max 20) and short aliases. Favorites feed Claude Code's
+native `/model` picker and Clodex routing. Saved to `~/.clodex/config.json`.
 
 | Flag | Effect |
 | --- | --- |
@@ -411,7 +391,7 @@ clodex --version    # version
 ## Known limitations
 
 - Cost display inside Claude Code is inaccurate for OpenAI and Grok models (Claude Code applies its own pricing table).
-- In the endpoint-mode switch menu, the displayed context window reflects the launch model and does not update on live `/model` switches (Claude Code fetches window metadata once at startup). Proxy mode with `clodex patch` reports correct per-model windows.
+- The displayed context window reflects the launch model and does not update on live `/model` switches because Claude Code reads this value once at startup.
 - ChatGPT/Codex OAuth requires `store:false` upstream; some OpenAI cache controls are intentionally omitted on OAuth routes because they returned empty responses during compatibility testing.
 - An already-oversized legacy Claude transcript that never acquired a native
   compaction checkpoint may not be recoverable in place. Create a new session
