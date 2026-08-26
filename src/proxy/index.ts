@@ -63,7 +63,6 @@ import {
 import { withResponsesWebSocketDiagnosticContext } from '../oauth/responses-websocket.js';
 import { resolveOpenAiCompactionThreshold } from '../oauth/responses-compaction.js';
 import { resolveContextWindow } from '../models/context-window.js';
-import { getOrCreateProxyToken } from './token.js';
 import { BunHttpResponse } from '../transport/bun-http-response.js';
 import { waitForHttpListener } from '../transport/listener-ready.js';
 import type { ApiProcessingMode } from '../daemon/api-pricing.js';
@@ -339,7 +338,6 @@ function anthropicError(res: HttpResponseWriter, status: number, message: string
 
 export interface ProxyHandle {
   port: number;
-  token: string;
   /** Atomically replace the live model catalog without interrupting in-flight requests. */
   replaceCatalog: (
     routes: ProxyRoute[],
@@ -565,7 +563,6 @@ export async function startProxyCatalog(
   optimizeRequest?: ProxyRequestOptimizer,
   shouldLogWebSocketDiagnostic?: (event: ResponsesWebSocketDiagnosticEvent) => boolean,
 ): Promise<ProxyHandle> {
-  const proxyToken = getOrCreateProxyToken();
   silenceSdkWarnings();
   let catalog = createProxyCatalogState(routes, defaultAliasId, modelAliases);
   const plog = makeProxyLog(debug, debugLogPath);
@@ -627,18 +624,6 @@ export async function startProxyCatalog(
     // Anthropic message creation and token counting are distinct endpoints.
     if (req.method === 'POST' && messagesEndpoint) {
       bunServer.timeout(req, 0);
-      const inboundKey = req.headers.get('x-api-key')
-        ?? req.headers.get('authorization')?.replace(/^Bearer\s+/i, '').trim()
-        ?? null;
-      const ticketPrefix = `${proxyToken}.`;
-      const launchTicketFromKey = inboundKey?.startsWith(ticketPrefix)
-        ? inboundKey.slice(ticketPrefix.length)
-        : undefined;
-      if (inboundKey !== proxyToken && !launchTicketFromKey) {
-        anthropicError(res, 401, 'Invalid proxy token');
-        return;
-      }
-
       const clientAbort = new AbortController();
       const abortForClientDisconnect = () => {
         if (!clientAbort.signal.aborted) clientAbort.abort(new Error('Client disconnected'));
@@ -690,7 +675,7 @@ export async function startProxyCatalog(
         const launchTicketFromHeader = req.headers.get('x-clodex-launch-ticket') ?? undefined;
         try {
           route = await resolveRouteForRequest(route, {
-            launchTicket: launchTicketFromHeader ?? launchTicketFromKey,
+            launchTicket: launchTicketFromHeader,
           });
         } catch (error) {
           anthropicError(
@@ -1169,7 +1154,6 @@ export async function startProxyCatalog(
   );
   return {
     port: boundPort,
-    token: proxyToken,
     replaceCatalog: (nextRoutes, nextDefaultAliasId, nextModelAliases) => {
       catalog = createProxyCatalogState(
         nextRoutes,

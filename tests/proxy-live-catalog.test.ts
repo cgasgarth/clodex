@@ -43,7 +43,6 @@ describe('live proxy catalog replacement', () => {
           method: 'POST',
           headers: {
             'content-type': 'application/json',
-            'x-api-key': handle.token,
           },
           body: JSON.stringify({
             model: 'sol',

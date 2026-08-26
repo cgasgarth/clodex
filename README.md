@@ -36,23 +36,7 @@ checkout and verifies the installed runtime artifacts.
 
 Plain `claude` must start the real Anthropic Claude Code binary. Do not add a
 shell alias or startup wrapper. Put the Clodex endpoint, model picker, child
-process wrapper, API-key helper, and start hook in `~/.claude/settings.json`.
-
-Create `~/.claude/hooks/clodex-api-key`:
-
-```zsh
-#!/bin/zsh
-set -u
-
-token_path="${CLODEX_HOME:-${HOME}/.clodex}/proxy-token"
-if [[ ! -r "$token_path" ]]; then
-  print -u2 "Clodex proxy token is unavailable."
-  exit 1
-fi
-
-IFS= read -r token < "$token_path"
-print -r -- "$token"
-```
+process wrapper, and start hook in `~/.claude/settings.json`.
 
 Create `~/.claude/hooks/ensure-clodex`:
 
@@ -67,10 +51,10 @@ fi
 clodex start >/dev/null
 ```
 
-Make both files executable:
+Make the hook executable:
 
 ```bash
-chmod 700 ~/.claude/hooks/clodex-api-key ~/.claude/hooks/ensure-clodex
+chmod 700 ~/.claude/hooks/ensure-clodex
 ```
 
 Merge these values into `~/.claude/settings.json`. Replace `/Users/you` with
@@ -90,7 +74,6 @@ your absolute home path. Keep other settings and hooks that you already use.
     "DISABLE_AUTO_COMPACT": "1",
     "ENABLE_TOOL_SEARCH": "true"
   },
-  "apiKeyHelper": "/Users/you/.claude/hooks/clodex-api-key",
   "model": "sol",
   "modelPicker": {
     "options": [
@@ -129,9 +112,9 @@ your absolute home path. Keep other settings and hooks that you already use.
 }
 ```
 
-`apiKeyHelper` reads the owner-only Clodex proxy token when Claude needs it, so
-the token is not copied into settings. The `SessionStart` hook checks health and
-starts Clodex only when needed. No hook stops Clodex. The internal
+The daemon accepts requests only on its loopback endpoint and does not require
+an API key. The `SessionStart` hook checks health and starts Clodex only when
+needed. No hook stops Clodex. The internal
 `clodex-claude` process wrapper is only for Claude-spawned child processes; it
 is not the terminal startup command.
 

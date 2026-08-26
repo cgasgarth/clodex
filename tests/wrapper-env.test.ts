@@ -7,7 +7,6 @@ import {
   applyClaudeStreamIdleTimeout,
   CLAUDE_STREAM_IDLE_TIMEOUT_MS,
   LAUNCH_TICKET_HEADER,
-  LOCAL_GATEWAY_API_KEY,
   setAnthropicCustomHeader,
   wrapperRequiresServer,
 } from '../src/runtime/wrapper-env.js';
@@ -93,10 +92,9 @@ describe('computeWrapperEnv', () => {
     const env = computeWrapperEnv(baseEnv, state);
 
     expect(env['ANTHROPIC_BASE_URL']).toBe('http://127.0.0.1:4242/anthropic');
-    expect(env['ANTHROPIC_API_KEY']).toBe(LOCAL_GATEWAY_API_KEY);
+    expect(env['ANTHROPIC_API_KEY']).toBeUndefined();
     expect(env['CLAUDE_STREAM_IDLE_TIMEOUT_MS']).toBe(String(CLAUDE_STREAM_IDLE_TIMEOUT_MS));
     expect(env['CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK']).toBe('1');
-    expect(LOCAL_GATEWAY_API_KEY.length).toBeGreaterThan(0);
     for (const name of ['HTTPS_PROXY', 'HTTP_PROXY', 'https_proxy', 'http_proxy']) {
       expect(env[name]).toBeUndefined();
     }
@@ -132,7 +130,7 @@ describe('computeWrapperEnv', () => {
     expect(env['CLAUDE_STREAM_IDLE_TIMEOUT_MS']).toBe(String(15 * 60_000));
   });
 
-  it('endpoint-mode daemon preserves its token and carries the account ticket', () => {
+  it('endpoint-mode daemon carries the account ticket without changing credentials', () => {
     const state: ServerRuntimeState = {
       mode: 'endpoint',
       port: 17647,
@@ -149,7 +147,7 @@ describe('computeWrapperEnv', () => {
       ].join('\n'),
     }, state, 'new-ticket.part-two');
 
-    expect(env['ANTHROPIC_API_KEY']).toBe('stable-local-token');
+    expect(env['ANTHROPIC_API_KEY']).toBe('stable-local-token.old-ticket');
     expect(env['CLODEX_LAUNCH_TICKET']).toBe('new-ticket.part-two');
     expect(env['ANTHROPIC_CUSTOM_HEADERS']).toBe([
       'x-existing: retained',
