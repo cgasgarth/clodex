@@ -8,7 +8,6 @@ import type {
   LanguageModelUsage,
   ModelMessage,
   ProviderMetadata,
-  TextPart,
   TextStreamPart,
   ToolCallPart,
   ToolResultPart,
@@ -312,14 +311,6 @@ function joinInstructions(...parts: Array<string | undefined>): string | undefin
   return present.length ? present.join('\n') : undefined;
 }
 
-const OPENAI_OAUTH_STEERING_POLICY = [
-  'The user may send a new message while you are still working. When they do, evaluate whether',
-  'they intended to replace the active request or add to it. If they intended to override or',
-  'replace it, drop the previous work and focus on the new request. If the new message adds to',
-  'unfinished work, address both. If it asks for status or another question, answer it and then',
-  'continue only the work that remains relevant.',
-].join(' ');
-
 function openAiCacheBreakpoint(block: AnthropicBlock, enabled: boolean): ProviderOptions | undefined {
   if (!enabled || !block.cache_control) return undefined;
   return { openai: { promptCacheBreakpoint: { mode: 'explicit' } } };
@@ -462,39 +453,9 @@ function translateSystemBlocks(
   });
 }
 
-const CLAUDE_MID_TURN_PREFIX = 'The user sent a new message while you were working:\n';
-const CLAUDE_MID_TURN_SUFFIX = '\n\nThis is how Claude Code surfaces messages the user sends mid-turn — '
-  + 'within the running turn, often alongside the next tool result, rather than as a separate '
-  + 'conversation turn. Address the message above as you continue this turn.';
-
-/**
- * Preserve Claude's mid-turn control semantics at user authority.
- *
- * The queued command is transient in Claude's transcript. Codex therefore gets
- * one model sample in which to act on it. Keep the human text opaque, but make
- * that boundary explicit instead of reducing it to an ordinary user message.
- */
-function normalizeClaudeMidTurnInstruction(text: string): string | undefined {
-  if (!text.startsWith(CLAUDE_MID_TURN_PREFIX) || !text.endsWith(CLAUDE_MID_TURN_SUFFIX)) {
-    return undefined;
-  }
-  const instruction = text.slice(
-    CLAUDE_MID_TURN_PREFIX.length,
-    -CLAUDE_MID_TURN_SUFFIX.length,
-  );
-  return [
-    'The user sent this new instruction while the current task was running.',
-    'Treat it as the newest user request and apply it now before continuing earlier work.',
-    'If it replaces, redirects, limits, or stops prior work, follow it immediately.',
-    '',
-    instruction,
-  ].join('\n');
-}
-
 function translateUserBlocks(
   blocks: AnthropicBlock[],
   openAiPromptCacheBreakpoints: boolean,
-  normalizeMidTurnSteering: boolean,
 ): ModelMessage[] {
   const imageParts: SdkUserPart[] = [];
   const toolResults = blocks.filter(block => block.type === 'tool_result');
@@ -515,22 +476,14 @@ function translateUserBlocks(
   }
 
   const parts: SdkUserPart[] = [];
-  const steeringParts: SdkUserPart[] = [];
   for (const block of blocks) {
     if (block.type === 'text') {
       const text = block.text ?? '';
-      const midTurnInstruction = normalizeMidTurnSteering
-        ? normalizeClaudeMidTurnInstruction(text)
-        : undefined;
-      const part: TextPart = {
+      parts.push({
         type: 'text',
-        text: midTurnInstruction ?? text,
+        text,
         ...cacheBreakpointOptions(block, openAiPromptCacheBreakpoints),
-      };
-      // Codex queues steering as typed user input and places it last in the
-      // next model sample. Keep the same model-visible ordering without
-      // interpreting the human text.
-      (midTurnInstruction === undefined ? parts : steeringParts).push(part);
+      });
       continue;
     }
     if (block.type !== 'image') continue;
@@ -539,7 +492,7 @@ function translateUserBlocks(
       parts.push({ ...image, ...cacheBreakpointOptions(block, openAiPromptCacheBreakpoints) });
     }
   }
-  const userParts = [...imageParts, ...parts, ...steeringParts];
+  const userParts = [...imageParts, ...parts];
   if (userParts.length > 0) {
     messages.push({ role: 'user', content: userParts });
   }
@@ -576,7 +529,6 @@ export function translateMessages(
   messages: AnthropicMsg[],
   npm: string,
   openAiPromptCacheBreakpoints = false,
-  normalizeMidTurnSteering = false,
 ): ModelMessage[] {
   const out: ModelMessage[] = [];
 
@@ -593,7 +545,6 @@ export function translateMessages(
       out.push(...translateUserBlocks(
         blocks,
         openAiPromptCacheBreakpoints,
-        normalizeMidTurnSteering,
       ));
       continue;
     }
@@ -723,7 +674,6 @@ export function translateRequest(
   const systemText = options?.openAiOAuth
     ? joinInstructions(
         baseSystem ?? 'You are a coding assistant.',
-        OPENAI_OAUTH_STEERING_POLICY,
         inlineSystem,
       )
     : joinInstructions(baseSystem, inlineSystem);
@@ -801,7 +751,6 @@ export function translateRequest(
         conversationMessages,
         npm,
         supportsExplicitOpenAiCaching,
-        options?.openAiOAuth === true,
       ),
     ],
     allowSystemInMessages: true,
