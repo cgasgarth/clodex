@@ -3,18 +3,13 @@
 import { getTemplateById, type ProviderTemplate } from '../providers/templates.js';
 import type { RegistryProvider } from './types.js';
 
-/** Legacy provider ids that differ from clodex template ids */
-const TEMPLATE_ID_ALIASES = new Map<string, string>([['google-vertex', 'vertex']]);
-
 const NPM_DEFAULT_BASE_URL = new Map<string, string>([
   ['@ai-sdk/anthropic', 'https://api.anthropic.com'],
 ]);
 
 export function resolveProviderTemplate(provider: RegistryProvider): ProviderTemplate | undefined {
   const candidates = [
-    TEMPLATE_ID_ALIASES.get(provider.templateId),
     provider.templateId,
-    TEMPLATE_ID_ALIASES.get(provider.id),
     provider.id,
   ].filter((id): id is string => Boolean(id));
 

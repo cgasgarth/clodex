@@ -3,7 +3,6 @@
 const BRAND_MAP: Array<[string, string]> = [
   ['claude', 'Claude'],
   ['gpt', 'GPT'],
-  ['gemini', 'Gemini'],
   ['deepseek', 'DeepSeek'],
   ['qwen', 'Qwen'],
   ['minimax', 'MiniMax'],

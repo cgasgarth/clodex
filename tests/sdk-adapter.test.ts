@@ -363,23 +363,6 @@ describe('translateMessages', () => {
     expect(out[2].content[2]).toEqual({ type: 'text', text: 'continue' });
   });
 
-  it('decodes thought_signature into providerOptions for Google only', () => {
-    const msg = [{ role: 'assistant' as const, content: [
-      { type: 'thinking', thinking: 'hmm', signature: 'SIG' },
-      { type: 'tool_use', id: 'call_1__ts__VFNJRw', name: 'Read', input: {} },
-    ] }];
-    // SAFETY: The test fixture defines the asserted runtime shape.
-    const google = translateMessages(msg, '@ai-sdk/google') as any[];
-    expect(google[0].content[0].providerOptions).toEqual({ google: { thoughtSignature: 'SIG' } });
-    expect(google[0].content[1].providerOptions).toEqual({ google: { thoughtSignature: 'TSIG' } });
-    // xAI: thinking is kept as a reasoning part; tool id suffix stripped
-    // SAFETY: The test fixture defines the asserted runtime shape.
-    const xai = translateMessages(msg, '@ai-sdk/xai') as any[];
-    expect(xai[0].content).toHaveLength(2);
-    expect(xai[0].content[0]).toEqual({ type: 'reasoning', text: 'hmm' });
-    expect(xai[0].content[1]).toEqual({ type: 'tool-call', toolCallId: 'call_1', toolName: 'Read', input: {} });
-  });
-
   it('round-trips OpenAI reasoningEncryptedContent via thinking.signature', () => {
     const msg = [{ role: 'assistant' as const, content: [
       { type: 'thinking', thinking: 'chain...', signature: 'enc_blob_abc' },
@@ -407,7 +390,7 @@ describe('translateMessages', () => {
     // SAFETY: The test fixture defines the asserted runtime shape.
     const out = translateMessages([
       { role: 'user', content: [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'aGk=' } }] },
-    ], '@ai-sdk/google') as any[];
+    ], '@ai-sdk/openai') as any[];
     expect(out[0].content[0].type).toBe('file');
     expect(out[0].content[0].mediaType).toBe('image/png');
     expect(out[0].content[0].data.type).toBe('data');
@@ -416,20 +399,6 @@ describe('translateMessages', () => {
 });
 
 describe('translateRequest', () => {
-  it('assembles SDK params and adds Google thinking options', () => {
-    const params = translateRequest({
-      model: 'gemini-3-flash-preview',
-      system: 'be brief',
-      messages: [{ role: 'user', content: 'hi' }],
-      max_tokens: 256,
-      temperature: 0.5,
-    }, '@ai-sdk/google');
-    expect(params.instructions).toBe('be brief');
-    expect(params.maxOutputTokens).toBe(256);
-    expect(params.temperature).toBe(0.5);
-    expect(params.providerOptions).toEqual({ google: { thinkingConfig: { includeThoughts: true } } });
-  });
-
   it('requests OpenAI encrypted reasoning for Responses API round-trip', () => {
     const params = translateRequest({
       model: 'gpt-5.5',
@@ -664,18 +633,6 @@ describe('translateRequest', () => {
     expect(publicApi.instructions).toContain('x-anthropic-billing-header:');
   });
 
-  it('maps output_config.effort to Google thinking budget without dropping includeThoughts', () => {
-    const params = translateRequest({
-      model: 'gemini-2.5-pro',
-      output_config: { effort: 'high' },
-      messages: [{ role: 'user', content: 'hi' }],
-    }, '@ai-sdk/google');
-    expect(params.providerOptions?.google?.thinkingConfig).toMatchObject({
-      includeThoughts: true,
-      thinkingBudget: 8192,
-    });
-  });
-
   it('maps GPT-5.5 output_config.effort without dropping OpenAI store/include', () => {
     const params = translateRequest({
       model: 'gpt-5.5',
@@ -733,16 +690,6 @@ describe('translateRequest', () => {
         effort: 'high',
         exclude: false,
       },
-    });
-  });
-
-  it('uses defaultEffort when the client omits output_config.effort', () => {
-    const params = translateRequest({
-      model: 'gemini-2.5-pro',
-      messages: [{ role: 'user', content: 'hi' }],
-    }, '@ai-sdk/google', { defaultEffort: 'medium' });
-    expect(params.providerOptions?.google?.thinkingConfig).toMatchObject({
-      thinkingBudget: 4096,
     });
   });
 
@@ -1009,40 +956,6 @@ describe('translateRequest', () => {
 });
 
 describe('generateAnthropicResponse', () => {
-  it('encodes non-streaming tool-call provider signatures for Gemini round-trip', async () => {
-    const abort = new AbortController();
-    const generateText = vi.fn(async () => ({
-      text: '',
-      toolCalls: [{
-        toolCallId: 'call_1',
-        toolName: 'Read',
-        input: { path: 'a' },
-        providerMetadata: { google: { thoughtSignature: 'SIG' } },
-      }],
-      finishReason: 'tool-calls',
-      usage: sdkUsage(1, 2),
-      finalStep: { providerMetadata: undefined },
-    }));
-
-    const body = await generateAnthropicResponse(
-      // SAFETY: The test fixture defines the asserted runtime shape.
-      {} as never,
-      { messages: [] },
-      'gemini-2.5-pro',
-      // SAFETY: The test fixture defines the asserted runtime shape.
-      { abortSignal: abort.signal, generateText: generateText as never },
-    );
-    // SAFETY: The test fixture defines the asserted runtime shape.
-    const toolUse = (body.content as any[]).find(item => item.type === 'tool_use');
-    expect(toolUse.id).toBe('call_1__ts__U0lH');
-    expect(generateText.mock.calls[0]![0].timeout).toEqual({
-      totalMs: MODEL_TOTAL_TIMEOUT_MS,
-    });
-    expect(generateText.mock.calls[0]![0].abortSignal).toBe(abort.signal);
-    expect(abort.signal.aborted).toBe(false);
-
-  });
-
   it('forceStream collects a real stream into one response instead of calling generateText', async () => {
     const generateText = vi.fn();
     const result = { stream: forceStreamParts() };
@@ -1504,21 +1417,6 @@ describe('writeAnthropicStream', () => {
     await expect(writeAnthropicStream(stringErrorParts() as any, 'm', () => {})).rejects.toThrow('Something went wrong');
   });
 
-  it('encodes thought_signature into the tool_use id and reports tool_use stop', async () => {
-    const { events } = await collect([
-      { type: 'start' },
-      { type: 'tool-input-start', id: 'call_9', toolName: 'Read', providerMetadata: { google: { thoughtSignature: 'SIG9' } } },
-      { type: 'tool-input-delta', id: 'call_9', delta: '{"path":"x"}' },
-      { type: 'tool-input-end', id: 'call_9' },
-      { type: 'tool-call', toolCallId: 'call_9', toolName: 'Read', input: { path: 'x' } },
-      { type: 'finish', finishReason: 'tool-calls' },
-    ]);
-    const start = events.find(e => e.event === 'content_block_start')!;
-    expect(start.data.content_block.type).toBe('tool_use');
-    expect(start.data.content_block.id).toBe('call_9__ts__U0lHOQ');
-    expect(events.find(e => e.event === 'message_delta')!.data.delta.stop_reason).toBe('tool_use');
-  });
-
   // GPT-family models fill optional tool params with filler (`null`, `[]`)
   // instead of omitting them; Claude Code forwards e.g. WebSearch domain lists
   // verbatim into the server-side web_search config, where an empty list is a
@@ -1611,22 +1509,6 @@ describe('writeAnthropicStream', () => {
     // The block must still be closed after the late flush.
     const start = events.find(e => e.event === 'content_block_start')!;
     expect(events.some(e => e.event === 'content_block_stop' && e.data.index === start.data.index)).toBe(true);
-  });
-
-  it('emits thinking block with a signature_delta close (Google SDK)', async () => {
-    const { events } = await collect([
-      { type: 'start' },
-      { type: 'reasoning-start', id: 'r1' },
-      { type: 'reasoning-delta', id: 'r1', text: 'thinking...' },
-      { type: 'reasoning-end', id: 'r1', providerMetadata: { google: { thoughtSignature: 'RSIG' } } },
-      { type: 'text-start', id: 't1' },
-      { type: 'text-delta', id: 't1', text: 'done' },
-      { type: 'finish', finishReason: 'stop' },
-    ]);
-    const thinkStart = events.find(e => e.event === 'content_block_start')!;
-    expect(thinkStart.data.content_block.type).toBe('thinking');
-    const sigDelta = events.find(e => e.event === 'content_block_delta' && e.data.delta.type === 'signature_delta')!;
-    expect(sigDelta.data.delta.signature).toBe('RSIG');
   });
 
   it('emits thinking block with OpenAI reasoningEncryptedContent in signature_delta', async () => {

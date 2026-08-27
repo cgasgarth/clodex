@@ -4,7 +4,6 @@ import { isBoolean, isNumber } from '../runtime/type-guards.js';
 import { deriveBrand } from '../models/types.js';
 import { resolveContextWindow } from '../models/context-window.js';
 import type { ProviderTemplate } from '../providers/templates.js';
-import { normalizeGoogleDisplayName, normalizeGoogleModelId } from './google-model-id.js';
 import type { CachedModel } from './types.js';
 import {
   getProviderDebugLogPath,
@@ -115,7 +114,7 @@ function parseModelList(body: OpenAiModelListResponse, npm: string): CachedModel
   for (const row of rows) {
     const rawId = row.id?.trim();
     if (!rawId) continue;
-    const { id, upstreamModelId } = normalizeGoogleModelId(rawId, npm);
+    const id = rawId;
     const family = id.split(/[-/:]/)[0] ?? id;
     const cost = parseNativePricing(row.pricing);
     const freeStatus = classifyFreeStatus({
@@ -128,8 +127,8 @@ function parseModelList(body: OpenAiModelListResponse, npm: string): CachedModel
       resolveContextWindow(id);
     models.push({
       id,
-      name: normalizeGoogleDisplayName(row.name, id),
-      upstreamModelId,
+      name: row.name?.trim() || id,
+      upstreamModelId: rawId,
       family,
       brand: deriveBrand(family),
       contextWindow,

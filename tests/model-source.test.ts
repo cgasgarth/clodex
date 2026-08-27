@@ -18,10 +18,6 @@ describe('resolveModelSource', () => {
     expect(resolveModelSource(stub({ id: 'openai', templateId: 'openai' }))).toBe('api-list');
   });
 
-  it('returns manual-only for google-vertex import id', () => {
-    expect(resolveModelSource(stub({ id: 'google-vertex', templateId: 'google-vertex' }))).toBe('manual-only');
-  });
-
   it('returns manual-only for bedrock template', () => {
     expect(resolveModelSource(stub({ id: 'bedrock', templateId: 'bedrock' }))).toBe('manual-only');
   });

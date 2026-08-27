@@ -56,22 +56,11 @@ describe('models.dev capability rules', () => {
     const meta = readModelsDevCacheMeta(cache);
     expect(meta?.source).toBe('https://models.dev/api.json');
     expect((meta?.provider_count ?? 0) > 50).toBe(true);
-    expect(stripModelsDevCacheMeta(cache).google?.models).toBeDefined();
-  });
-
-  it('hides audio-only output when catalogued', () => {
-    const entry = findModelsDevModel('google', 'gemini-2.5-flash-preview-tts', cache);
-    expect(entry).not.toBeNull();
-    expect(shouldHideByModelsDevCapabilities(entry!)).toBe(true);
-    expect(shouldHideModel({
-      providerId: 'google',
-      modelId: 'gemini-2.5-flash-preview-tts',
-      agent: 'claude',
-    })).toBe(true);
+    expect(stripModelsDevCacheMeta(cache).openai?.models).toBeDefined();
   });
 
   it('does not hide text-output models with missing tool_call field', () => {
-    const entry = findModelsDevModel('google', 'gemini-2.5-pro', cache);
+    const entry = findModelsDevModel('openai', 'gpt-5.2', cache);
     expect(entry).not.toBeNull();
     expect(shouldHideByModelsDevCapabilities(entry!)).toBe(false);
   });

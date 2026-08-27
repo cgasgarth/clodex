@@ -8,7 +8,7 @@ import {
 
 describe('claudeCodeClientModelId', () => {
   it('appends [1m] for a genuine 1M context', () => {
-    expect(claudeCodeClientModelId('gemini-3.5-flash', 1_000_000)).toBe('gemini-3.5-flash[1m]');
+    expect(claudeCodeClientModelId('gpt-5.6-sol', 1_000_000)).toBe('gpt-5.6-sol[1m]');
   });
 
   it('does not mislabel intermediate context sizes as 1M', () => {
@@ -21,20 +21,18 @@ describe('claudeCodeClientModelId', () => {
   });
 
   it('is idempotent when [1m] is already present', () => {
-    expect(claudeCodeClientModelId('gemini-3.5-flash[1m]', 1_000_000)).toBe('gemini-3.5-flash[1m]');
+    expect(claudeCodeClientModelId('gpt-5.6-sol[1m]', 1_000_000)).toBe('gpt-5.6-sol[1m]');
   });
 });
 
 describe('routeLookupIds', () => {
-  it('includes [1m] and legacy models/ variants', () => {
-    const ids = routeLookupIds('gemini-3.5-flash');
-    expect(ids).toContain('gemini-3.5-flash[1m]');
-    expect(ids).toContain('models/gemini-3.5-flash');
+  it('includes the [1m] variant', () => {
+    const ids = routeLookupIds('gpt-5.6-sol');
+    expect(ids).toContain('gpt-5.6-sol[1m]');
   });
 
-  it('normalizes context suffix case and the Google models prefix to one key', () => {
+  it('normalizes context suffix case to one key', () => {
     expect(normalizeRouteLookupId('sol[1M]')).toBe('sol');
-    expect(normalizeRouteLookupId('models/sol[1m]')).toBe('sol');
   });
 });
 

@@ -195,7 +195,7 @@ export function createGatewayModelCatalog(
 /** Model id to send upstream (OpenCode / provider API), not the gateway alias. */
 export function upstreamModelId(model: ServerModelInfo): string {
   const id = model.upstreamModelId ?? model.id;
-  // Claude Code uses a [1m] suffix for 1M context with third-party APIs; Vertex ids omit it.
+  // Claude Code uses a [1m] suffix for 1M context with third-party APIs.
   return id.replace(/\[1m\]$/i, '');
 }
 

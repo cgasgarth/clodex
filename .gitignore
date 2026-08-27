@@ -10,16 +10,13 @@ npm-debug.log*
 coverage/
 *.tsbuildinfo
 spike/
-vertex-models.json
 
 # IDE / Editor folders
 .vscode/
 .idea/
-.cursor/
 
 # Local agent planning / logs
 .claude/
-.gemini/
 .planning/
 ANTIGRAVITY-DEBUG-SESSION.md
 

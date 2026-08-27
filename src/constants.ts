@@ -45,7 +45,4 @@ export const MAX_MODEL_CATALOG = 20;
 /** Default TCP port for `clodex server` (endpoint and proxy modes). Override with --port. */
 export const DEFAULT_SERVER_PORT = 17645;
 
-/** Vercel AI SDK package for Anthropic Claude models on Google Vertex AI (ADC auth). */
-export const VERTEX_ANTHROPIC_NPM = '@ai-sdk/google-vertex/anthropic';
-
 export const VERSION = pkg.version;

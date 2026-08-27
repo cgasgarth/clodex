@@ -4,7 +4,6 @@ import { shouldHideModel, type CompatibilityAgent } from '../models/compatibilit
 import { deriveBrand } from '../models/types.js';
 import { resolveContextWindow } from '../models/context-window.js';
 import type { LocalProvider, LocalProviderModel } from '../types.js';
-import { normalizeGoogleDisplayName, normalizeGoogleModelId } from './google-model-id.js';
 import { findModelsDevModel } from './models-dev.js';
 import type { CachedModel, ProviderRegistry, RegistryProvider } from './types.js';
 import { isValidProviderId } from './validate.js';
@@ -18,6 +17,7 @@ function resolveEndpoint(
   apiUrl: string,
 ): { format: 'anthropic' | 'openai'; baseUrl?: string; completionsUrl?: string } | null {
   if (!npm) return null;
+  if (npm.startsWith('@ai-sdk/google')) return null;
   if (npm === '@ai-sdk/anthropic') {
     return {
       format: 'anthropic',
@@ -55,17 +55,16 @@ export function cachedModelToLocal(
   if (endpoint === null) return null;
 
   const modelsDev = findModelsDevModel(provider.id, cached.id);
-  const { id } = normalizeGoogleModelId(cached.id, npm);
-  const normalizedUpstream = normalizeGoogleModelId(cached.upstreamModelId ?? cached.id, npm).upstreamModelId;
-  const family = npm === '@ai-sdk/google' ? (id.split(/[-/:]/)[0] ?? id) : (cached.family ?? '');
+  const id = cached.id;
+  const family = cached.family ?? '';
 
   return {
     id,
-    name: npm === '@ai-sdk/google' ? normalizeGoogleDisplayName(cached.name, id) : cached.name,
+    name: cached.name,
     family,
-    brand: npm === '@ai-sdk/google' ? deriveBrand(family) : (cached.brand ?? deriveBrand(cached.family ?? '')),
+    brand: cached.brand ?? deriveBrand(family),
     modelFormat: (cached.modelFormat === 'anthropic' || cached.modelFormat === 'openai' ? cached.modelFormat : undefined) ?? endpoint.format,
-    upstreamModelId: normalizedUpstream,
+    upstreamModelId: cached.upstreamModelId ?? cached.id,
     baseUrl: endpoint.baseUrl,
     completionsUrl: endpoint.completionsUrl,
     npm: npm || undefined,

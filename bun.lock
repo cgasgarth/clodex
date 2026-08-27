@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "@bman654/clodex",
+      "name": "@cgasgarth/clodex",
       "dependencies": {
         "@ai-sdk/anthropic": "4.0.42",
         "@ai-sdk/openai": "4.0.47",

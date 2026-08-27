@@ -434,12 +434,8 @@ function thinkingToSdkPart(
   if (npm === '@ai-sdk/openai' && !block.signature && !text.trim()) return null;
 
   const part: ReasoningPart = { type: 'reasoning', text };
-  if (block.signature) {
-    if (npm === '@ai-sdk/google') {
-      part.providerOptions = { google: { thoughtSignature: block.signature } };
-    } else if (npm === '@ai-sdk/openai' || npm === '@ai-sdk/openai-compatible') {
-      part.providerOptions = { openai: { reasoningEncryptedContent: block.signature } };
-    }
+  if (block.signature && (npm === '@ai-sdk/openai' || npm === '@ai-sdk/openai-compatible')) {
+    part.providerOptions = { openai: { reasoningEncryptedContent: block.signature } };
   }
   return part;
 }
@@ -554,7 +550,6 @@ function translateAssistantBlocks(
   blocks: AnthropicBlock[],
   npm: string,
 ): ModelMessage[] {
-  const isGoogle = npm === '@ai-sdk/google';
   const parts = blocks.flatMap<SdkAssistantPart>(block => {
     if (block.type === 'text') return [{ type: 'text', text: block.text ?? '' }];
     if (block.type === 'thinking') {
@@ -562,16 +557,13 @@ function translateAssistantBlocks(
       return reasoning ? [reasoning] : [];
     }
     if (block.type !== 'tool_use' || !block.id) return [];
-    const { rawId, thoughtSignature } = splitToolUseId(block.id);
+    const { rawId } = splitToolUseId(block.id);
     const toolCall: ToolCallPart = {
       type: 'tool-call',
       toolCallId: rawId,
       toolName: block.name ?? 'unknown',
       input: block.input ?? {},
     };
-    if (thoughtSignature && isGoogle) {
-      toolCall.providerOptions = { google: { thoughtSignature } };
-    }
     return [toolCall];
   });
   return parts.length > 0

@@ -64,18 +64,18 @@ describe('addFavorite', () => {
 
   it('appends to the end of the list', () => {
     const list = [fav('groq', 'a'), fav('deepseek', 'b')];
-    const result = addFavorite(list, fav('google', 'c'));
+    const result = addFavorite(list, fav('mistral', 'c'));
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(result.list).toEqual([fav('groq', 'a'), fav('deepseek', 'b'), fav('google', 'c')]);
+      expect(result.list).toEqual([fav('groq', 'a'), fav('deepseek', 'b'), fav('mistral', 'c')]);
     }
   });
 });
 
 describe('removeFavorite', () => {
   it('removes the matching entry', () => {
-    const list = [fav('groq', 'a'), fav('deepseek', 'b'), fav('google', 'c')];
-    expect(removeFavorite(list, fav('deepseek', 'b'))).toEqual([fav('groq', 'a'), fav('google', 'c')]);
+    const list = [fav('groq', 'a'), fav('deepseek', 'b'), fav('mistral', 'c')];
+    expect(removeFavorite(list, fav('deepseek', 'b'))).toEqual([fav('groq', 'a'), fav('mistral', 'c')]);
   });
 
   it('returns the list unchanged when entry not present', () => {
