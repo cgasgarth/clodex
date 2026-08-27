@@ -25,7 +25,7 @@ describe('gateway id masking', () => {
   });
 
   it('is self-inverse', () => {
-    const original = 'anthropic-google__gemini-3.5-flash';
+    const original = 'anthropic-xai-oauth__grok-4.6';
     const masked = maskGatewayModelId(original);
     expect(unmaskGatewayModelId(masked)).toBe(original);
   });

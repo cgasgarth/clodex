@@ -69,7 +69,6 @@ const TEMPLATE_TO_PRICING_PLATFORM: TemplatePricingPlatformMap = {
   perplexity: 'perplexity',
   cohere: 'cohere',
   openai: 'openai',
-  google: 'google_ai_studio',
   alibaba: 'alibaba',
   openrouter: 'openrouter',
   anthropic: 'anthropic',

@@ -62,13 +62,13 @@ describe('findBinaryOnPath', () => {
   });
 
   it('prefers .cmd wrappers on Windows', () => {
-    const result = findBinaryOnPath('gemini', [], {
-      runWhich: () => 'C:\\bin\\gemini\nC:\\bin\\gemini.cmd\n',
+    const result = findBinaryOnPath('codex', [], {
+      runWhich: () => 'C:\\bin\\codex\nC:\\bin\\codex.cmd\n',
       exists: () => true,
       isWindows: true,
     });
 
-    expect(result).toBe('C:\\bin\\gemini.cmd');
+    expect(result).toBe('C:\\bin\\codex.cmd');
   });
 
   it('never shell-interprets the binary name in the default which lookup', () => {

@@ -162,7 +162,7 @@ describe('server model catalog', () => {
     expect(catalog.get('gpt-5')).toMatchObject({ id: 'gpt-5', providerId: 'openai' });
   });
 
-  it('strips [1m] suffix for upstream Vertex model ids', () => {
+  it('strips [1m] suffix from upstream model ids', () => {
     expect(upstreamModelId({
       ...models[0]!,
       id: 'claude-sonnet-4-6[1m]',

@@ -1,6 +1,6 @@
 # Clodex
 
-[![npm version](https://img.shields.io/npm/v/%40bman654%2Fclodex.svg)](https://www.npmjs.com/package/@bman654/clodex)
+[![npm version](https://img.shields.io/npm/v/%40cgasgarth%2Fclodex.svg)](https://www.npmjs.com/package/@cgasgarth/clodex)
 
 Clodex runs OpenAI Codex and Grok 4.6 models in the unmodified Claude Code
 client. One local daemon provides the Anthropic-compatible endpoint, model
@@ -11,15 +11,12 @@ Claude Code keeps its normal terminal UI, tools, skills, hooks, MCPs, sessions,
 subagents, workflows, and agent teams. Clodex does not patch the Claude binary
 or pin a Claude Code version.
 
-> Clodex is a trimmed fork of [relay-ai](https://github.com/jacob-bd/relay-ai)
-> with the full commit history preserved.
-
 ## Install
 
 Clodex targets Bun 1.4.0.
 
 ```bash
-bun add --global @bman654/clodex
+bun add --global @cgasgarth/clodex
 clodex providers auth openai
 # Optional SuperGrok subscription:
 # clodex providers auth xai
@@ -266,9 +263,3 @@ options.
   not change its displayed context limit.
 - An oversized legacy transcript without a matching native checkpoint may need
   a new session from a portable handoff.
-
-Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md).
-
-## License
-
-MIT — see [LICENSE](LICENSE).

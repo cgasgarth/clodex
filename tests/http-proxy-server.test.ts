@@ -1076,10 +1076,10 @@ it('preserves an existing custom CA in the child trust bundle', () => {
         { model: 'missing-route', path: '/v1/messages' },
         { model: 'missing-route[1m]', path: '/v1/messages' },
         { model: 'missing-route[1M]', path: '/v1/messages' },
-        { model: 'models/missing-route[1m]', path: '/v1/messages' },
-        { model: 'models/clodex:test:unavailable-model[1M]', path: '/v1/messages' },
+        { model: 'missing-route[1m]', path: '/v1/messages' },
+        { model: 'clodex:test:unavailable-model[1M]', path: '/v1/messages' },
         { model: 'missing-route', path: '/v1/messages/count_tokens' },
-        { model: 'models/clodex:test:unavailable-model[1M]', path: '/v1/messages/count_tokens' },
+        { model: 'clodex:test:unavailable-model[1M]', path: '/v1/messages/count_tokens' },
       ];
       for (const testCase of rejectedCases) {
         const response = await requestMitm(

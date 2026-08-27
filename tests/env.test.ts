@@ -185,8 +185,8 @@ describe('buildChildEnv', () => {
   });
 
   it('appends [1m] for third-party models with a 1M context', () => {
-    const env = buildChildEnv(UPSTREAM_URL, 'gemini-3.5-flash', 'my-key', 12345, 1_000_000);
-    expect(env['ANTHROPIC_MODEL']).toBe('gemini-3.5-flash[1m]');
+    const env = buildChildEnv(UPSTREAM_URL, 'custom-large', 'my-key', 12345, 1_000_000);
+    expect(env['ANTHROPIC_MODEL']).toBe('custom-large[1m]');
     expect(env['CLAUDE_CODE_MAX_CONTEXT_TOKENS']).toBe('1000000');
   });
 
@@ -231,7 +231,7 @@ describe('buildChildEnv', () => {
   });
 
   it('restores first-party-like Claude Code behavior for proxy/gateway routes', () => {
-    const env = buildChildEnv(UPSTREAM_URL, 'gemini-3.5-flash', 'my-key', 12345);
+    const env = buildChildEnv(UPSTREAM_URL, 'custom-model', 'my-key', 12345);
     expect(env['ENABLE_TOOL_SEARCH']).toBe('true');
     expect(env['CLAUDE_CODE_SIMPLE_SYSTEM_PROMPT']).toBe('0');
     expect(env['CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK']).toBe('1');

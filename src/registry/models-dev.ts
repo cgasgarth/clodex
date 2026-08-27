@@ -73,7 +73,6 @@ let memoryCacheMtime = 0;
 
 /** Registry / OpenCode provider id → models.dev top-level key */
 const REGISTRY_TO_MODELS_DEV: RegistryModelsDevMap = {
-  google: 'google',
   openai: 'openai',
   groq: 'groq',
   mistral: 'mistral',

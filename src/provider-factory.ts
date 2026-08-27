@@ -5,7 +5,7 @@ import type { LanguageModel } from 'ai';
 import { wrapLanguageModel, extractReasoningMiddleware } from 'ai';
 import type { FetchFunction, ProviderOptions } from '@ai-sdk/provider-utils';
 import type { ProviderDataValue } from './types.js';
-import { VERTEX_ANTHROPIC_NPM, CODEX_RESPONSES_LITE_VERSION, CODEX_RESPONSES_LITE_WS_URL } from './constants.js';
+import { CODEX_RESPONSES_LITE_VERSION, CODEX_RESPONSES_LITE_WS_URL } from './constants.js';
 import { extractOpenAiAccountId } from './oauth/openai.js';
 import {
   createResponsesWebSocketFetch,
@@ -94,11 +94,6 @@ export function shouldUseOpenAiResponsesEndpoint(modelId: string): boolean {
   return !OPENAI_CHAT_COMPLETIONS_ONLY.has(modelId.toLowerCase());
 }
 
-interface VertexProviderConfig {
-  project: string;
-  location: string;
-}
-
 export interface ProviderModelSpec {
   /** OpenCode `api.npm` package, e.g. `@ai-sdk/xai`. */
   npm: string;
@@ -112,8 +107,6 @@ export interface ProviderModelSpec {
   authType?: 'api' | 'oauth' | 'none';
   oauthAccountId?: string;
   providerData?: Record<string, ProviderDataValue>;
-  /** Google Vertex AI — uses Application Default Credentials, not apiKey. */
-  vertex?: VertexProviderConfig;
   /** Static headers sent on every upstream request (e.g. a plan/auth-tracking header a custom endpoint requires). */
   headers?: Record<string, string>;
   /** Backend capability: model requires the Responses-Lite request shape (x-openai-internal-codex-responses-lite). */
@@ -190,6 +183,9 @@ export async function createLanguageModel(
   dependencies: ProviderFactoryDependencies = {},
 ): Promise<LanguageModel> {
   const { npm, modelId, apiKey, baseURL } = spec;
+  if (npm.startsWith('@ai-sdk/google')) {
+    throw new Error('Google model providers are not supported');
+  }
 
   if (npm === '@ai-sdk/openai') {
     const createOpenAI = dependencies.createOpenAI
@@ -343,7 +339,6 @@ type ReasoningWireFormat =
   | { kind: 'openrouter-reasoning' }
   | { kind: 'openai-reasoning-effort' }
   | { kind: 'anthropic-thinking' }
-  | { kind: 'google-thinking-config' }
   | { kind: 'mistral-reasoning-effort' }
   | { kind: 'deepseek-thinking' };
 
@@ -374,7 +369,6 @@ export interface ReasoningCapabilities {
 const ANTHROPIC_EFFORT_LEVELS = ['low', 'medium', 'high'] as const;
 const OPENAI_EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh'] as const;
 const GPT_56_EFFORT_LEVELS = ['none', 'low', 'medium', 'high', 'xhigh', 'max'] as const;
-const GEMINI_EFFORT_LEVELS = ['low', 'medium', 'high'] as const;
 const MISTRAL_EFFORT_LEVELS = ['high', 'off'] as const;
 const XAI_EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh'] as const;
 const OPENROUTER_EFFORT_LEVELS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'] as const;
@@ -391,16 +385,6 @@ const EMPTY_REASONING: ReasoningCapabilities = {
   source: 'none',
   confidence: 'inferred',
 };
-
-const GEMINI_25_BUDGETS = new Map<string, number>(Object.entries({
-  low: 1024,
-  medium: 4096,
-  high: 8192,
-  xhigh: 16384,
-  max: 16384,
-  minimal: 512,
-  none: 0,
-}));
 
 function includesString<const Values extends readonly string[]>(
   values: Values,
@@ -419,18 +403,6 @@ function isClaudeReasoningModel(modelId: string): boolean {
   const major = Number(m[1]);
   const minor = Number(m[2]);
   return major > 4 || (major === 4 && minor >= 6);
-}
-
-function isGeminiReasoningModel(modelId: string): boolean {
-  const lower = modelId.toLowerCase();
-  return lower.startsWith('gemini-2.5-')
-    || lower.startsWith('gemini-3')
-    || lower.startsWith('gemini-3.');
-}
-
-function isGemini3Model(modelId: string): boolean {
-  const lower = modelId.toLowerCase();
-  return lower.startsWith('gemini-3') || lower.startsWith('gemini-3.');
 }
 
 function isMistralReasoningModel(modelId: string): boolean {
@@ -625,33 +597,6 @@ function mapCodexEffortToXai(effort: string): string | undefined {
   }
 }
 
-function mapCodexEffortToGeminiLevel(effort: string): 'low' | 'medium' | 'high' | undefined {
-  switch (effort) {
-    case 'none':
-    case 'minimal':
-    case 'low':
-      return 'low';
-    case 'medium':
-      return 'medium';
-    case 'high':
-    case 'xhigh':
-    case 'max':
-      return 'high';
-    default:
-      return includesString(GEMINI_EFFORT_LEVELS, effort)
-        ? effort
-        : undefined;
-  }
-}
-
-function mapCodexEffortToGeminiBudget(effort: string): number | undefined {
-  const direct = GEMINI_25_BUDGETS.get(effort);
-  if (direct !== undefined) return direct > 0 ? direct : undefined;
-  const level = mapCodexEffortToGeminiLevel(effort);
-  if (!level) return undefined;
-  return GEMINI_25_BUDGETS.get(level);
-}
-
 /** Per-model reasoning UI + wire metadata for Codex catalog and adapters. */
 export function getReasoningCapabilities(
   npm: string,
@@ -691,21 +636,6 @@ export function getReasoningCapabilities(
         source: prefersResponses ? 'provider-rule' : 'model-metadata',
         confidence: prefersResponses ? 'documented' : 'inferred',
         wireFormat: { kind: 'openai-reasoning-effort' },
-      };
-    }
-    return EMPTY_REASONING;
-  }
-
-  if (npm === '@ai-sdk/google' || id.startsWith('gemini-')) {
-    if (isGeminiReasoningModel(modelId)) {
-      return {
-        levels: [...GEMINI_EFFORT_LEVELS],
-        defaultLevel: 'medium',
-        supportsSummaries: true,
-        mode: 'controllable',
-        source: 'provider-rule',
-        confidence: 'documented',
-        wireFormat: { kind: 'google-thinking-config' },
       };
     }
     return EMPTY_REASONING;
@@ -851,25 +781,11 @@ export function effortProviderOptions(
     return reasoningEffort ? { xai: { reasoningEffort } } : undefined;
   }
 
-  if (npm === '@ai-sdk/anthropic' || npm === VERTEX_ANTHROPIC_NPM) {
+  if (npm === '@ai-sdk/anthropic') {
     if (!modelId || !isClaudeReasoningModel(modelId)) return undefined;
     const mapped = mapCodexEffortToAnthropic(effort);
     return mapped
       ? { anthropic: { thinking: { type: 'adaptive', effort: mapped } } }
-      : undefined;
-  }
-
-  if (npm === '@ai-sdk/google') {
-    const id = modelId ?? '';
-    if (isGemini3Model(id)) {
-      const thinkingLevel = mapCodexEffortToGeminiLevel(effort);
-      return thinkingLevel
-        ? { google: { thinkingConfig: { thinkingLevel, includeThoughts: true } } }
-        : undefined;
-    }
-    const thinkingBudget = mapCodexEffortToGeminiBudget(effort);
-    return thinkingBudget
-      ? { google: { thinkingConfig: { thinkingBudget, includeThoughts: true } } }
       : undefined;
   }
 
@@ -937,9 +853,6 @@ export function deepMergeProviderOptions(
 
 /** Per-provider providerOptions to request reasoning/thinking output. */
 export function thinkingProviderOptions(npm: string): ProviderOptions | undefined {
-  if (npm === '@ai-sdk/google') {
-    return { google: { thinkingConfig: { includeThoughts: true } } };
-  }
   // Responses API: request encrypted reasoning blobs for multi-turn round-trip
   // (proxy owns conversation state — store:false + echo via thinking.signature).
   if (npm === '@ai-sdk/openai') {

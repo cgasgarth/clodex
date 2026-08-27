@@ -11,7 +11,6 @@ import {
   shouldUseOpenAiResponsesEndpoint,
   thinkingProviderOptions,
 } from '../src/provider-factory.js';
-import { VERTEX_ANTHROPIC_NPM } from '../src/constants.js';
 import { createXaiSubscriptionFetch } from '../src/oauth/xai-proxy.js';
 import { restoreTestGlobals, stubTestGlobal } from './test-helpers.js';
 
@@ -78,7 +77,6 @@ describe('isSdkMigratedNpm', () => {
     expect(isSdkMigratedNpm('@ai-sdk/perplexity')).toBe(true);
     expect(isSdkMigratedNpm('@openrouter/ai-sdk-provider')).toBe(true);
     expect(isSdkMigratedNpm('gitlab-ai-provider')).toBe(true);
-    expect(isSdkMigratedNpm(VERTEX_ANTHROPIC_NPM)).toBe(true);
   });
 
   it('returns false for anthropic passthrough and missing npm', () => {
@@ -137,13 +135,6 @@ describe('getReasoningCapabilities', () => {
     expect(caps.supportsSummaries).toBe(true);
   });
 
-  it('returns anthropic levels for Vertex Claude models', () => {
-    const caps = getReasoningCapabilities(VERTEX_ANTHROPIC_NPM, 'claude-sonnet-4-6');
-    expect(caps.levels).toEqual(['low', 'medium', 'high']);
-    expect(caps.defaultLevel).toBe('high');
-    expect(caps.wireFormat).toEqual({ kind: 'anthropic-thinking' });
-  });
-
   it('returns empty levels for non-reasoning anthropic model', () => {
     const caps = getReasoningCapabilities('@ai-sdk/anthropic', 'claude-haiku-4-5-20251001');
     expect(caps.levels).toEqual([]);
@@ -155,12 +146,6 @@ describe('getReasoningCapabilities', () => {
     const caps = getReasoningCapabilities('@ai-sdk/mistral', 'mistral-large');
     expect(caps.levels).toEqual(['high', 'off']);
     expect(caps.defaultLevel).toBe('high');
-  });
-
-  it('returns budget-mapped levels for gemini-2.5-pro', () => {
-    const caps = getReasoningCapabilities('@ai-sdk/google', 'gemini-2.5-pro');
-    expect(caps.levels).toEqual(['low', 'medium', 'high']);
-    expect(caps.defaultLevel).toBe('medium');
   });
 
   it('returns empty levels for unknown openai-compatible models', () => {
@@ -253,17 +238,6 @@ describe('effortProviderOptions + deepMergeProviderOptions', () => {
     });
   });
 
-  it('merges Google thinking + effort budget', () => {
-    const merged = deepMergeProviderOptions(
-      thinkingProviderOptions('@ai-sdk/google'),
-      effortProviderOptions('@ai-sdk/google', 'high', 'gemini-2.5-pro'),
-    );
-    expect(merged?.google?.thinkingConfig).toMatchObject({
-      includeThoughts: true,
-      thinkingBudget: 8192,
-    });
-  });
-
   it('keeps Grok 4.6 reasoning replay private and preserves each effort level', () => {
     expect(thinkingProviderOptions('@ai-sdk/xai')).toEqual({ xai: { store: false } });
     for (const effort of ['low', 'medium', 'high', 'xhigh']) {
@@ -273,11 +247,6 @@ describe('effortProviderOptions + deepMergeProviderOptions', () => {
     }
   });
 
-  it('maps Vertex Claude effort to Anthropic thinking options', () => {
-    expect(effortProviderOptions(VERTEX_ANTHROPIC_NPM, 'medium', 'claude-sonnet-4-6')).toEqual({
-      anthropic: { thinking: { type: 'adaptive', effort: 'medium' } },
-    });
-  });
 });
 
 describe('createLanguageModel', () => {

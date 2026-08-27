@@ -4,10 +4,9 @@ import { getTemplateById, type ProviderModelSource } from '../providers/template
 import { resolveProviderTemplate } from './resolve-template.js';
 import type { RegistryProvider } from './types.js';
 
-const MANUAL_ONLY_TEMPLATE_IDS = new Set(['vertex', 'bedrock', 'azure']);
-const MANUAL_ONLY_PROVIDER_IDS = new Set(['google-vertex', 'vertex', 'bedrock', 'azure']);
+const MANUAL_ONLY_TEMPLATE_IDS = new Set(['bedrock', 'azure']);
+const MANUAL_ONLY_PROVIDER_IDS = new Set(['bedrock', 'azure']);
 const MANUAL_ONLY_NPMS = new Set([
-  '@ai-sdk/google-vertex',
   '@ai-sdk/amazon-bedrock',
   '@ai-sdk/azure',
 ]);

@@ -20,7 +20,7 @@ const RUNTIME_ARTIFACTS = [
   'worker.js',
   'secondwind-worker.js',
 ];
-const PACKAGE_NAME = '@bman654/clodex';
+const PACKAGE_NAME = '@cgasgarth/clodex';
 
 interface GlobalManifest {
   dependencies?: unknown;
@@ -113,7 +113,7 @@ export async function installGlobalCheckout(
       '--global',
       installedArchive,
     ], repoRoot);
-    await verifyArtifacts(repoRoot, join(globalRoot, 'node_modules', '@bman654', 'clodex'));
+    await verifyArtifacts(repoRoot, join(globalRoot, 'node_modules', '@cgasgarth', 'clodex'));
     console.log('Installed the current Clodex checkout globally and verified runtime artifacts.');
   } finally {
     await rm(packDirectory, { recursive: true, force: true });

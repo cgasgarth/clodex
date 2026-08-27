@@ -10,9 +10,7 @@ interface ProxyPayload {
 export function grabRoundTripSignature(
   providerMetadata: ProviderMetadata | undefined,
 ): string | undefined {
-  const thoughtSignature = providerMetadata?.google?.thoughtSignature
-    ?? providerMetadata?.google?.thought_signature
-    ?? providerMetadata?.openai?.reasoningEncryptedContent;
+  const thoughtSignature = providerMetadata?.openai?.reasoningEncryptedContent;
   return isString(thoughtSignature) ? thoughtSignature : undefined;
 }
 

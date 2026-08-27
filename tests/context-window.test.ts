@@ -8,8 +8,6 @@ import {
 
 describe('contextWindowFromHeuristics', () => {
   it.each([
-    ['gemini-3.5-flash', 1_000_000],
-    ['gemini-2.5-pro', 2_000_000],
     ['claude-sonnet-4-6', 1_000_000],
     ['claude-opus-4-6', 1_000_000],
     ['claude-haiku-4-5', 200_000],
@@ -42,10 +40,10 @@ describe('buildContextWindowIndex', () => {
 
   it('uses max across providers when opencode keys are absent', () => {
     const index = buildContextWindowIndex({
-      frogbot: { models: { 'gemini-2.5-flash': { limit: { context: 200_000 } } } },
-      google: { models: { 'gemini-2.5-flash': { limit: { context: 1_048_576 } } } },
+      frogbot: { models: { 'custom-model': { limit: { context: 200_000 } } } },
+      gateway: { models: { 'custom-model': { limit: { context: 1_048_576 } } } },
     });
-    expect(index.get('gemini-2.5-flash')).toBe(1_048_576);
+    expect(index.get('custom-model')).toBe(1_048_576);
   });
 
   it('ignores entries without limit.context', () => {
@@ -63,8 +61,8 @@ describe('resolveContextWindow', () => {
 
   it('uses cache index values when present in fixture', () => {
     const index = buildContextWindowIndex({
-      opencode: { models: { 'gemini-3.5-flash': { limit: { context: 1_048_576 } } } },
+      opencode: { models: { 'custom-large': { limit: { context: 1_048_576 } } } },
     });
-    expect(index.get('gemini-3.5-flash')).toBe(1_048_576);
+    expect(index.get('custom-large')).toBe(1_048_576);
   });
 });

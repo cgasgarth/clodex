@@ -1,12 +1,11 @@
 {
-  "name": "@bman654/clodex",
+  "name": "@cgasgarth/clodex",
   "version": "3.1.0",
   "publishConfig": {
     "access": "public"
   },
   "description": "Bridge Claude Code to OpenAI and Grok models — OpenAI API key, ChatGPT OAuth, or SuperGrok OAuth, with prompt caching, auto-compaction, and model switching",
-  "author": "Brandon Wallace",
-  "license": "MIT",
+  "author": "Connor Gasgarth",
   "keywords": [
     "claude",
     "claude-code",

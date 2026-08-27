@@ -103,7 +103,7 @@ describe('parseArgs', () => {
   });
 
   it('rejects stripped commands', () => {
-    for (const cmd of ['claude', 'ui', 'gemini', 'codex', 'codex-app', 'chatgpt', 'agy', 'antigravity', 'antigravity-ide', 'claude-app']) {
+    for (const cmd of ['claude', 'ui', 'codex', 'codex-app', 'chatgpt', 'agy', 'antigravity', 'antigravity-ide', 'claude-app']) {
       expect(parseArgs([cmd]).error, cmd).toBe(`Unknown command: ${cmd}`);
     }
   });
@@ -129,10 +129,8 @@ describe('help text', () => {
   it('mentions no stripped features anywhere in help', () => {
     for (const help of helps) {
       expect(help).not.toContain('antigravity');
-      expect(help).not.toContain('Gemini');
       expect(help).not.toContain('OpenCode');
       expect(help).not.toContain('Zen');
-      expect(help).not.toContain('--vertex');
       expect(help).not.toContain('subscription tier');
     }
   });
@@ -169,9 +167,9 @@ describe('main dispatch', () => {
   it('prints root help for unknown commands and returns 1', async () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => {});
     const log = vi.spyOn(console, 'log').mockImplementation(() => {});
-    const code = await main(['gemini']);
+    const code = await main(['nope']);
     expect(code).toBe(1);
-    expect(error.mock.calls.some(call => String(call[0]).includes('Unknown command: gemini'))).toBe(true);
+    expect(error.mock.calls.some(call => String(call[0]).includes('Unknown command: nope'))).toBe(true);
     expect(log.mock.calls.some(call => String(call[0]).includes('clodex'))).toBe(true);
   });
 
