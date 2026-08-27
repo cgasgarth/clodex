@@ -64,29 +64,29 @@ your absolute home path. Keep other settings and hooks that you already use.
     "ANTHROPIC_API_KEY": "clodex",
     "CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK": "1",
     "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY": "1",
-    "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "1048576",
+    "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "450000",
+    "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "1000000",
     "CLAUDE_CODE_PROCESS_WRAPPER": "/Users/you/.bun/bin/clodex-claude",
     "CLAUDE_CODE_SIMPLE_SYSTEM_PROMPT": "0",
     "CLAUDE_STREAM_IDLE_TIMEOUT_MS": "900000",
     "CLODEX_REQUIRE_SERVER": "1",
-    "DISABLE_AUTO_COMPACT": "1",
     "ENABLE_TOOL_SEARCH": "true"
   },
   "model": "sol",
   "modelPicker": {
     "options": [
       {
-        "model": "sol",
+        "model": "sol[1m]",
         "label": "sol",
         "description": "GPT-5.6 Sol"
       },
       {
-        "model": "luna",
+        "model": "luna[1m]",
         "label": "luna",
         "description": "GPT-5.6 Luna"
       },
       {
-        "model": "terra",
+        "model": "terra[1m]",
         "label": "terra",
         "description": "GPT-5.6 Terra"
       }
@@ -124,9 +124,20 @@ hook stops Clodex. The internal
 `clodex-claude` process wrapper is only for Claude-spawned child processes; it
 is not the terminal startup command.
 
-`DISABLE_AUTO_COMPACT` disables Claude Code's separate transcript summarizer.
-Clodex native compaction owns automatic model-side context reduction. Manual
-`/compact` remains available.
+`CLAUDE_CODE_AUTO_COMPACT_WINDOW` uses 90% of the smallest enabled provider
+context window. With Grok 4.6 enabled, this is 450,000 tokens. Claude Code keeps
+native auto-compaction on and compacts before Grok's 500,000-token hard limit.
+Clodex native compaction for ChatGPT/Codex OAuth runs at its lower threshold
+first, so the Claude compactor normally does not trigger for those models.
+Manual `/compact` remains available.
+
+Claude Code falls back to 200,000 tokens for unknown third-party model ids and
+does not support an exact 500,000-token context identity with auto-compaction.
+Clodex therefore gives every enabled model above 200,000 tokens a `[1m]` client
+identity and sets the shared Claude-facing window to 1M. This also keeps direct
+commands such as `/model sol` from falling back to 200K when Claude saves the
+literal alias. `CLAUDE_CODE_AUTO_COMPACT_WINDOW` supplies the real shared safety
+capacity. The status denominator can show 1M for Grok, but Grok compacts at 450K.
 
 After this setup, use only:
 
@@ -136,8 +147,9 @@ clodex        # start if needed and open the TUI dashboard
 clodex start  # start without opening the dashboard
 ```
 
-`clodex models` updates Claude's native `modelPicker.options` after catalog
-changes. `/model` selects the configured aliases in Claude Code.
+`clodex models` updates Claude's native `modelPicker.options` and the shared
+auto-compaction window after catalog changes. `/model` selects the configured
+aliases in Claude Code.
 
 ## Native Codex compaction
 

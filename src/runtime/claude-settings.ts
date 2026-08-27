@@ -1,4 +1,8 @@
-import { normalizeRouteLookupId } from '../models/context-model-id.js';
+import {
+  normalizeRouteLookupId,
+  stripOneMContextSuffix,
+} from '../models/context-model-id.js';
+import { DEFAULT_CONTEXT_WINDOW } from '../models/context-window.js';
 import { mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -11,9 +15,13 @@ interface ClaudeSettings {
   [key: string]: ClaudeSettingValue;
 }
 
+const AUTO_COMPACT_CONTEXT_RATIO = 0.9;
+const CLAUDE_ONE_M_CONTEXT_WINDOW = 1_000_000;
+
 interface ModelPickerRoute {
   aliasId: string;
   displayName: string;
+  contextWindow?: number;
 }
 
 interface ModelPickerAlias {
@@ -23,6 +31,7 @@ interface ModelPickerAlias {
 }
 
 export interface ClaudeModelPickerOption {
+  [key: string]: string;
   model: string;
   label: string;
   description: string;
@@ -44,15 +53,23 @@ export function buildClaudeModelPickerOptions(
     const route = routesById.get(routeKey);
     if (!route || representedRoutes.has(routeKey)) continue;
     representedRoutes.add(routeKey);
-    options.push({ model: alias.name, label: alias.name, description: route.displayName });
+    const model = route.contextWindow !== undefined
+      && route.contextWindow > DEFAULT_CONTEXT_WINDOW
+      ? `${stripOneMContextSuffix(alias.name)}[1m]`
+      : alias.name;
+    options.push({ model, label: alias.name, description: route.displayName });
   }
 
   for (const route of routes) {
     const routeKey = normalizeRouteLookupId(route.aliasId);
     if (representedRoutes.has(routeKey)) continue;
     representedRoutes.add(routeKey);
+    const model = route.contextWindow !== undefined
+      && route.contextWindow > DEFAULT_CONTEXT_WINDOW
+      ? `${stripOneMContextSuffix(route.aliasId)}[1m]`
+      : route.aliasId;
     options.push({
-      model: route.aliasId,
+      model,
       label: route.displayName,
       description: route.aliasId,
     });
@@ -108,10 +125,43 @@ export function syncClaudeModelPickerSettings(
   const currentPicker = isObject(picker) && !Array.isArray(picker)
     ? picker
     : {};
-  const next = {
+  const contextWindows = routes
+    .map(route => route.contextWindow)
+    .filter((window): window is number => (
+      typeof window === 'number' && Number.isFinite(window) && window > 0
+    ));
+  const autoCompactWindow = contextWindows.length > 0
+    ? Math.floor(Math.min(...contextWindows) * AUTO_COMPACT_CONTEXT_RATIO)
+    : undefined;
+  const claudeContextWindow = contextWindows.some(window => window > DEFAULT_CONTEXT_WINDOW)
+    ? CLAUDE_ONE_M_CONTEXT_WINDOW
+    : DEFAULT_CONTEXT_WINDOW;
+  const currentEnv = current['env'];
+  const nextEnv = isObject(currentEnv) && !Array.isArray(currentEnv)
+    ? { ...currentEnv }
+    : {};
+  if (autoCompactWindow !== undefined) {
+    nextEnv['CLAUDE_CODE_AUTO_COMPACT_WINDOW'] = String(autoCompactWindow);
+    // Claude saves a directly entered `/model sol` as the literal alias and
+    // loses the picker option's `[1m]` context identity. Keep the shared
+    // Claude-facing window explicit so direct aliases do not fall back to
+    // Claude Code's 200K third-party default. AUTO_COMPACT_WINDOW remains the
+    // provider-safe limit for mixed catalogs such as 1M Sol plus 500K Grok.
+    nextEnv['CLAUDE_CODE_MAX_CONTEXT_TOKENS'] = String(claudeContextWindow);
+    delete nextEnv['DISABLE_AUTO_COMPACT'];
+  }
+  const next: ClaudeSettings = {
     ...current,
     modelPicker: { ...currentPicker, options },
   };
+  const currentModel = current['model'];
+  if (isString(currentModel)) {
+    const currentOption = options.find(option => (
+      normalizeRouteLookupId(option.model) === normalizeRouteLookupId(currentModel)
+    ));
+    if (currentOption) next['model'] = currentOption.model;
+  }
+  if (autoCompactWindow !== undefined) next['env'] = nextEnv;
   const currentText = `${JSON.stringify(current, null, 2)}\n`;
   const nextText = `${JSON.stringify(next, null, 2)}\n`;
   if (currentText === nextText) return false;

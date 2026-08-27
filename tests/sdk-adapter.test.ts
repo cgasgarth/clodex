@@ -23,14 +23,6 @@ import {
 } from '../src/sdk-adapter.js';
 import type { JsonObject } from './test-helpers.js';
 
-const OPENAI_STEERING_POLICY_FOR_TESTS = [
-  'The user may send a new message while you are still working. When they do, evaluate whether',
-  'they intended to replace the active request or add to it. If they intended to override or',
-  'replace it, drop the previous work and focus on the new request. If the new message adds to',
-  'unfinished work, address both. If it asks for status or another question, answer it and then',
-  'continue only the work that remains relevant.',
-].join(' ');
-
 function sdkUsage(
   inputTokens: number,
   outputTokens: number,
@@ -201,7 +193,7 @@ describe('translateMessages', () => {
     ]);
   });
 
-  it('maps Claude mid-turn steering to an explicit final user instruction for OpenAI OAuth', () => {
+  it('preserves Claude mid-turn steering text for OpenAI OAuth', () => {
     const queued = 'The user sent a new message while you were working:\n'
       + 'update the pull request description with these results\n\n'
       + 'This is how Claude Code surfaces messages the user sends mid-turn — within the running '
@@ -224,19 +216,27 @@ describe('translateMessages', () => {
       'user',
     ]);
     // SAFETY: The test fixture defines the asserted runtime shape.
-    expect((params.messages[1] as any).content[0].text).toBe([
-      'The user sent this new instruction while the current task was running.',
-      'Treat it as the newest user request and apply it now before continuing earlier work.',
-      'If it replaces, redirects, limits, or stops prior work, follow it immediately.',
-      '',
-      'update the pull request description with these results',
-    ].join('\n'));
-    expect(params.providerOptions?.openai?.instructions).toContain(
-      'If they intended to override or replace it, drop the previous work',
-    );
+    expect((params.messages[1] as any).content[0].text).toBe(queued);
   });
 
-  it('uses one stable steering policy without adding inline control messages', () => {
+  it('preserves Claude task-completion notifications for OpenAI OAuth', () => {
+    const notification = '<system-reminder>\n'
+      + '<task-notification>\n'
+      + '<task-id>agent-42</task-id>\n'
+      + '<status>completed</status>\n'
+      + '<summary>Review finished</summary>\n'
+      + '</task-notification>\n'
+      + '</system-reminder>';
+    const params = translateRequest({
+      model: 'sol',
+      messages: [{ role: 'user', content: notification }],
+    }, '@ai-sdk/openai', { openAiOAuth: true });
+
+    // SAFETY: The test fixture defines the asserted runtime shape.
+    expect((params.messages[0] as any).content[0].text).toBe(notification);
+  });
+
+  it('does not add a steering policy to OpenAI OAuth instructions', () => {
     const params = translateRequest({
       model: 'sol',
       messages: [{ role: 'user', content: 'continue the existing plan' }],
@@ -246,12 +246,10 @@ describe('translateMessages', () => {
     expect((params.messages as any[]).map(message => message.role)).toEqual(['user']);
     // SAFETY: The test fixture defines the asserted runtime shape.
     expect((params.messages[0] as any).content[0].text).toBe('continue the existing plan');
-    expect(params.providerOptions?.openai?.instructions).toContain(
-      'The user may send a new message while you are still working.',
-    );
+    expect(params.providerOptions?.openai?.instructions).toBe('You are a coding assistant.');
   });
 
-  it('puts exact steering wrappers after ordinary content in the same user message', () => {
+  it('keeps Claude text block order unchanged', () => {
     const queued = 'The user sent a new message while you were working:\n'
       + 'focus only on the failing test\n\n'
       + 'This is how Claude Code surfaces messages the user sends mid-turn — within the running '
@@ -270,14 +268,8 @@ describe('translateMessages', () => {
 
     // SAFETY: The test fixture defines the asserted runtime shape.
     expect((params.messages[0] as any).content.map((part: any) => part.text)).toEqual([
+      queued,
       'tool context that arrived in the same boundary',
-      [
-        'The user sent this new instruction while the current task was running.',
-        'Treat it as the newest user request and apply it now before continuing earlier work.',
-        'If it replaces, redirects, limits, or stops prior work, follow it immediately.',
-        '',
-        'focus only on the failing test',
-      ].join('\n'),
     ]);
   });
 
@@ -293,9 +285,7 @@ describe('translateMessages', () => {
     }, '@ai-sdk/openai', { openAiOAuth: true });
 
     // SAFETY: The test fixture defines the asserted runtime shape.
-    expect((params.messages[0] as any).content[0].text).toEndWith(
-      '\n\nactually stop i dont care anymore',
-    );
+    expect((params.messages[0] as any).content[0].text).toBe(queued);
   });
 
   it('preserves wrapper-like text unless the full Claude envelope matches', () => {
@@ -437,10 +427,7 @@ describe('translateRequest', () => {
     }, '@ai-sdk/openai', { openAiOAuth: true });
 
     expect(params.instructions).toBeUndefined();
-    expect(params.providerOptions?.openai?.instructions).toStartWith('You are a coding assistant.');
-    expect(params.providerOptions?.openai?.instructions).toContain(
-      'The user may send a new message while you are still working.',
-    );
+    expect(params.providerOptions?.openai?.instructions).toBe('You are a coding assistant.');
     expect(params.maxOutputTokens).toBeUndefined();
   });
 
@@ -613,9 +600,7 @@ describe('translateRequest', () => {
 
     const oauth = translateRequest(body, '@ai-sdk/openai', { openAiOAuth: true });
     expect(oauth.providerOptions?.openai?.instructions)
-      .toStartWith('You are Claude Code.\nFollow the user instructions.\n');
-    expect(oauth.providerOptions?.openai?.instructions)
-      .toContain('The user may send a new message while you are still working.');
+      .toBe('You are Claude Code.\nFollow the user instructions.');
 
     const changedAttribution = translateRequest({
       ...body,
@@ -782,7 +767,6 @@ describe('translateRequest', () => {
     // SAFETY: The test fixture defines the asserted runtime shape.
     expect((params.providerOptions as any).openai.instructions).toBe(
       'stable Claude instructions\n'
-      + OPENAI_STEERING_POLICY_FOR_TESTS + '\n'
       + '<system-reminder>computer-use is pending</system-reminder>\n'
       + '<system-reminder>playwright is pending</system-reminder>',
     );
