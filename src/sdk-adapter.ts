@@ -306,6 +306,56 @@ function inlineSystemToString(messages: AnthropicMsg[]): string | undefined {
   return text || undefined;
 }
 
+function hasHumanInput(message: AnthropicMsg): boolean {
+  if (message.role !== 'user') return false;
+  if (isString(message.content)) return Boolean(message.content.trim());
+  return message.content.some(block =>
+    block.type === 'image' || (block.type === 'text' && Boolean(block.text?.trim()))
+  );
+}
+
+function queuedTaskEventReinforcement(messages: AnthropicMsg[]): string | undefined {
+  let latestHumanInput = -1;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (hasHumanInput(messages[index]!)) {
+      latestHumanInput = index;
+      break;
+    }
+  }
+
+  const statuses = new Set<string>();
+  for (const message of messages.slice(latestHumanInput + 1)) {
+    if (message.role !== 'system') continue;
+    const text = isString(message.content)
+      ? message.content
+      : message.content
+        .filter(block => block.type === 'text')
+        .map(block => block.text ?? '')
+        .join('\n');
+    if (!text.includes('<task-notification>')) continue;
+    for (const match of text.matchAll(/<status>\s*(completed|failed|stopped)\s*<\/status>/gi)) {
+      statuses.add(match[1]!.toUpperCase());
+    }
+  }
+  if (statuses.size === 0) return undefined;
+
+  const states = [...statuses].join(', ');
+  const instructions = [
+    `CURRENT TASK EVENT: Newly delivered trusted task notifications report: ${states}.`,
+    'These states supersede earlier task-status text. Account for each event before any assistant progress or final text.',
+  ];
+  if (statuses.has('FAILED')) {
+    instructions.push('For failed tasks, do not say they are running, finishing, passed, or completed. State that they failed; inspect their output before naming the cause.');
+  }
+  if (statuses.has('COMPLETED')) {
+    instructions.push('For completed tasks, do not say they are running, waiting, or finishing. State that they completed; inspect their result or output before making detailed claims.');
+  }
+  if (statuses.has('STOPPED')) {
+    instructions.push('For stopped tasks, do not say they are running, waiting, or finishing. State that they stopped.');
+  }
+  return instructions.join(' ');
+}
+
 function joinInstructions(...parts: Array<string | undefined>): string | undefined {
   const present = parts.filter((part): part is string => Boolean(part?.trim()));
   return present.length ? present.join('\n') : undefined;
@@ -682,11 +732,15 @@ export function translateRequest(
   // the MCP tool set is still settling. Other providers retain positional
   // system messages because their semantics can differ.
   const inlineSystem = options?.openAiOAuth ? inlineSystemToString(messages) : undefined;
+  const queuedEventReinforcement = options?.openAiOAuth
+    ? queuedTaskEventReinforcement(messages)
+    : undefined;
   const systemText = options?.openAiOAuth
     ? joinInstructions(
         baseSystem ?? 'You are a coding assistant.',
         OPENAI_OAUTH_QUEUED_EVENT_POLICY,
         inlineSystem,
+        queuedEventReinforcement,
       )
     : joinInstructions(baseSystem, inlineSystem);
   const conversationMessages = options?.openAiOAuth
