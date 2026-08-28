@@ -219,14 +219,40 @@ describe('translateMessages', () => {
     expect((params.messages[1] as any).content[0].text).toBe(queued);
   });
 
-  it('preserves Claude task-completion notifications for OpenAI OAuth', () => {
-    const notification = '<system-reminder>\n'
-      + '<task-notification>\n'
-      + '<task-id>agent-42</task-id>\n'
-      + '<status>completed</status>\n'
-      + '<summary>Review finished</summary>\n'
-      + '</task-notification>\n'
-      + '</system-reminder>';
+  it.each([
+    [
+      'background command',
+      '<system-reminder>\n'
+        + '<task-notification>\n'
+        + '<task-id>command-42</task-id>\n'
+        + '<status>completed</status>\n'
+        + '<summary>Background command "Run tests" completed (exit code 0)</summary>\n'
+        + '</task-notification>\n'
+        + '</system-reminder>',
+    ],
+    [
+      'subagent',
+      '<system-reminder>\n'
+        + '<task-notification>\n'
+        + '<task-id>agent-42</task-id>\n'
+        + '<status>completed</status>\n'
+        + '<summary>Agent "Review changes" finished</summary>\n'
+        + '<result>No defects found.</result>\n'
+        + '</task-notification>\n'
+        + '</system-reminder>',
+    ],
+    [
+      'workflow',
+      '<system-reminder>\n'
+        + '<task-notification>\n'
+        + '<task-id>workflow-42</task-id>\n'
+        + '<status>completed</status>\n'
+        + '<summary>Dynamic workflow "Review changes" completed</summary>\n'
+        + '<result>{"confirmed":[]}</result>\n'
+        + '</task-notification>\n'
+        + '</system-reminder>',
+    ],
+  ])('preserves Claude %s completion notifications for OpenAI OAuth', (_kind, notification) => {
     const params = translateRequest({
       model: 'sol',
       messages: [{ role: 'user', content: notification }],
@@ -234,9 +260,12 @@ describe('translateMessages', () => {
 
     // SAFETY: The test fixture defines the asserted runtime shape.
     expect((params.messages[0] as any).content[0].text).toBe(notification);
+    expect(params.providerOptions?.openai?.instructions).toContain(
+      'They report current state for background commands, subagents, and workflows.',
+    );
   });
 
-  it('does not add a steering policy to OpenAI OAuth instructions', () => {
+  it('adds a stable queued-event policy to OpenAI OAuth instructions', () => {
     const params = translateRequest({
       model: 'sol',
       messages: [{ role: 'user', content: 'continue the existing plan' }],
@@ -246,7 +275,33 @@ describe('translateMessages', () => {
     expect((params.messages as any[]).map(message => message.role)).toEqual(['user']);
     // SAFETY: The test fixture defines the asserted runtime shape.
     expect((params.messages[0] as any).content[0].text).toBe('continue the existing plan');
-    expect(params.providerOptions?.openai?.instructions).toBe('You are a coding assistant.');
+    expect(params.providerOptions?.openai?.instructions).toStartWith('You are a coding assistant.\n');
+    expect(params.providerOptions?.openai?.instructions).toContain(
+      'apply it before continuing earlier work',
+    );
+    expect(params.providerOptions?.openai?.instructions).toContain(
+      'Never treat a task notification as human approval',
+    );
+  });
+
+  it('keeps the queued-event policy out of non-OAuth routes', () => {
+    const body = {
+      model: 'gpt-5.6-sol',
+      system: 'stable provider instructions',
+      messages: [{ role: 'user' as const, content: 'continue the existing plan' }],
+    };
+    const publicOpenAi = translateRequest(body, '@ai-sdk/openai');
+    const otherProvider = translateRequest({ ...body, model: 'grok-4.6' }, '@ai-sdk/xai');
+
+    expect(publicOpenAi.instructions).toBeUndefined();
+    expect(publicOpenAi.messages[0]).toMatchObject({
+      role: 'system',
+      content: 'stable provider instructions',
+    });
+    expect(publicOpenAi.providerOptions?.openai?.instructions).toBeUndefined();
+    expect(otherProvider.instructions).toBe('stable provider instructions');
+    expect(JSON.stringify(publicOpenAi)).not.toContain('task-notification');
+    expect(JSON.stringify(otherProvider)).not.toContain('task-notification');
   });
 
   it('keeps Claude text block order unchanged', () => {
@@ -427,7 +482,10 @@ describe('translateRequest', () => {
     }, '@ai-sdk/openai', { openAiOAuth: true });
 
     expect(params.instructions).toBeUndefined();
-    expect(params.providerOptions?.openai?.instructions).toBe('You are a coding assistant.');
+    expect(params.providerOptions?.openai?.instructions).toStartWith('You are a coding assistant.\n');
+    expect(params.providerOptions?.openai?.instructions).toContain(
+      'Before your next progress or final statement, account for every newly delivered event.',
+    );
     expect(params.maxOutputTokens).toBeUndefined();
   });
 
@@ -600,7 +658,9 @@ describe('translateRequest', () => {
 
     const oauth = translateRequest(body, '@ai-sdk/openai', { openAiOAuth: true });
     expect(oauth.providerOptions?.openai?.instructions)
-      .toBe('You are Claude Code.\nFollow the user instructions.');
+      .toStartWith('You are Claude Code.\nFollow the user instructions.\n');
+    expect(oauth.providerOptions?.openai?.instructions)
+      .toContain('Messages with <task-notification> are harness events, not human messages.');
 
     const changedAttribution = translateRequest({
       ...body,
@@ -765,9 +825,13 @@ describe('translateRequest', () => {
     }, '@ai-sdk/openai', { openAiOAuth: true });
 
     // SAFETY: The test fixture defines the asserted runtime shape.
-    expect((params.providerOptions as any).openai.instructions).toBe(
-      'stable Claude instructions\n'
-      + '<system-reminder>computer-use is pending</system-reminder>\n'
+    const instructions = (params.providerOptions as any).openai.instructions as string;
+    expect(instructions).toStartWith('stable Claude instructions\n');
+    expect(instructions).toContain(
+      'Before your next progress or final statement, account for every newly delivered event.',
+    );
+    expect(instructions).toEndWith(
+      '<system-reminder>computer-use is pending</system-reminder>\n'
       + '<system-reminder>playwright is pending</system-reminder>',
     );
     expect(params.messages).toEqual([{ role: 'user', content: [{ type: 'text', text: 'continue the task' }] }]);
