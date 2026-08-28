@@ -10,6 +10,8 @@ import {
   KEYRING_SERVICE,
   KEYRING_CHUNK_SERVICE,
   KEYRING_JOURNAL_SERVICE,
+  KEYRING_DELETED_SERVICE,
+  KEYRING_MANAGED_STATE_KEY_SERVICE,
   KEYRING_CHUNK_SIZE,
   readKeyringEntry,
   deleteKeyringEntry,
@@ -49,6 +51,15 @@ import {
 import { reconcileKeyringJournal } from './journal.js';
 import { KeyringManagedStateKeyUnavailableError, readKeyringManagedState, removeKeyringManagedState } from './state.js';
 import type { KeyringManagedState } from './state.js';
+import { usesDarwinCredentialVault } from './platform.js';
+import {
+  deleteKeyringVaultAccount,
+  KEYRING_VAULT_ACCOUNT,
+  keyringVaultIsManaged,
+  provisionKeyringVaultAccount,
+  readKeyringVaultAccount,
+  writeKeyringVaultAccount,
+} from './vault.js';
 
 function keyringAccountLockPath(account: string): string {
   return getCredentialMutationLockPath(`keyring:${account}`);
@@ -70,7 +81,7 @@ async function withKeyringAccountLock<T>(
   }
 }
 
-export async function readKeyringAccount(
+async function readManagedKeyringAccount(
   account: string,
   diag?: (msg: string) => void,
 ): Promise<string | null> {
@@ -448,7 +459,7 @@ function writeKeyringAccountLocked(
   }
 }
 
-export async function writeKeyringAccount(
+async function writeManagedKeyringAccount(
   account: string,
   key: string,
   intent: 'probe' | 'provision' | 'replace',
@@ -556,7 +567,7 @@ function deleteJournalLessManagedKeyringAccount(
   }
 }
 
-export async function deleteKeyringAccount(
+async function deleteManagedKeyringAccount(
   account: string,
   diag?: (msg: string) => void,
   blockLegacy = true,
@@ -653,4 +664,153 @@ export async function deleteKeyringAccount(
       return false;
     }
   });
+}
+
+async function readDarwinCredentialVaultAccount(
+  account: string,
+  diag?: (msg: string) => void,
+): Promise<string | null> {
+  const stored = await withKeyringAccountLock(
+    KEYRING_VAULT_ACCOUNT,
+    undefined,
+    diag,
+    async () => {
+      const keyring = await import('@napi-rs/keyring');
+      return readKeyringVaultAccount(keyring, account);
+    },
+  );
+  if (stored === undefined || stored.exists || keyringVaultIsManaged()) {
+    return stored?.value ?? null;
+  }
+
+  const legacy = await readManagedKeyringAccount(account, diag);
+  if (legacy === null) return null;
+
+  const migrated = await withKeyringAccountLock(KEYRING_VAULT_ACCOUNT, false, diag, async () => {
+    const keyring = await import('@napi-rs/keyring');
+    const current = readKeyringVaultAccount(keyring, account);
+    if (current.known) return current.value !== null;
+    return provisionKeyringVaultAccount(keyring, account, legacy);
+  });
+  if (!migrated) {
+    diag?.('credential could not migrate to the macOS keychain vault');
+    return null;
+  }
+  if (!await retireManagedKeyringAccountAfterVaultMigration(account, diag)) {
+    diag?.('legacy keychain credential cleanup is pending');
+  }
+  return legacy;
+}
+
+async function retireManagedKeyringAccountAfterVaultMigration(
+  account: string,
+  diag?: (msg: string) => void,
+): Promise<boolean> {
+  if (!await deleteManagedKeyringAccount(account, diag)) return false;
+  return withKeyringAccountLock(account, false, diag, async () => {
+    try {
+      const keyring = await import('@napi-rs/keyring');
+      for (const service of [
+        KEYRING_JOURNAL_SERVICE,
+        KEYRING_DELETED_SERVICE,
+        KEYRING_MANAGED_STATE_KEY_SERVICE,
+      ]) {
+        const entry = new keyring.Entry(service, account);
+        if (entry.getPassword() !== null && !entry.deletePassword()) return false;
+        if (entry.getPassword() !== null) return false;
+      }
+      removeKeyringManagedState(account);
+      return true;
+    } catch (err) {
+      diag?.(classifyKeyringError(err));
+      return false;
+    }
+  });
+}
+
+/** Read one credential from the shared macOS item or the platform keyring layout. */
+export async function readKeyringAccount(
+  account: string,
+  diag?: (msg: string) => void,
+): Promise<string | null> {
+  if (!usesDarwinCredentialVault()) return readManagedKeyringAccount(account, diag);
+  try {
+    return await readDarwinCredentialVaultAccount(account, diag);
+  } catch (err) {
+    diag?.(classifyKeyringError(err));
+    return null;
+  }
+}
+
+/** Write one credential while keeping macOS access on one shared Keychain item. */
+export async function writeKeyringAccount(
+  account: string,
+  key: string,
+  intent: 'probe' | 'provision' | 'replace',
+  diag?: (msg: string) => void,
+): Promise<boolean> {
+  if (!usesDarwinCredentialVault()) {
+    return writeManagedKeyringAccount(account, key, intent, diag);
+  }
+  if (intent === 'replace' && await readDarwinCredentialVaultAccount(account, diag) === null) {
+    diag?.('existing credential state could not be confirmed');
+    return false;
+  }
+  if (intent === 'provision' && !isCredentialAccountInstance(account)) {
+    diag?.('provisioned credentials require a versioned account instance');
+    return false;
+  }
+  if (intent === 'probe' && !isDisposableCredentialProbeAccount(account)) {
+    diag?.('credential account is not available for a new credential');
+    return false;
+  }
+  return withKeyringAccountLock(KEYRING_VAULT_ACCOUNT, false, diag, async () => {
+    try {
+      const keyring = await import('@napi-rs/keyring');
+      if (intent === 'replace') {
+        return writeKeyringVaultAccount(keyring, account, key, true);
+      }
+      const current = readKeyringVaultAccount(keyring, account);
+      if (!current.exists && keyringVaultIsManaged()) {
+        diag?.('macOS keychain credential vault is unavailable');
+        return false;
+      }
+      return provisionKeyringVaultAccount(keyring, account, key);
+    } catch (err) {
+      diag?.(classifyKeyringError(err));
+      return false;
+    }
+  });
+}
+
+/** Remove one credential without deleting the shared macOS permission-bearing item. */
+export async function deleteKeyringAccount(
+  account: string,
+  diag?: (msg: string) => void,
+  blockLegacy = true,
+): Promise<boolean> {
+  if (!usesDarwinCredentialVault()) {
+    return deleteManagedKeyringAccount(account, diag, blockLegacy);
+  }
+  const deleted = await withKeyringAccountLock(KEYRING_VAULT_ACCOUNT, false, diag, async () => {
+    try {
+      const keyring = await import('@napi-rs/keyring');
+      return deleteKeyringVaultAccount(
+        keyring,
+        account,
+        !isDisposableCredentialProbeAccount(account),
+      );
+    } catch (err) {
+      diag?.(classifyKeyringError(err));
+      return false;
+    }
+  });
+  if (deleted) return true;
+  try {
+    if (keyringVaultIsManaged()) return false;
+  } catch (err) {
+    diag?.(classifyKeyringError(err));
+    return false;
+  }
+  return deleteManagedKeyringAccount(account, diag, blockLegacy);
 }
