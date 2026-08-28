@@ -228,14 +228,25 @@ function compactionInput(detail: DiagnosticRecord | undefined): number | undefin
     ?? diagnosticNumber(detail, 'estimatedInputTokens');
 }
 
+function diagnosticLifecycle(diagnostic: Diagnostic): string {
+  if (diagnostic.kind !== 'ws_compaction') return diagnostic.kind;
+  const outcome = diagnosticText(diagnostic.detail, 'outcome');
+  const label = outcome === 'completed' ? 'finished' : outcome ?? 'event';
+  const stage = diagnosticNumber(diagnostic.detail, 'stage');
+  return `compaction ${label}${stage ? ` · stage ${stage}` : ''}`;
+}
+
+export function diagnosticOverviewLine(diagnostic: Diagnostic): string {
+  const session = diagnostic.threadName ?? diagnostic.sessionId ?? diagnostic.sessionHash;
+  return `${new Date(diagnostic.timestamp).toLocaleTimeString()} · ${diagnosticLifecycle(diagnostic)}`
+    + (diagnostic.statusCode ? ` · HTTP ${diagnostic.statusCode}` : '')
+    + (diagnostic.code ? ` · ${diagnostic.code}` : '')
+    + (session ? ` · session ${session}` : '');
+}
+
 export function diagnosticLines(diagnostic: Diagnostic): string[] {
   const detail = diagnostic.detail;
-  const outcome = diagnosticText(detail, 'outcome');
-  const stage = diagnosticNumber(detail, 'stage');
-  const lifecycle = diagnostic.kind === 'ws_compaction'
-    ? `compaction ${outcome ?? 'event'}${stage ? ` · stage ${stage}` : ''}`
-    : diagnostic.kind;
-  const header = `${new Date(diagnostic.timestamp).toLocaleString()} · ${lifecycle}`
+  const header = `${new Date(diagnostic.timestamp).toLocaleString()} · ${diagnosticLifecycle(diagnostic)}`
     + (diagnostic.statusCode ? ` · HTTP ${diagnostic.statusCode}` : '')
     + (diagnostic.code ? ` · ${diagnostic.code}` : '');
   const lines = [header];

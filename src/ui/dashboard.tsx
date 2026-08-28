@@ -20,6 +20,7 @@ import {
   cyclePeriod,
   deviceCodeInstruction,
   diagnosticLines,
+  diagnosticOverviewLine,
   formatUsd,
   lineChart,
   loadDashboardPanels,
@@ -695,9 +696,7 @@ function Dashboard(): React.ReactNode {
             ? <Text dimColor>No recent failures or compaction warnings.</Text>
             : diagnostics.slice(0, 3).map((diagnostic, index) => (
                 <Text key={`${diagnostic.timestamp}-${index}`} color="yellow">
-                  {new Date(diagnostic.timestamp).toLocaleTimeString()} · {diagnostic.kind}
-                  {diagnostic.statusCode ? ` · HTTP ${diagnostic.statusCode}` : ''}
-                  {diagnostic.code ? ` · ${diagnostic.code}` : ''}
+                  {diagnosticOverviewLine(diagnostic)}
                 </Text>
               ))}
         </Box>
