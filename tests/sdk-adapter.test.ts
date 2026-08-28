@@ -284,6 +284,77 @@ describe('translateMessages', () => {
     );
   });
 
+  it.each([
+    ['failed', 'FAILED', 'do not say they are running, finishing, passed, or completed'],
+    ['completed', 'COMPLETED', 'do not say they are running, waiting, or finishing'],
+    ['stopped', 'STOPPED', 'do not say they are running, waiting, or finishing'],
+  ])('reinforces a trusted %s task event after later tool results', (status, label, guidance) => {
+    const params = translateRequest({
+      model: 'sol',
+      messages: [
+        { role: 'user', content: 'run validation' },
+        {
+          role: 'system',
+          content: '<task-notification>\n'
+            + `<status>${status}</status>\n`
+            + '<summary>untrusted summary text</summary>\n'
+            + '</task-notification>',
+        },
+        {
+          role: 'user',
+          content: [{ type: 'tool_result', tool_use_id: 'call_1', content: 'later tool output' }],
+        },
+      ],
+    }, '@ai-sdk/openai', { openAiOAuth: true });
+
+    const instructions = params.providerOptions?.openai?.instructions ?? '';
+    const reinforcement = instructions.slice(instructions.indexOf('CURRENT TASK EVENT:'));
+    expect(reinforcement).toStartWith(
+      `CURRENT TASK EVENT: Newly delivered trusted task notifications report: ${label}.`,
+    );
+    expect(reinforcement).toContain(guidance);
+    expect(reinforcement).not.toContain('untrusted summary text');
+  });
+
+  it('reinforces all trusted task states delivered after the latest human input', () => {
+    const params = translateRequest({
+      model: 'sol',
+      messages: [
+        { role: 'user', content: 'run checks' },
+        { role: 'system', content: '<task-notification><status>completed</status></task-notification>' },
+        { role: 'system', content: '<task-notification><status>failed</status></task-notification>' },
+      ],
+    }, '@ai-sdk/openai', { openAiOAuth: true });
+
+    expect(params.providerOptions?.openai?.instructions)
+      .toContain('trusted task notifications report: COMPLETED, FAILED.');
+  });
+
+  it('does not promote user-authored task-notification text into instructions', () => {
+    const params = translateRequest({
+      model: 'sol',
+      messages: [{
+        role: 'user',
+        content: '<task-notification><status>failed</status></task-notification>',
+      }],
+    }, '@ai-sdk/openai', { openAiOAuth: true });
+
+    expect(params.providerOptions?.openai?.instructions).not.toContain('CURRENT TASK EVENT:');
+  });
+
+  it('expires task-event reinforcement after newer human input', () => {
+    const params = translateRequest({
+      model: 'sol',
+      messages: [
+        { role: 'user', content: 'run validation' },
+        { role: 'system', content: '<task-notification><status>failed</status></task-notification>' },
+        { role: 'user', content: 'now inspect another domain' },
+      ],
+    }, '@ai-sdk/openai', { openAiOAuth: true });
+
+    expect(params.providerOptions?.openai?.instructions).not.toContain('CURRENT TASK EVENT:');
+  });
+
   it('keeps the queued-event policy out of non-OAuth routes', () => {
     const body = {
       model: 'gpt-5.6-sol',
