@@ -59,8 +59,8 @@ describe('native Claude model picker settings', () => {
       effortLevel: 'high',
       env: {
         KEEP_ME: 'yes',
-        CLAUDE_CODE_AUTO_COMPACT_WINDOW: '900000',
         CLAUDE_CODE_MAX_CONTEXT_TOKENS: '1000000',
+        DISABLE_AUTO_COMPACT: '1',
       },
       modelPicker: {
         replaceBuiltInOptions: true,
@@ -75,14 +75,17 @@ describe('native Claude model picker settings', () => {
     expect(readClaudeDefaultModel(path)).toBe('sol[1m]');
   });
 
-  it('uses the smallest route window so mixed catalogs compact before every provider limit', () => {
+  it('uses native provider compaction without a Claude auto-compaction window', () => {
     const path = join(mkdtempSync(join(tmpdir(), 'clodex-claude-settings-')), 'settings.json');
-    writeFileSync(path, '{}');
+    writeFileSync(path, JSON.stringify({
+      env: { CLAUDE_CODE_AUTO_COMPACT_WINDOW: '450000' },
+    }));
 
     expect(syncClaudeModelPickerSettings(routes, [], path)).toBe(true);
     const settings = JSON.parse(readFileSync(path, 'utf8'));
-    expect(settings.env['CLAUDE_CODE_AUTO_COMPACT_WINDOW']).toBe('450000');
+    expect(settings.env['CLAUDE_CODE_AUTO_COMPACT_WINDOW']).toBeUndefined();
     expect(settings.env['CLAUDE_CODE_MAX_CONTEXT_TOKENS']).toBe('1000000');
+    expect(settings.env['DISABLE_AUTO_COMPACT']).toBe('1');
   });
 
   it('keeps the native 200K identity for a 200K-only catalog', () => {
@@ -97,8 +100,9 @@ describe('native Claude model picker settings', () => {
     expect(syncClaudeModelPickerSettings([route], [], path)).toBe(true);
     const settings = JSON.parse(readFileSync(path, 'utf8'));
     expect(settings.modelPicker.options[0].model).toBe(route.aliasId);
-    expect(settings.env['CLAUDE_CODE_AUTO_COMPACT_WINDOW']).toBe('180000');
+    expect(settings.env['CLAUDE_CODE_AUTO_COMPACT_WINDOW']).toBeUndefined();
     expect(settings.env['CLAUDE_CODE_MAX_CONTEXT_TOKENS']).toBe('200000');
+    expect(settings.env['DISABLE_AUTO_COMPACT']).toBe('1');
   });
 
   it('does not replace existing compaction settings without valid route windows', () => {

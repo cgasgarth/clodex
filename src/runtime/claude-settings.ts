@@ -15,7 +15,6 @@ interface ClaudeSettings {
   [key: string]: ClaudeSettingValue;
 }
 
-const AUTO_COMPACT_CONTEXT_RATIO = 0.9;
 const CLAUDE_ONE_M_CONTEXT_WINDOW = 1_000_000;
 
 interface ModelPickerRoute {
@@ -130,9 +129,7 @@ export function syncClaudeModelPickerSettings(
     .filter((window): window is number => (
       typeof window === 'number' && Number.isFinite(window) && window > 0
     ));
-  const autoCompactWindow = contextWindows.length > 0
-    ? Math.floor(Math.min(...contextWindows) * AUTO_COMPACT_CONTEXT_RATIO)
-    : undefined;
+  const hasContextWindow = contextWindows.length > 0;
   const claudeContextWindow = contextWindows.some(window => window > DEFAULT_CONTEXT_WINDOW)
     ? CLAUDE_ONE_M_CONTEXT_WINDOW
     : DEFAULT_CONTEXT_WINDOW;
@@ -140,15 +137,14 @@ export function syncClaudeModelPickerSettings(
   const nextEnv = isObject(currentEnv) && !Array.isArray(currentEnv)
     ? { ...currentEnv }
     : {};
-  if (autoCompactWindow !== undefined) {
-    nextEnv['CLAUDE_CODE_AUTO_COMPACT_WINDOW'] = String(autoCompactWindow);
+  if (hasContextWindow) {
+    delete nextEnv['CLAUDE_CODE_AUTO_COMPACT_WINDOW'];
+    nextEnv['DISABLE_AUTO_COMPACT'] = '1';
     // Claude saves a directly entered `/model sol` as the literal alias and
     // loses the picker option's `[1m]` context identity. Keep the shared
     // Claude-facing window explicit so direct aliases do not fall back to
-    // Claude Code's 200K third-party default. AUTO_COMPACT_WINDOW remains the
-    // provider-safe limit for mixed catalogs such as 1M Sol plus 500K Grok.
+    // Claude Code's 200K third-party default.
     nextEnv['CLAUDE_CODE_MAX_CONTEXT_TOKENS'] = String(claudeContextWindow);
-    delete nextEnv['DISABLE_AUTO_COMPACT'];
   }
   const next: ClaudeSettings = {
     ...current,
@@ -161,7 +157,7 @@ export function syncClaudeModelPickerSettings(
     ));
     if (currentOption) next['model'] = currentOption.model;
   }
-  if (autoCompactWindow !== undefined) next['env'] = nextEnv;
+  if (hasContextWindow) next['env'] = nextEnv;
   const currentText = `${JSON.stringify(current, null, 2)}\n`;
   const nextText = `${JSON.stringify(next, null, 2)}\n`;
   if (currentText === nextText) return false;

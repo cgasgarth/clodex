@@ -64,8 +64,8 @@ your absolute home path. Keep other settings and hooks that you already use.
     "ANTHROPIC_API_KEY": "clodex",
     "CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK": "1",
     "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY": "1",
-    "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "450000",
     "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "1000000",
+    "DISABLE_AUTO_COMPACT": "1",
     "CLAUDE_CODE_PROCESS_WRAPPER": "/Users/you/.bun/bin/clodex-claude",
     "CLAUDE_CODE_SIMPLE_SYSTEM_PROMPT": "0",
     "CLAUDE_STREAM_IDLE_TIMEOUT_MS": "900000",
@@ -124,20 +124,19 @@ hook stops Clodex. The internal
 `clodex-claude` process wrapper is only for Claude-spawned child processes; it
 is not the terminal startup command.
 
-`CLAUDE_CODE_AUTO_COMPACT_WINDOW` uses 90% of the smallest enabled provider
-context window. With Grok 4.6 enabled, this is 450,000 tokens. Claude Code keeps
-native auto-compaction on and compacts before Grok's 500,000-token hard limit.
-Clodex native compaction for ChatGPT/Codex OAuth runs at its lower threshold
-first, so the Claude compactor normally does not trigger for those models.
-Manual `/compact` remains available.
+Clodex sets `DISABLE_AUTO_COMPACT=1` and removes
+`CLAUDE_CODE_AUTO_COMPACT_WINDOW`. ChatGPT/Codex OAuth sessions use only native
+Responses compaction, which runs before the model context limit and keeps opaque
+reasoning state in the OpenAI response chain. This prevents Claude's portable
+summary compactor from replacing or duplicating native compacted state.
 
-Claude Code falls back to 200,000 tokens for unknown third-party model ids and
-does not support an exact 500,000-token context identity with auto-compaction.
+Claude Code falls back to 200,000 tokens for unknown third-party model ids.
 Clodex therefore gives every enabled model above 200,000 tokens a `[1m]` client
 identity and sets the shared Claude-facing window to 1M. This also keeps direct
 commands such as `/model sol` from falling back to 200K when Claude saves the
-literal alias. `CLAUDE_CODE_AUTO_COMPACT_WINDOW` supplies the real shared safety
-capacity. The status denominator can show 1M for Grok, but Grok compacts at 450K.
+literal alias. Providers without native Clodex compaction no longer have a
+Claude auto-compaction fallback and can return a context-limit error when their
+own window is exhausted.
 
 After this setup, use only:
 
@@ -147,9 +146,9 @@ clodex        # start if needed and open the TUI dashboard
 clodex start  # start without opening the dashboard
 ```
 
-`clodex models` updates Claude's native `modelPicker.options` and the shared
-auto-compaction window after catalog changes. `/model` selects the configured
-aliases in Claude Code.
+`clodex models` updates Claude's native `modelPicker.options`, shared context
+identity, and native-only compaction settings after catalog changes. `/model`
+selects the configured aliases in Claude Code.
 
 ## Native Codex compaction
 

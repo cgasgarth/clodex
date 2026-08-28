@@ -195,8 +195,15 @@ describe('buildChildEnv', () => {
   });
 
   it('keeps native Codex compaction automatic without Claude auto-compaction', () => {
-    expect(buildChildEnv(UPSTREAM_URL, 'custom-model', 'k')['DISABLE_AUTO_COMPACT']).toBeUndefined();
-    expect(buildChildEnv(UPSTREAM_URL, 'custom-model', 'k', undefined, undefined, false, true)['DISABLE_AUTO_COMPACT']).toBe('1');
+    const original = process.env['DISABLE_AUTO_COMPACT'];
+    delete process.env['DISABLE_AUTO_COMPACT'];
+    try {
+      expect(buildChildEnv(UPSTREAM_URL, 'custom-model', 'k')['DISABLE_AUTO_COMPACT']).toBeUndefined();
+      expect(buildChildEnv(UPSTREAM_URL, 'custom-model', 'k', undefined, undefined, false, true)['DISABLE_AUTO_COMPACT']).toBe('1');
+    } finally {
+      if (original === undefined) delete process.env['DISABLE_AUTO_COMPACT'];
+      else process.env['DISABLE_AUTO_COMPACT'] = original;
+    }
   });
 
   it('uses explicit contextWindow override when provided', () => {
