@@ -4,6 +4,7 @@ import {
   cyclePeriod,
   deviceCodeInstruction,
   diagnosticLines,
+  diagnosticOverviewLine,
   formatUsd,
   lineChart,
   loadDashboardPanels,
@@ -163,11 +164,30 @@ describe('dashboard controls', () => {
         durationMs: 93_897,
       },
     })).toEqual([
-      expect.stringContaining('compaction completed · stage 1'),
+      expect.stringContaining('compaction finished · stage 1'),
       'thread typing cleanup efforts continued · 10a1f5d9-490e-4444-911d-ecc365a07bad',
       'input 194.4K · compact output 4.6K · resulting context 684.3K · raw transcript 910.2K',
       'duration 1m 34s · responses_compact_endpoint · known_oversized',
     ]);
+  });
+
+  it('shows compaction lifecycle and named session in overview diagnostics', () => {
+    expect(diagnosticOverviewLine({
+      timestamp: '2026-08-06T06:09:39.288Z',
+      kind: 'ws_compaction',
+      sessionId: '10a1f5d9-490e-4444-911d-ecc365a07bad',
+      threadName: 'typing cleanup efforts continued',
+      detail: { outcome: 'started' },
+    })).toContain('compaction started · session typing cleanup efforts continued');
+  });
+
+  it('shows the session ID for an unnamed finished compaction', () => {
+    expect(diagnosticOverviewLine({
+      timestamp: '2026-08-06T06:09:39.288Z',
+      kind: 'ws_compaction',
+      sessionId: '10a1f5d9-490e-4444-911d-ecc365a07bad',
+      detail: { outcome: 'completed' },
+    })).toContain('compaction finished · session 10a1f5d9-490e-4444-911d-ecc365a07bad');
   });
 
   it('labels native Secondwind token accounting as measured', () => {
