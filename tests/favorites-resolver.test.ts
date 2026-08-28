@@ -165,6 +165,7 @@ describe('buildFavoritesList', () => {
       id: 'missing-key',
       name: 'Missing Key',
       apiKey: '',
+      authRef: 'env:CLODEX_TEST_MISSING_KEY',
       models: [{
         id: 'available-but-no-key',
         name: 'Available But No Key',

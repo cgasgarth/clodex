@@ -61,7 +61,24 @@ before attempting any credential-store deletion.
 
 ## OS keyring layout and compatibility
 
-The default OS credential-store backend uses five service namespaces:
+On macOS, the default backend stores every Clodex credential in one generic
+password item. Its service is `clodex` and its account is
+`credential-vault:v1`. The item contains a versioned map keyed by the internal
+provider account. Deleted accounts remain as non-secret tombstones so Clodex
+does not inspect an obsolete entry or delete the permission-bearing vault.
+Reads use the vault's direct Keychain lookup and never enumerate other
+credentials. Thus macOS grants Bun one Keychain access decision for all Clodex
+accounts instead of one decision for every token chunk and recovery item.
+A protected non-secret marker under `~/.clodex/keyring-state` prevents a denied
+or temporarily unavailable vault from falling back to legacy enumeration.
+
+The first credential access after upgrading moves an existing Clodex credential
+into the shared macOS vault, verifies it, and removes its old chunks and recovery
+metadata. This one-time operation can use earlier Keychain access decisions.
+After migration, only the shared vault is read.
+
+Windows and Linux keep the managed multi-entry backend. It uses five service
+namespaces:
 
 - `clodex` stores a short credential directly or publishes the marker for a
   long credential;
@@ -72,7 +89,7 @@ The default OS credential-store backend uses five service namespaces:
 - `clodex-state-key` stores a random per-account key that protects the
   filesystem recovery marker.
 
-Clodex also keeps an authenticated encrypted per-account managed-state marker
+On those platforms, Clodex also keeps an authenticated encrypted per-account managed-state marker
 under the native OS account home at `~/.clodex/keyring-state`. Before each
 cleanup-journal write, the marker records the exact journal intent. A retry
 decrypts, republishes, and verifies that intent before continuing, then marks
@@ -91,7 +108,7 @@ journal-before-publication path for the replacement. A hidden, locked,
 incomplete, or partially restored namespace cannot take this path and remains
 fail-closed.
 
-Credential mutation locks live beside that state under
+Credential mutation locks live under
 `~/.clodex/credential-locks`. Neither path depends on `CLODEX_HOME`,
 `XDG_RUNTIME_DIR`, or temporary-directory environment variables because the OS
 keyring service and account namespaces are shared across those process-local
@@ -109,7 +126,7 @@ registry after read-back verification. If the keyring hides both the main value
 and its metadata, replacement and deletion stop without publishing new state
 or reporting success.
 
-The active-generation journal is live metadata, not stale debris. Clodex keeps
+On Windows and Linux, the active-generation journal is live metadata, not stale debris. Clodex keeps
 one generation after a successful long-credential write so a later release can
 retire the chunks through a current provider-removal operation if an older
 release removes or replaces only the main marker. Use the Clodex

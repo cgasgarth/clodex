@@ -134,6 +134,10 @@ vi.mock('@napi-rs/keyring', () => ({
   },
 }));
 
+vi.mock('../src/credentials/keyring/platform.js', () => ({
+  usesDarwinCredentialVault: () => false,
+}));
+
 import {
   deleteProviderCredential,
   probeProviderCredentialStore,

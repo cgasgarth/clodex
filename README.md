@@ -210,9 +210,11 @@ clodex accounts select person@example.com
 clodex accounts usage
 ```
 
-OAuth credentials remain in the OS credential store. Up to five accounts per
-subscription provider can be stored. Selection is manual; Clodex does not fail
-over after quota, capacity, or authentication errors.
+OAuth credentials remain in the OS credential store. On macOS, all accounts
+share one Clodex Keychain item so the runtime needs one Keychain access
+decision. Up to five accounts per subscription provider can be stored.
+Selection is manual; Clodex does not fail over after quota, capacity, or
+authentication errors.
 
 ## Models
 
