@@ -102,6 +102,7 @@ export async function loginProviderAccount(
       : undefined;
     return {
       account,
+      credentialAvailable: Boolean(token),
       email: account.email?.toLowerCase()
         ?? (providerId === 'openai-oauth' && token
           ? extractOpenAiEmail({ access_token: token })
@@ -123,23 +124,49 @@ export async function loginProviderAccount(
     resultAccountId,
   );
   if (existing) {
+    const credentialJson = oauthCredentialToKeychainJson(credential);
+    let authRef = existing.account.authRef;
     let diagnostic = '';
-    const saved = await saveProviderCredential(
-      existing.account.authRef,
-      oauthCredentialToKeychainJson(credential),
-      message => { diagnostic = message; },
-    );
+    let saved = existing.credentialAvailable
+      ? await saveProviderCredential(
+          authRef,
+          credentialJson,
+          message => { diagnostic = message; },
+        )
+      : false;
+    if (!saved) {
+      authRef = credentialInstanceAuthRef(
+        `oauth:provider:${providerId}:account:${existing.account.id}`,
+      );
+      saved = await provisionProviderCredential(
+        authRef,
+        credentialJson,
+        message => { diagnostic = message; },
+      );
+      if (!saved) {
+        saved = await saveProviderCredential(
+          authRef,
+          credentialJson,
+          message => { diagnostic = message; },
+        );
+      }
+    }
     if (!saved) {
       throw new Error(`Could not update OAuth credential${diagnostic ? `: ${diagnostic}` : ''}`);
     }
-    const account = store.updateIdentity(existing.account.id, {
-      email,
-      accountId: resultAccountId,
-    });
-    if (store.selected(providerId)?.id === account.id) {
-      syncManagedProviderCredential(providerId, account.authRef);
+    try {
+      const identity = { email, accountId: resultAccountId };
+      const account = authRef === existing.account.authRef
+        ? store.updateIdentity(existing.account.id, identity)
+        : store.replaceCredential(existing.account.id, authRef, identity);
+      if (store.selected(providerId)?.id === account.id) {
+        syncManagedProviderCredential(providerId, account.authRef);
+      }
+      return { id: account.id, email, providerId };
+    } catch (error) {
+      if (authRef !== existing.account.authRef) await deleteProviderCredential(authRef);
+      throw error;
     }
-    return { id: account.id, email, providerId };
   }
 
   const id = randomUUID();
