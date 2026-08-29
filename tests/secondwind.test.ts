@@ -440,7 +440,7 @@ describe('Secondwind daemon service', () => {
     });
   });
 
-  it('does not claim savings when a fast-mode tier change offsets reduction', async () => {
+  it('keeps fast-mode savings within one uniform context tier', async () => {
     const service = new SecondwindService({
       initialMode: 'on',
       createSession: async () => ({
@@ -504,8 +504,9 @@ describe('Secondwind daemon service', () => {
       cacheWriteTokens: 0,
       outputTokens: 10_000,
     })!;
-    expect(original.total).toBeLessThan(optimized.total);
-    expect(service.snapshot().applied.estimatedSavingsUsd).toBe(0);
+    expect(original.total).toBeGreaterThan(optimized.total);
+    expect(service.snapshot().applied.estimatedSavingsUsd)
+      .toBeCloseTo(original.total - optimized.total);
   });
 
   it('uses request-local optimizer sessions while tracking active conversations', async () => {

@@ -13,7 +13,7 @@ import {
 
 describe('API-equivalent pricing', () => {
   it('uses the current published OpenAI and xAI rates', () => {
-    expect(API_PRICING_AS_OF).toBe('2026-08-12');
+    expect(API_PRICING_AS_OF).toBe('2026-08-29');
     expect(API_PRICING_SOURCE).toBe('OpenAI and xAI API pricing');
     expect(GPT_5_6_API_RATES['gpt-5.6-terra'])
       .toEqual({ input: 2, cachedInput: 0.2, output: 12 });
@@ -50,36 +50,36 @@ describe('API-equivalent pricing', () => {
       cacheWriteTokens: 1_000_000,
       outputTokens: 1_000_000,
     })).toEqual({
-      input: 10,
-      cache: 13.5,
-      output: 45,
-      total: 68.5,
+      input: 5,
+      cache: 6.75,
+      output: 30,
+      total: 41.75,
     });
   });
 
-  it('uses each family rate below the long-context threshold', () => {
+  it('uses each family rate throughout the 1M context window', () => {
     const terra = estimateApiCost({
       modelId: 'terra',
-      inputTokens: 100_000,
-      cachedInputTokens: 100_000,
+      inputTokens: 500_000,
+      cachedInputTokens: 500_000,
       cacheWriteTokens: 0,
       outputTokens: 10_000,
     });
-    expect(terra?.input).toBeCloseTo(0.2);
-    expect(terra?.cache).toBeCloseTo(0.02);
+    expect(terra?.input).toBeCloseTo(1);
+    expect(terra?.cache).toBeCloseTo(0.1);
     expect(terra?.output).toBeCloseTo(0.12);
-    expect(terra?.total).toBeCloseTo(0.34);
+    expect(terra?.total).toBeCloseTo(1.22);
     const luna = estimateApiCost({
       modelId: 'luna',
-      inputTokens: 100_000,
-      cachedInputTokens: 100_000,
+      inputTokens: 500_000,
+      cachedInputTokens: 500_000,
       cacheWriteTokens: 0,
       outputTokens: 10_000,
     });
-    expect(luna?.input).toBeCloseTo(0.02);
-    expect(luna?.cache).toBeCloseTo(0.002);
+    expect(luna?.input).toBeCloseTo(0.1);
+    expect(luna?.cache).toBeCloseTo(0.01);
     expect(luna?.output).toBeCloseTo(0.012);
-    expect(luna?.total).toBeCloseTo(0.034);
+    expect(luna?.total).toBeCloseTo(0.122);
   });
 
   it('prices Fast requests at twice Standard and accepts the legacy priority name', () => {
@@ -100,7 +100,7 @@ describe('API-equivalent pricing', () => {
     expect(cost?.total).toBeCloseTo(0.068);
   });
 
-  it('applies long-context multipliers to the full request', () => {
+  it('keeps Standard rates beyond the former 272K threshold', () => {
     const cost = estimateApiCost({
       modelId: 'gpt-5.6-sol',
       inputTokens: 272_001,
@@ -109,14 +109,14 @@ describe('API-equivalent pricing', () => {
       outputTokens: 1_000,
     });
     expect(cost).toEqual(expect.objectContaining({
-      input: 2.72001,
+      input: 1.360005,
       cache: 0,
-      output: 0.045,
+      output: 0.03,
     }));
-    expect(cost?.total).toBeCloseTo(2.76501);
+    expect(cost?.total).toBeCloseTo(1.390005);
   });
 
-  it('falls long-context fast requests back to Standard long-context pricing', () => {
+  it('keeps Fast rates beyond the former 272K threshold', () => {
     const usage = {
       modelId: 'sol',
       processingMode: 'fast' as const,
@@ -126,9 +126,9 @@ describe('API-equivalent pricing', () => {
       outputTokens: 1_000,
     };
     const cost = estimateApiCost(usage);
-    expect(effectiveApiProcessingMode(usage)).toBe('standard');
+    expect(effectiveApiProcessingMode(usage)).toBe('fast');
     expect(cost?.input).toBeCloseTo(2.72001);
-    expect(cost?.output).toBeCloseTo(0.045);
+    expect(cost?.output).toBeCloseTo(0.06);
   });
 
   it('uses Grok 4.5 API rates as the Grok 4.6 API equivalent', () => {
