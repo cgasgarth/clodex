@@ -46,6 +46,19 @@ function normalizeLabel(label: string): string {
   return label.trim().replace(/\s+/g, ' ').slice(0, 80);
 }
 
+function applyIdentity(
+  account: DaemonAccountRecord,
+  identity: { email?: string; accountId?: string },
+): void {
+  const email = identity.email?.trim().toLowerCase();
+  const accountId = identity.accountId?.trim();
+  if (email) {
+    account.email = email;
+    account.label = email;
+  }
+  if (accountId) account.accountId = accountId;
+}
+
 interface ParsedDaemonAccountState {
   state: DaemonAccountState;
   migrated: boolean;
@@ -276,13 +289,22 @@ export class DaemonAccountStore {
     const state = this.load();
     const account = state.accounts.find(item => item.id === id);
     if (!account) throw new Error(`Managed account not found: ${id}`);
-    const email = identity.email?.trim().toLowerCase();
-    const accountId = identity.accountId?.trim();
-    if (email) {
-      account.email = email;
-      account.label = email;
-    }
-    if (accountId) account.accountId = accountId;
+    applyIdentity(account, identity);
+    account.updatedAt = new Date().toISOString();
+    this.save(state);
+    return account;
+  }
+
+  replaceCredential(
+    id: string,
+    authRef: string,
+    identity: { email?: string; accountId?: string },
+  ): DaemonAccountRecord {
+    const state = this.load();
+    const account = state.accounts.find(item => item.id === id);
+    if (!account) throw new Error(`Managed account not found: ${id}`);
+    account.authRef = authRef;
+    applyIdentity(account, identity);
     account.updatedAt = new Date().toISOString();
     this.save(state);
     return account;

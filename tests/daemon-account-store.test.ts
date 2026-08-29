@@ -63,6 +63,20 @@ describe('DaemonAccountStore', () => {
     expect(store.remove('person@example.com').id).toBe(account.id);
   });
 
+  it('replaces a missing credential reference with refreshed identity', () => {
+    const account = store.add({ label: 'Default', authRef: 'keyring:missing' });
+    store.replaceCredential(account.id, 'keyring:account-scoped', {
+      email: 'Person@Example.com',
+      accountId: 'acct-1',
+    });
+    expect(store.selected()).toMatchObject({
+      authRef: 'keyring:account-scoped',
+      label: 'person@example.com',
+      email: 'person@example.com',
+      accountId: 'acct-1',
+    });
+  });
+
   it('enforces unique labels and the five-account cap', () => {
     store.add({ label: 'One', authRef: 'keyring:one' });
     expect(() => store.add({ label: 'one', authRef: 'keyring:duplicate' }))
