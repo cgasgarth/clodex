@@ -13,7 +13,7 @@ flowchart LR
   MAIN["Claude main session"] -->|"Anthropic-format endpoint + signed launch ticket"| D
   MAIN -->|"CLAUDE_CODE_PROCESS_WRAPPER"| CHILD["Workflows / subagents / background Claude"]
   CHILD -->|"inherits the same ticket"| D
-  D -->|"optional off / shadow / on rewrite"| SW["Secondwind middleware"]
+  D -->|"optional off / on rewrite"| SW["Secondwind middleware"]
   SW --> D
   D --> WS["Shared OpenAI WebSocket pools"]
   D --> METRICS["Content-free metrics + diagnostics"]
@@ -74,7 +74,7 @@ stops it.
 - `1`–`5`: switch Overview, Usage, Accounts, Diagnostics, and Secondwind views
 - Usage: `Tab` changes range; `←`/`→` changes period
 - Accounts: `↑`/`↓` chooses; `Enter` selects; `l` logs in; `x x` logs out
-- Secondwind: `←`/`→` or `o`, `s`, and `n` choose a mode; `Enter` confirms
+- Secondwind: `←`/`→` or `o` and `n` choose a mode; `Enter` confirms
 - `r`: refresh
 - `q`: quit the dashboard; the daemon keeps running
 

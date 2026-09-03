@@ -56,7 +56,7 @@ const VIEWS: DashboardView[] = [
   'diagnostics',
   'secondwind',
 ];
-const SECONDWIND_MODES: SecondwindMode[] = ['off', 'shadow', 'on'];
+const SECONDWIND_MODES: SecondwindMode[] = ['off', 'on'];
 
 function formatLatency(value: number): string {
   if (value < 1) return `${value.toFixed(2)}ms`;
@@ -481,10 +481,6 @@ function Dashboard(): React.ReactNode {
         if (secondwind.mode !== 'off') setPendingSecondwindMode('off');
         return;
       }
-      if (input === 's') {
-        if (secondwind.mode !== 'shadow') setPendingSecondwindMode('shadow');
-        return;
-      }
       if (input === 'n') {
         if (secondwind.mode !== 'on') setPendingSecondwindMode('on');
         return;
@@ -828,12 +824,8 @@ function Dashboard(): React.ReactNode {
       </Box>
     );
   } else {
-    controls = `c toggle compaction · ←/→ Secondwind · o off · s shadow · n on · Enter confirm · ${VIEW_SWITCH_HINT} · r refresh · q quit`;
-    const modeColor = secondwind?.mode === 'on'
-      ? 'green'
-      : secondwind?.mode === 'shadow'
-        ? 'yellow'
-        : undefined;
+    controls = `c toggle compaction · ←/→ Secondwind · o off · n on · Enter confirm · ${VIEW_SWITCH_HINT} · r refresh · q quit`;
+    const modeColor = secondwind?.mode === 'on' ? 'green' : undefined;
     content = (
       <>
         <Box borderStyle="round" paddingX={1} flexDirection="column">
@@ -865,7 +857,7 @@ function Dashboard(): React.ReactNode {
             {' · '}applies to new requests immediately
           </Text>
           <Text dimColor>
-            off bypasses · shadow measures and sends original · on sends losslessly rewritten tool outputs
+            off bypasses · on sends losslessly rewritten tool outputs
           </Text>
           <Text dimColor>
             Mode and lifetime applied savings persist; live metrics reset with the daemon.
@@ -920,12 +912,6 @@ function Dashboard(): React.ReactNode {
             label="Applied"
             metrics={secondwind?.applied}
             savingsLabel="estimated savings"
-          />
-          <Text> </Text>
-          <SecondwindMetricLine
-            label="Shadow potential"
-            metrics={secondwind?.shadow}
-            savingsLabel="estimated possible savings"
           />
           <Text dimColor>API-equivalent cache-aware estimate for priced OpenAI and Grok requests.</Text>
         </Box>

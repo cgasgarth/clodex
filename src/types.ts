@@ -76,7 +76,7 @@ export interface ModelAlias extends FavoriteModel {
 }
 
 export type BridgeMode = 'endpoint' | 'proxy';
-export type SecondwindMode = 'off' | 'shadow' | 'on';
+export type SecondwindMode = 'off' | 'on';
 export type DiagnosticLogMode = 'all' | 'error';
 
 export interface UserPreferences {

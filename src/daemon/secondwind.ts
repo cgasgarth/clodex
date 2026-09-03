@@ -80,7 +80,6 @@ export interface SecondwindSnapshot {
   loaded: boolean;
   sessions: number;
   applied: SecondwindModeMetrics;
-  shadow: SecondwindModeMetrics;
   lifetime: SecondwindLifetimeMetrics;
   topSessions: SecondwindSessionSavings[];
   latency: {
@@ -110,7 +109,6 @@ interface SecondwindObservedUsage {
 }
 
 interface PendingSecondwindSavings {
-  mode: Exclude<SecondwindMode, 'off'>;
   modelId: string;
   processingMode: ApiProcessingMode;
   originalTokens: number;
@@ -206,8 +204,7 @@ function loadLifetimeMetrics(
 }
 
 function normalizeSecondwindMode(value: SecondwindMode | undefined): SecondwindMode {
-  if (value === 'off' || value === 'shadow') return value;
-  return 'on';
+  return value === 'off' ? 'off' : 'on';
 }
 
 function percentile(samples: number[], fraction: number): number {
@@ -328,9 +325,7 @@ function observedRequestSavings(
   ];
   const logicalInput = weights.reduce((sum, value) => sum + value, 0);
   if (logicalInput <= 0) return undefined;
-  const savedTokens = pending.mode === 'shadow'
-    ? Math.min(pending.tokensReduced, logicalInput)
-    : pending.tokensReduced;
+  const savedTokens = pending.tokensReduced;
   const [savedInput = 0, savedCached = 0, savedWrite = 0] =
     distributeTokens(savedTokens, weights);
   const actual = {
@@ -341,22 +336,13 @@ function observedRequestSavings(
     cacheWriteTokens: weights[2]!,
     outputTokens: Math.max(0, usage.outputTokens),
   };
-  const original = pending.mode === 'on'
-    ? {
-        ...actual,
-        inputTokens: actual.inputTokens + savedInput,
-        cachedInputTokens: actual.cachedInputTokens + savedCached,
-        cacheWriteTokens: actual.cacheWriteTokens + savedWrite,
-      }
-    : actual;
-  const optimized = pending.mode === 'shadow'
-    ? {
-        ...actual,
-        inputTokens: actual.inputTokens - savedInput,
-        cachedInputTokens: actual.cachedInputTokens - savedCached,
-        cacheWriteTokens: actual.cacheWriteTokens - savedWrite,
-      }
-    : actual;
+  const original = {
+    ...actual,
+    inputTokens: actual.inputTokens + savedInput,
+    cachedInputTokens: actual.cachedInputTokens + savedCached,
+    cacheWriteTokens: actual.cacheWriteTokens + savedWrite,
+  };
+  const optimized = actual;
   const originalCost = estimateApiCost(original);
   const optimizedCost = estimateApiCost(optimized);
   if (!originalCost || !optimizedCost) return undefined;
@@ -413,7 +399,6 @@ export class SecondwindService {
   readonly #sessionSavings = new Map<string, SecondwindSessionSavings>();
   readonly #latencySamples: number[] = [];
   readonly #applied = emptyMetrics();
-  readonly #shadow = emptyMetrics();
   readonly #metrics?: SecondwindMetricsPersistence;
   readonly #lifetime: SecondwindLifetimeMetrics;
   #mode: SecondwindMode;
@@ -453,7 +438,6 @@ export class SecondwindService {
       loaded: this.#loaded,
       sessions: this.#activeSessions.size,
       applied: { ...this.#applied },
-      shadow: { ...this.#shadow },
       lifetime: { ...this.#lifetime },
       topSessions: [...this.#sessionSavings.values()]
         .toSorted((left, right) =>
@@ -502,10 +486,10 @@ export class SecondwindService {
     ) return;
     this.#pendingSavings.delete(entry.requestId);
     const savings = observedRequestSavings(pending, pending.usage);
-    const metrics = pending.mode === 'on' ? this.#applied : this.#shadow;
+    const metrics = this.#applied;
     if (savings === undefined) {
       metrics.unpricedRequests += 1;
-      if (pending.mode === 'on') this.#recordAppliedSavings(pending);
+      this.#recordAppliedSavings(pending);
       return;
     }
     metrics.pricedRequests += 1;
@@ -517,7 +501,6 @@ export class SecondwindService {
     metrics.estimatedCacheSavingsUsd += savings.estimatedCacheSavingsUsd;
     metrics.estimatedOutputSavingsUsd += savings.estimatedOutputSavingsUsd;
     metrics.estimatedSavingsUsd += savings.estimatedSavingsUsd;
-    if (pending.mode !== 'on') return;
     this.#recordAppliedSavings(pending, savings);
   }
 
@@ -569,7 +552,7 @@ export class SecondwindService {
           blocksRewritten > 0 ? readRewrittenRequest : () => input.request,
           blocksRewritten,
         );
-        const metrics = mode === 'on' ? this.#applied : this.#shadow;
+        const metrics = this.#applied;
         metrics.requests += 1;
         metrics.blocksRewritten += blocksRewritten;
         metrics.inputTokensConsidered += accounting.originalTokens;
@@ -580,7 +563,6 @@ export class SecondwindService {
           input.reportingSessionId ?? input.sessionId,
         );
         const pending: PendingSecondwindSavings = {
-          mode,
           modelId: input.modelId,
           processingMode,
           originalTokens: accounting.originalTokens,
@@ -613,12 +595,12 @@ export class SecondwindService {
             metrics.estimatedSavingsUsd += immediateSavingsUsd;
           }
         }
-        if (mode === 'on' && !input.requestId) {
+        if (!input.requestId) {
           this.#recordAppliedSavings(pending, immediateSavingsUsd);
         }
       }
       this.#lastError = undefined;
-      return mode === 'on' ? optimizedBody : input.body;
+      return optimizedBody;
     } catch (error) {
       this.#errors += 1;
       this.#lastError = error instanceof Error ? error.message : String(error);

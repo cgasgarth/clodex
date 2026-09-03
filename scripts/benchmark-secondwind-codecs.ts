@@ -45,7 +45,7 @@ interface SecondwindMetrics {
 }
 
 interface SecondwindSnapshot {
-  mode: Condition | 'shadow';
+  mode: Condition;
   applied: SecondwindMetrics;
   errors: number;
 }

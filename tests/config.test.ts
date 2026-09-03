@@ -84,10 +84,10 @@ describe('dotfolder config', () => {
   it('persists the daemon-wide Secondwind mode', () => {
     expect(loadPreferences().secondwindMode).toBeUndefined();
 
-    savePreferences({ secondwindMode: 'shadow' });
+    savePreferences({ secondwindMode: 'off' });
 
-    expect(loadPreferences().secondwindMode).toBe('shadow');
-    expect(JSON.parse(readFileSync(getConfigPath(), 'utf8')).secondwindMode).toBe('shadow');
+    expect(loadPreferences().secondwindMode).toBe('off');
+    expect(JSON.parse(readFileSync(getConfigPath(), 'utf8')).secondwindMode).toBe('off');
   });
 
   it('persists the daemon-owned native compaction setting', () => {
