@@ -43,6 +43,7 @@ import {
   anthropicEffortFromRequest,
   isClaudeCodeCompactRequest,
   sdkTranslationErrorSignature,
+  queuedInputDiagnostics,
   silenceSdkWarnings,
   type AnthropicRequest,
 } from '../sdk-adapter.js';
@@ -833,6 +834,9 @@ export async function startProxyCatalog(
       // format, endpoint selection, and provider quirks.
       if (usesSdkAdapter) {
         const openAiOAuth = route.npm === '@ai-sdk/openai' && route.authType === 'oauth';
+        const queuedInput = openAiOAuth
+          ? queuedInputDiagnostics(anthropicBody.messages)
+          : undefined;
         if (inferenceLogPath && !forwardedRequestId) {
           writeInferenceRequestLog(inferenceLogPath, {
             requestId: relayRequestId,
@@ -845,6 +849,8 @@ export async function startProxyCatalog(
             provider: route.providerId ?? route.aliasId.split(':')[1] ?? 'unknown',
             route: 'translated',
             stream: clientWantsStream,
+            queuedHumanSteeringMessages: queuedInput?.humanSteeringMessages || undefined,
+            durableTaskNotifications: queuedInput?.trustedTaskNotifications || undefined,
           });
         }
         const translationLifecycle = createTranslationLifecycle(

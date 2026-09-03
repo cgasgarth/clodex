@@ -18,7 +18,6 @@ export const RESPONSES_WS_MAX_NURSERY_CONNECTIONS = 16;
 export const RESPONSES_WS_WARM_NURSERY_CONNECTIONS_PER_PARTITION = 2;
 export const RESPONSES_COMPACTION_RETAINED_USER_TOKENS = 64_000;
 export const RESPONSES_COMPACTION_CHECKPOINT_TTL_MS = 30 * 60_000;
-export const RESPONSES_COMPACTION_DURABLE_CHECKPOINT_TTL_MS = 7 * 24 * 60 * 60_000;
 
 export interface ResponsesWebSocketFetchOptions {
   providerId?: string;
@@ -42,8 +41,6 @@ export interface ResponsesWebSocketFetchOptions {
   overflowRecoveryMaxContextRejections?: number;
   overflowRecoveryDeadlineMs?: number;
   overflowRecoveryFinalCreateReserveMs?: number;
-  /** Private durable store for compacted native-compaction recovery state. */
-  checkpointStoreDir?: string;
   now?: () => number;
   /** Opt-in structured transport diagnostics; never receives conversation content. */
   onDiagnostic?: (event: ResponsesWebSocketDiagnosticEvent) => void;
@@ -119,6 +116,8 @@ export interface RequestContext {
   claudeCompactionRequest?: boolean;
   /** Portable summary anchor inherited by a continuation of compacted state. */
   claudeCompactionSummaryHash?: string;
+  /** Claude-owned queued events already committed to the selected Responses lineage. */
+  queuedEventHashes?: string[];
   claudeAgentId?: string;
   promptFieldHashes: Record<string, string>;
   instructionsSnapshot?: string;
@@ -148,6 +147,8 @@ export interface RequestContext {
   entry?: ConnectionEntry;
   createReplacement: () => ConnectionEntry;
   abortCleanup?: () => void;
+  settled?: Promise<void>;
+  resolveSettled?: () => void;
 }
 
 export interface ConnectionEntry {
@@ -157,7 +158,6 @@ export interface ConnectionEntry {
   lineageKey: string;
   key?: string;
   checkpointKey?: string;
-  checkpointStoreDir?: string;
   socket: ResponsesWebSocket;
   persistent: boolean;
   generation: 'nursery' | 'established' | 'isolated';
@@ -178,6 +178,7 @@ export interface ConnectionEntry {
   requestInputKinds?: string[];
   expectedAssistantHashes?: string[];
   expectedAssistantKinds?: string[];
+  queuedEventHashes?: string[];
   compactedInput?: JsonValue[];
   lastInputTokens?: number;
   postCompactionInputTokens?: number;
@@ -194,13 +195,14 @@ export interface CompactionCheckpoint {
   lineageId: number;
   lineageKey: string;
   key: string;
-  requestInput?: JsonValue[];
-  expectedAssistant?: JsonValue[];
+  requestInput: JsonValue[];
+  expectedAssistant: JsonValue[];
   requestInputHashes: string[];
   requestInputKinds: string[];
   expectedAssistantHashes: string[];
   expectedAssistantKinds: string[];
-  compactedInput?: JsonValue[];
+  queuedEventHashes: string[];
+  compactedInput: JsonValue[];
   lastInputTokens?: number;
   postCompactionInputTokens?: number;
   nextCompactionInputTokens?: number;
@@ -209,8 +211,4 @@ export interface CompactionCheckpoint {
   instructionsSnapshot?: string;
   lastUsedAt: number;
   ttlMs: number;
-  checkpointStoreDir?: string;
-  checkpointStoreMtimeMs?: number;
 }
-
-export type HydratedCompactionCheckpoint = CompactionCheckpoint & { compactedInput: JsonValue[] };

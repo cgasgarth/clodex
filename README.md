@@ -154,8 +154,8 @@ selects the configured aliases in Claude Code.
 
 Native Codex compaction is on by default for ChatGPT/Codex OAuth models. It
 compacts the OpenAI response chain with an in-band `compaction_trigger` or
-`POST /responses/compact`, and it keeps owner-only recovery checkpoints under
-`~/.clodex/responses-checkpoints`.
+`POST /responses/compact`, and it keeps recovery checkpoints only in the
+running Clodex process.
 
 The default trigger is 350,000 input tokens, capped at 90% of the model's
 advertised context window. There is no Clodex compaction environment flag or
@@ -163,8 +163,8 @@ threshold override.
 
 Open bare `clodex`, switch to the Secondwind view, and press `c` to toggle
 native compaction. A confirmed change persists in `~/.clodex/config.json` and
-restarts the daemon so every WebSocket transport and checkpoint uses one
-policy. An unchanged setting is a no-op. See the
+restarts the daemon so every WebSocket transport uses one policy. An unchanged
+setting is a no-op. See the
 [native compaction guide](docs/native-codex-compaction.md) for recovery and
 context lifecycle details.
 

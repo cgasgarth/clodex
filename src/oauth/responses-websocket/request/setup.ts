@@ -46,14 +46,6 @@ export function resolveWebSocketOptions(options: ResponsesWebSocketFetchOptions)
   };
 }
 
-export function checkpointStoreDirectory(
-  options: ResponsesWebSocketFetchOptions,
-): string | undefined {
-  return options.compactThreshold === undefined
-    ? undefined
-    : options.checkpointStoreDir;
-}
-
 function hasNativeWebSearch(payload: JsonObject): boolean {
   return Array.isArray(payload.tools)
     && payload.tools.some(tool => (

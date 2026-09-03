@@ -292,68 +292,84 @@ function systemToString(
   }).join('\n');
 }
 
-function inlineSystemToString(messages: AnthropicMsg[]): string | undefined {
-  const text = messages
-    .filter(message => message.role === 'system')
-    .flatMap(message => {
-      if (isString(message.content)) return [message.content];
-      return message.content
-        .filter(block => block.type === 'text')
-        .map(block => block.text ?? '');
-    })
-    .filter(value => value.trim())
-    .join('\n');
-  return text || undefined;
+const CLAUDE_MID_TURN_MESSAGE_PREFIX = 'The user sent a new message while you were working:\n';
+const CLAUDE_MID_TURN_MESSAGE_SUFFIX = 'Address the message above as you continue this turn.';
+
+function isTaskNotificationText(text: string): boolean {
+  const trimmed = text.trim();
+  return trimmed.startsWith('<task-notification>')
+    && trimmed.endsWith('</task-notification>');
 }
 
-function hasHumanInput(message: AnthropicMsg): boolean {
-  if (message.role !== 'user') return false;
-  if (isString(message.content)) return Boolean(message.content.trim());
-  return message.content.some(block =>
-    block.type === 'image' || (block.type === 'text' && Boolean(block.text?.trim()))
-  );
+function isClaudeMidTurnMessage(text: string): boolean {
+  return text.startsWith(CLAUDE_MID_TURN_MESSAGE_PREFIX)
+    && text.endsWith(CLAUDE_MID_TURN_MESSAGE_SUFFIX);
 }
 
-function queuedTaskEventReinforcement(messages: AnthropicMsg[]): string | undefined {
-  let latestHumanInput = -1;
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    if (hasHumanInput(messages[index]!)) {
-      latestHumanInput = index;
-      break;
-    }
-  }
+export interface QueuedInputDiagnostics {
+  humanSteeringMessages: number;
+  trustedTaskNotifications: number;
+}
 
-  const statuses = new Set<string>();
-  for (const message of messages.slice(latestHumanInput + 1)) {
-    if (message.role !== 'system') continue;
-    const text = isString(message.content)
-      ? message.content
+/** Count Claude-owned queue envelopes without recording their content. */
+export function queuedInputDiagnostics(messages: AnthropicMsg[]): QueuedInputDiagnostics {
+  let humanSteeringMessages = 0;
+  let trustedTaskNotifications = 0;
+  for (const message of messages) {
+    const texts = isString(message.content)
+      ? [message.content]
       : message.content
         .filter(block => block.type === 'text')
-        .map(block => block.text ?? '')
-        .join('\n');
-    if (!text.includes('<task-notification>')) continue;
-    for (const match of text.matchAll(/<status>\s*(completed|failed|stopped)\s*<\/status>/gi)) {
-      statuses.add(match[1]!.toUpperCase());
+        .map(block => block.text ?? '');
+    if (message.role === 'user') {
+      humanSteeringMessages += texts.filter(isClaudeMidTurnMessage).length;
+    } else if (message.role === 'system') {
+      trustedTaskNotifications += texts.filter(isTaskNotificationText).length;
     }
   }
-  if (statuses.size === 0) return undefined;
+  return { humanSteeringMessages, trustedTaskNotifications };
+}
 
-  const states = [...statuses].join(', ');
-  const instructions = [
-    `CURRENT TASK EVENT: Newly delivered trusted task notifications report: ${states}.`,
-    'These states supersede earlier task-status text. Account for each event before any assistant progress or final text.',
-  ];
-  if (statuses.has('FAILED')) {
-    instructions.push('For failed tasks, do not say they are running, finishing, passed, or completed. State that they failed; inspect their output before naming the cause.');
+interface OpenAiOAuthMessagePartition {
+  conversationMessages: AnthropicMsg[];
+  transientSystem?: string;
+}
+
+/**
+ * Keep transient Claude reminders in current instructions, but retain task
+ * notifications at their conversation position. The OpenAI Responses provider
+ * serializes these system messages as durable developer input for reasoning
+ * models, so later samples cannot lose a newly delivered task state.
+ */
+function partitionOpenAiOAuthMessages(messages: AnthropicMsg[]): OpenAiOAuthMessagePartition {
+  const conversationMessages: AnthropicMsg[] = [];
+  const transientSystem: string[] = [];
+  for (const message of messages) {
+    if (message.role !== 'system') {
+      conversationMessages.push(message);
+      continue;
+    }
+    if (isString(message.content)) {
+      if (isTaskNotificationText(message.content)) conversationMessages.push(message);
+      else if (message.content.trim()) transientSystem.push(message.content);
+      continue;
+    }
+
+    const durableBlocks: AnthropicBlock[] = [];
+    for (const block of message.content) {
+      if (block.type !== 'text') continue;
+      const text = block.text ?? '';
+      if (isTaskNotificationText(text)) durableBlocks.push(block);
+      else if (text.trim()) transientSystem.push(text);
+    }
+    if (durableBlocks.length > 0) {
+      conversationMessages.push({ role: 'system', content: durableBlocks });
+    }
   }
-  if (statuses.has('COMPLETED')) {
-    instructions.push('For completed tasks, do not say they are running, waiting, or finishing. State that they completed; inspect their result or output before making detailed claims.');
-  }
-  if (statuses.has('STOPPED')) {
-    instructions.push('For stopped tasks, do not say they are running, waiting, or finishing. State that they stopped.');
-  }
-  return instructions.join(' ');
+  return {
+    conversationMessages,
+    transientSystem: transientSystem.length ? transientSystem.join('\n') : undefined,
+  };
 }
 
 function joinInstructions(...parts: Array<string | undefined>): string | undefined {
@@ -518,10 +534,18 @@ function translateUserBlocks(
   blocks: AnthropicBlock[],
   openAiPromptCacheBreakpoints: boolean,
 ): ModelMessage[] {
-  const imageParts: SdkUserPart[] = [];
-  const toolResults = blocks.filter(block => block.type === 'tool_result');
   const messages: ModelMessage[] = [];
-  if (toolResults.length > 0) {
+  let toolResults: AnthropicBlock[] = [];
+  let userParts: SdkUserPart[] = [];
+
+  const flushUser = () => {
+    if (userParts.length === 0) return;
+    messages.push({ role: 'user', content: userParts });
+    userParts = [];
+  };
+  const flushTools = () => {
+    if (toolResults.length === 0) return;
+    const imageParts: SdkUserPart[] = [];
     messages.push({
       role: 'tool',
       content: toolResults.map((result): ToolResultPart => Object.assign(
@@ -534,13 +558,20 @@ function translateUserBlocks(
         cacheBreakpointOptions(result, openAiPromptCacheBreakpoints),
       )),
     });
-  }
+    toolResults = [];
+    userParts.push(...imageParts);
+  };
 
-  const parts: SdkUserPart[] = [];
   for (const block of blocks) {
+    if (block.type === 'tool_result') {
+      flushUser();
+      toolResults.push(block);
+      continue;
+    }
+    flushTools();
     if (block.type === 'text') {
       const text = block.text ?? '';
-      parts.push({
+      userParts.push({
         type: 'text',
         text,
         ...cacheBreakpointOptions(block, openAiPromptCacheBreakpoints),
@@ -550,13 +581,11 @@ function translateUserBlocks(
     if (block.type !== 'image') continue;
     const image = imagePart(block);
     if (image) {
-      parts.push({ ...image, ...cacheBreakpointOptions(block, openAiPromptCacheBreakpoints) });
+      userParts.push({ ...image, ...cacheBreakpointOptions(block, openAiPromptCacheBreakpoints) });
     }
   }
-  const userParts = [...imageParts, ...parts];
-  if (userParts.length > 0) {
-    messages.push({ role: 'user', content: userParts });
-  }
+  flushTools();
+  flushUser();
   return messages;
 }
 
@@ -727,25 +756,21 @@ export function translateRequest(
   const baseSystem = systemToString(body.system, options?.openAiOAuth === true);
   // Claude can add and remove inline system reminders while MCP servers start.
   // The Codex Responses API accepts fresh instructions on every request, so
-  // keep these current instructions out of replayed conversation history. This
-  // lets a durable native-compaction checkpoint survive a daemon restart while
-  // the MCP tool set is still settling. Other providers retain positional
-  // system messages because their semantics can differ.
-  const inlineSystem = options?.openAiOAuth ? inlineSystemToString(messages) : undefined;
-  const queuedEventReinforcement = options?.openAiOAuth
-    ? queuedTaskEventReinforcement(messages)
+  // keep these current instructions out of replayed conversation history.
+  // Other providers retain positional system messages because their semantics
+  // can differ.
+  const oauthPartition = options?.openAiOAuth
+    ? partitionOpenAiOAuthMessages(messages)
     : undefined;
+  const inlineSystem = oauthPartition?.transientSystem;
   const systemText = options?.openAiOAuth
     ? joinInstructions(
         baseSystem ?? 'You are a coding assistant.',
         OPENAI_OAUTH_QUEUED_EVENT_POLICY,
         inlineSystem,
-        queuedEventReinforcement,
       )
     : joinInstructions(baseSystem, inlineSystem);
-  const conversationMessages = options?.openAiOAuth
-    ? messages.filter(message => message.role !== 'system')
-    : messages;
+  const conversationMessages = oauthPartition?.conversationMessages ?? messages;
 
   // resolveUpstreamTools uses the shared proxy types; the adapter keeps its own
   // minimal request shapes, so cast at this boundary. Keep compact-request tool

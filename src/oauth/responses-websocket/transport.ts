@@ -1,7 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { isFunction, isObject, isString } from '../../runtime/type-guards.js';
 import { anthropicErrorType, clampRetryAfterSeconds } from '../../transport/upstream-error.js';
-import { deleteStoredResponsesCheckpoint } from '../responses-checkpoint-store.js';
 import { resolveOpenAiCompactionRearmThreshold } from '../responses-compaction.js';
 import {
   TERMINAL_EVENT_TYPES,
@@ -34,6 +33,7 @@ import {
   compactionSummaryHash,
   conversationItemHash,
   conversationItemKind,
+  queuedEventItemHashes,
 } from './continuation.js';
 import {
   eventType,
@@ -63,13 +63,6 @@ function discardCompactionCheckpoints(entry: ConnectionEntry): void {
     .filter(checkpoint => checkpoint.lineageKey !== entry.lineageKey);
   if (retained.length) compactionCheckpoints.set(entry.checkpointKey, retained);
   else compactionCheckpoints.delete(entry.checkpointKey);
-  if (entry.checkpointStoreDir) {
-    deleteStoredResponsesCheckpoint(
-      entry.checkpointStoreDir,
-      entry.checkpointKey,
-      entry.lineageKey,
-    );
-  }
 }
 
 export function beginRecycledLineage(entry: ConnectionEntry): void {
@@ -85,6 +78,7 @@ export function beginRecycledLineage(entry: ConnectionEntry): void {
   entry.requestInputKinds = undefined;
   entry.expectedAssistantHashes = undefined;
   entry.expectedAssistantKinds = undefined;
+  entry.queuedEventHashes = undefined;
   entry.compactedInput = undefined;
   entry.lastInputTokens = undefined;
   entry.postCompactionInputTokens = undefined;
@@ -251,13 +245,6 @@ export function cleanupExpiredConnections(now: number): JsonObject[] {
     const retained = checkpoints.filter(checkpoint => {
       const expired = now - checkpoint.lastUsedAt >= checkpoint.ttlMs;
       if (expired) {
-        if (checkpoint.checkpointStoreDir) {
-          deleteStoredResponsesCheckpoint(
-            checkpoint.checkpointStoreDir,
-            checkpoint.key,
-            checkpoint.lineageKey,
-          );
-        }
         evictions.push({
           connectionId: checkpoint.connectionId,
           partitionKey: checkpoint.key,
@@ -583,6 +570,10 @@ function handleSocketMessage(entry: ConnectionEntry, data: RawData): void {
       entry.requestInputKinds = entry.requestInput.map(conversationItemKind);
       entry.expectedAssistantHashes = assistantItems.map(conversationItemHash);
       entry.expectedAssistantKinds = assistantItems.map(conversationItemKind);
+      entry.queuedEventHashes = Array.from(new Set([
+        ...(ctx.queuedEventHashes ?? []),
+        ...queuedEventItemHashes(entry.requestInput),
+      ]));
       entry.compactedInput = ctx.compactedInputBase
         ? [...ctx.compactedInputBase, ...assistantItems]
         : undefined;
@@ -654,7 +645,6 @@ export function createConnection(
   persistent: boolean,
   key: string | undefined,
   checkpointKey: string | undefined,
-  checkpointStoreDir: string | undefined,
   options: ConnectionEntry['options'],
   debug: ConnectionEntry['debug'],
   /** Optional HTTP(S)_PROXY URL consumed by Bun's native WebSocket client. */
@@ -668,7 +658,6 @@ export function createConnection(
     lineageKey: randomUUID(),
     key: persistent ? key : undefined,
     checkpointKey: persistent ? checkpointKey : undefined,
-    checkpointStoreDir: persistent ? checkpointStoreDir : undefined,
     socket,
     persistent,
     generation: persistent ? 'nursery' : 'isolated',

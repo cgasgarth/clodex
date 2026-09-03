@@ -18,7 +18,6 @@ import {
 } from './responses-overflow-recovery.js';
 import {
   RESPONSES_COMPACTION_CHECKPOINT_TTL_MS,
-  RESPONSES_COMPACTION_DURABLE_CHECKPOINT_TTL_MS,
   diagnosticContext,
 } from './responses-websocket/types.js';
 import type {
@@ -27,7 +26,7 @@ import type {
   JsonValue,
   RequestContext,
   ConnectionEntry,
-  HydratedCompactionCheckpoint,
+  CompactionCheckpoint,
 } from './responses-websocket/types.js';
 import type {
   ResponsesWebSocketFetchOptions,
@@ -39,12 +38,10 @@ import {
   connectionCount,
   connectionCountByGeneration,
   checkpointEntries,
-  persistCompactionCheckpoint,
+  registerCompactionCheckpoint,
   syntheticClaudeCompactionSummary,
   syntheticAssistantMessage,
   syntheticClaudeCompactionResponse,
-  loadCompactionCheckpointStore,
-  hydrateCompactionCheckpoint,
   debugKey,
   emitDiagnostic,
 } from './responses-websocket/state.js';
@@ -58,6 +55,8 @@ import {
   retainedUserMessages,
   compactionSummaryHash,
   conversationItemHash,
+  queuedEventExtensionMatch,
+  queuedEventItemHashes,
 } from './responses-websocket/continuation.js';
 import {
   finalizeResponsesSession,
@@ -78,7 +77,6 @@ import {
 import { createOverflowRecoveryHandler } from './responses-websocket/overflow/recovery-handler.js';
 import { runCompactionTrigger } from './responses-websocket/compaction/trigger.js';
 import {
-  checkpointStoreDirectory,
   prepareResponsesRequest,
   resolveWebSocketOptions,
 } from './responses-websocket/request/setup.js';
@@ -97,6 +95,35 @@ function runtimeTypeName<Value>(value: Value): string {
   return 'object';
 }
 
+function requestAbortError(signal: AbortSignal): Error {
+  if (signal.reason instanceof Error) return signal.reason;
+  const error = new Error('Request aborted while queued behind an active sample');
+  error.name = 'AbortError';
+  return error;
+}
+
+async function waitForContextSettlement(
+  context: RequestContext,
+  signal: AbortSignal | null | undefined,
+): Promise<void> {
+  if (!context.settled) return;
+  if (!signal) {
+    await context.settled;
+    return;
+  }
+  if (signal.aborted) throw requestAbortError(signal);
+  let onAbort: (() => void) | undefined;
+  const aborted = new Promise<never>((_resolve, reject) => {
+    onAbort = () => reject(requestAbortError(signal));
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
+  try {
+    await Promise.race([context.settled, aborted]);
+  } finally {
+    if (onAbort) signal.removeEventListener('abort', onAbort);
+  }
+}
+
 /**
  * Build a fetch transport backed by persistent, session-aware Responses sockets.
  * Each returned Response still represents exactly one AI SDK request.
@@ -109,9 +136,6 @@ export function createResponsesWebSocketFetch(
   const debug = (message: string) => { try { log?.(`ws: ${message}`); } catch { /* ignore */ } };
   let standaloneCompactionNotFound = false;
   const resolvedOptions = resolveWebSocketOptions(options);
-  // Durable native state must never remain active after the user disables the
-  // native compaction setting, even if a caller accidentally supplies a path.
-  const checkpointStoreDir = checkpointStoreDirectory(options);
 
   // SAFETY: This async implementation matches the provider-utils FetchFunction contract.
   return (async (requestUrl, init): Promise<Response> => {
@@ -138,21 +162,51 @@ export function createResponsesWebSocketFetch(
         largestChunkCharacters: rehomedInstructions.largestChunkCharacters,
       }, diagnosticCorrelation);
     }
-    const now = resolvedOptions.now();
-    loadCompactionCheckpointStore(checkpointStoreDir, now, checkpointKey);
-    const evictions = cleanupExpiredConnections(now);
-
+    let now = resolvedOptions.now();
     const forceCompaction = diagnosticCorrelation?.forceCompaction === true;
-    const candidates = partitionKey ? connectionEntries(partitionKey) : [];
+    let candidates = partitionKey ? connectionEntries(partitionKey) : [];
+    const queuedBehindActive = candidates
+      .filter(entry => {
+        const current = entry.current;
+        return Boolean(
+          entry.inFlight
+          && current
+          && current.claudeAgentId === diagnosticCorrelation?.claudeAgentId
+          && queuedEventExtensionMatch({
+            requestInput: inputArray(current.originalPayload),
+          }, payload) !== undefined,
+        );
+      })
+      .toSorted((left, right) => right.lastUsedAt - left.lastUsedAt)[0];
+    if (queuedBehindActive?.current) {
+      const queuedItems = queuedEventExtensionMatch({
+        requestInput: inputArray(queuedBehindActive.current.originalPayload),
+      }, payload)?.delta.length;
+      emitDiagnostic(options, {
+        event: 'ws_queued_input',
+        outcome: 'waiting',
+        connectionId: queuedBehindActive.debugId,
+        queuedItems,
+      }, diagnosticCorrelation);
+      await waitForContextSettlement(queuedBehindActive.current, init?.signal);
+      emitDiagnostic(options, {
+        event: 'ws_queued_input',
+        outcome: 'released',
+        connectionId: queuedBehindActive.debugId,
+        queuedItems,
+      }, diagnosticCorrelation);
+      now = resolvedOptions.now();
+      candidates = partitionKey ? connectionEntries(partitionKey) : [];
+    }
+    const evictions = cleanupExpiredConnections(now);
+    candidates = partitionKey ? connectionEntries(partitionKey) : [];
     const checkpoints = checkpointKey ? checkpointEntries(checkpointKey) : [];
     const headPlan = planResponsesSessionHead({
       payload,
       candidates,
       checkpoints,
-      now,
       forceCompaction,
       claudeAgentId: diagnosticCorrelation?.claudeAgentId,
-      hydrateCheckpoint: hydrateCompactionCheckpoint,
     });
     const {
       preparedConversation,
@@ -582,7 +636,6 @@ export function createResponsesWebSocketFetch(
               Boolean(partitionKey),
               partitionKey,
               checkpointKey,
-              checkpointStoreDir,
               resolvedOptions,
               debug,
               proxyUrl,
@@ -946,7 +999,7 @@ export function createResponsesWebSocketFetch(
       if (!summaryHash) {
         throw new ResponsesCompactionError('Synthetic Claude compaction marker was not anchorable');
       }
-      const checkpoint: HydratedCompactionCheckpoint = {
+      const checkpoint: CompactionCheckpoint = {
         connectionId: 0,
         lineageId: allocateLineageDebugId(),
         lineageKey: randomUUID(),
@@ -957,18 +1010,16 @@ export function createResponsesWebSocketFetch(
         requestInputKinds: requestInput.map(conversationItemKind),
         expectedAssistantHashes: [conversationItemHash(assistantItem)],
         expectedAssistantKinds: [conversationItemKind(assistantItem)],
+        queuedEventHashes: queuedEventItemHashes(requestInput),
         compactedInput: [...compactedInputBase, assistantItem],
         lastInputTokens: compactionUsage?.outputTokens,
         claudeCompactionSummaryHash: summaryHash,
         promptFieldHashes,
         instructionsSnapshot,
         lastUsedAt: now,
-        ttlMs: checkpointStoreDir
-          ? RESPONSES_COMPACTION_DURABLE_CHECKPOINT_TTL_MS
-          : RESPONSES_COMPACTION_CHECKPOINT_TTL_MS,
-        checkpointStoreDir,
+        ttlMs: RESPONSES_COMPACTION_CHECKPOINT_TTL_MS,
       };
-      const checkpointDurable = persistCompactionCheckpoint(checkpoint, debug);
+      registerCompactionCheckpoint(checkpoint);
       if (supersededEntry) deleteEntry(supersededEntry);
       emitDiagnostic(options, {
         event: 'ws_compaction',
@@ -976,7 +1027,6 @@ export function createResponsesWebSocketFetch(
         transport: 'claude_compaction_response',
         reason: compactionReason,
         checkpointItems: checkpoint.compactedInput.length,
-        checkpointDurable,
         ...compactionUsage,
       }, diagnosticCorrelation);
       return syntheticClaudeCompactionResponse(
@@ -1000,6 +1050,8 @@ export function createResponsesWebSocketFetch(
     let activeContext: RequestContext | undefined;
     const stream = new ReadableStream<Uint8Array>({
       start(controller) {
+        let resolveSettled: (() => void) | undefined;
+        const settled = new Promise<void>(resolve => { resolveSettled = resolve; });
         const ctx: RequestContext = {
           controller,
           encoder: new TextEncoder(),
@@ -1023,6 +1075,11 @@ export function createResponsesWebSocketFetch(
             ? selected?.claudeCompactionSummaryHash
             : checkpointMatch?.mode === 'claude_compaction_summary'
               ? selectedCheckpoint?.claudeCompactionSummaryHash
+              : undefined,
+          queuedEventHashes: continued
+            ? selected?.queuedEventHashes
+            : decision === 'compaction_checkpoint'
+              ? selectedCheckpoint?.queuedEventHashes
               : undefined,
           claudeAgentId: diagnosticCorrelation?.claudeAgentId,
           promptFieldHashes,
@@ -1051,11 +1108,12 @@ export function createResponsesWebSocketFetch(
             persistent,
             partitionKey,
             checkpointKey,
-            checkpointStoreDir,
             resolvedOptions,
             debug,
             proxyUrl,
           ),
+          settled,
+          resolveSettled,
         };
         activeContext = ctx;
 
@@ -1066,7 +1124,6 @@ export function createResponsesWebSocketFetch(
           persistent,
           partitionKey,
           checkpointKey,
-          checkpointStoreDir,
           resolvedOptions,
           debug,
           proxyUrl,

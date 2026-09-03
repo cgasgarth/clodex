@@ -383,5 +383,7 @@ export function closeContext(ctx: RequestContext): void {
   if (ctx.closed) return;
   ctx.closed = true;
   ctx.abortCleanup?.();
+  ctx.resolveSettled?.();
+  ctx.resolveSettled = undefined;
   try { ctx.controller.close(); } catch { /* already closed */ }
 }

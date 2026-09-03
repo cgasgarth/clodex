@@ -435,7 +435,6 @@ describe('createLanguageModel', () => {
         accountId: 'acct-transport-threshold',
         compactThreshold: 244_800,
         contextWindow: 272_000,
-        checkpointStoreDir: expect.any(String),
       }),
     );
     expect(createOpenAI).toHaveBeenCalledWith(expect.objectContaining({
@@ -454,7 +453,6 @@ describe('createLanguageModel', () => {
       undefined,
       expect.objectContaining({
         compactThreshold: undefined,
-        checkpointStoreDir: undefined,
       }),
     );
   });

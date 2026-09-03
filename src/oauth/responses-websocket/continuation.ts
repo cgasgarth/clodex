@@ -35,15 +35,19 @@ function normalizeToolCallJson(value: JsonValue): JsonValue {
 
 export type ContinuationMatchMode =
   | 'exact'
+  | 'queued_after_active'
   | 'replayed_reasoning'
   | 'omitted_reasoning'
+  | 'omitted_queued_event'
   | 'claude_compaction_summary'
   | 'claude_compaction_request';
 
 interface ContinuationMatchRanks {
   exact: number;
+  queued_after_active: number;
   replayed_reasoning: number;
   omitted_reasoning: number;
+  omitted_queued_event: number;
   claude_compaction_summary: number;
   claude_compaction_request: number;
 }
@@ -51,10 +55,12 @@ interface ContinuationMatchRanks {
 export function continuationMatchRank(mode: ContinuationMatchMode): number {
   const ranks: ContinuationMatchRanks = {
     exact: 0,
-    replayed_reasoning: 1,
-    omitted_reasoning: 2,
-    claude_compaction_summary: 3,
-    claude_compaction_request: 4,
+    queued_after_active: 1,
+    replayed_reasoning: 2,
+    omitted_reasoning: 3,
+    omitted_queued_event: 4,
+    claude_compaction_summary: 5,
+    claude_compaction_request: 6,
   };
   return ranks[mode];
 }
@@ -71,6 +77,7 @@ export interface ContinuationSource {
   requestInputKinds?: string[];
   expectedAssistantHashes?: string[];
   expectedAssistantKinds?: string[];
+  queuedEventHashes?: string[];
   claudeCompactionSummaryHash?: string;
 }
 
@@ -363,6 +370,61 @@ export function conversationItemHash(value: JsonValue): string {
   return createHash('sha256').update(canonicalJson(normalizeToolCallJson(value))).digest('hex').slice(0, 16);
 }
 
+const CLAUDE_MID_TURN_MESSAGE_PREFIX = 'The user sent a new message while you were working:\n';
+const CLAUDE_MID_TURN_MESSAGE_SUFFIX = 'Address the message above as you continue this turn.';
+
+function conversationItemTexts(value: JsonValue): string[] {
+  if (!isJsonObject(value)) return [];
+  if (isString(value.content)) return [value.content];
+  if (!Array.isArray(value.content)) return [];
+  return value.content.flatMap(part => (
+    isJsonObject(part) && isString(part.text) ? [part.text] : []
+  ));
+}
+
+function isQueuedEventItem(value: JsonValue): boolean {
+  if (!isJsonObject(value) || !isString(value.role)) return false;
+  const texts = conversationItemTexts(value);
+  const taskNotification = texts.some(text => {
+    const trimmed = text.trim();
+    return trimmed.startsWith('<task-notification>')
+      && trimmed.endsWith('</task-notification>');
+  });
+  if (value.role === 'developer') return taskNotification;
+  return value.role === 'user' && (
+    taskNotification
+    || texts.some(text => (
+      text.startsWith(CLAUDE_MID_TURN_MESSAGE_PREFIX)
+        && text.endsWith(CLAUDE_MID_TURN_MESSAGE_SUFFIX)
+    ))
+  );
+}
+
+/** Hash only Claude-owned queued inputs that may be absent from its next replay. */
+export function queuedEventItemHashes(items: JsonValue[]): string[] {
+  return items.filter(isQueuedEventItem).map(conversationItemHash);
+}
+
+/**
+ * Match a request that arrived while the source sample was active. Such a
+ * request can contain the active sample's input plus only newly queued Claude
+ * events, because the active assistant output does not exist yet.
+ */
+export function queuedEventExtensionMatch(
+  source: Pick<ContinuationSource, 'requestInput' | 'requestInputHashes'>,
+  payload: JsonObject,
+  prepared = prepareConversationItems(payload),
+): ContinuationMatch | undefined {
+  const sourceHashes = source.requestInputHashes
+    ?? source.requestInput?.map(conversationItemHash);
+  if (!sourceHashes || prepared.items.length <= sourceHashes.length) return undefined;
+  if (!sourceHashes.every((hash, index) => prepared.hashes[index] === hash)) return undefined;
+  const delta = prepared.items.slice(sourceHashes.length);
+  return queuedEventItemHashes(delta).length === delta.length
+    ? { delta, mode: 'queued_after_active' }
+    : undefined;
+}
+
 /** Canonicalize the incoming conversation once, then reuse it for every head. */
 export function prepareConversationItems(payload: JsonObject): PreparedConversationItems {
   const items = inputArray(payload);
@@ -448,10 +510,12 @@ export function historyContinuationMatch(
   // reshaped, repeated, or omitted. Item order and every user message, tool
   // call, tool result, and visible assistant message remain strict boundaries.
   const expectedKinds = [...requestKinds, ...assistantKinds];
+  const queuedEventHashes = new Set(entry.queuedEventHashes ?? []);
   let expectedIndex = 0;
   let fullIndex = 0;
   let replayedReasoning = false;
   let omittedReasoning = false;
+  let omittedQueuedEvent = false;
   while (expectedIndex < exactPrefixHashes.length) {
     const expectedKind = expectedKinds[expectedIndex];
     if (expectedKind === 'reasoning' || isOpaqueCompactionKind(expectedKind ?? '')) {
@@ -462,6 +526,14 @@ export function historyContinuationMatch(
       ) fullIndex += 1;
       replayedReasoning ||= fullIndex > start;
       omittedReasoning ||= fullIndex === start;
+      expectedIndex += 1;
+      continue;
+    }
+    if (
+      queuedEventHashes.has(exactPrefixHashes[expectedIndex]!)
+      && fullHashes[fullIndex] !== exactPrefixHashes[expectedIndex]
+    ) {
+      omittedQueuedEvent = true;
       expectedIndex += 1;
       continue;
     }
@@ -482,11 +554,13 @@ export function historyContinuationMatch(
   if (
     expectedIndex === exactPrefixHashes.length
     && fullIndex < full.length
-    && (replayedReasoning || omittedReasoning)
+    && (replayedReasoning || omittedReasoning || omittedQueuedEvent)
   ) {
     return {
       delta: full.slice(fullIndex),
-      mode: replayedReasoning ? 'replayed_reasoning' : 'omitted_reasoning',
+      mode: omittedQueuedEvent
+        ? 'omitted_queued_event'
+        : replayedReasoning ? 'replayed_reasoning' : 'omitted_reasoning',
     };
   }
 

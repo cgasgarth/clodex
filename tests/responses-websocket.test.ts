@@ -1,17 +1,6 @@
 import { it, expect, vi, beforeEach } from 'bun:test';
 import { createHash, randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
-import {
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  readdirSync,
-  rmSync,
-  statSync,
-  symlinkSync,
-  writeFileSync,
-} from 'node:fs';
-import { join } from 'node:path';
 import { createOpenAI } from '@ai-sdk/openai';
 import { streamText } from 'ai';
 
@@ -42,13 +31,13 @@ import {
   withResponsesWebSocketDiagnosticContext,
   type ResponsesWebSocketDiagnosticEvent,
 } from '../src/oauth/responses-websocket.js';
-import { saveStoredResponsesCheckpoint } from '../src/oauth/responses-checkpoint-store.js';
 import {
   REHOMED_INSTRUCTIONS_BOOTSTRAP,
   RESPONSES_INSTRUCTIONS_MAX_CHARACTERS,
 } from '../src/oauth/responses-websocket/request/instructions.js';
 import { compactionSummaryHash } from '../src/oauth/responses-websocket/continuation.js';
 import {
+  registerCompactionCheckpoint,
   syntheticAssistantMessage,
   syntheticClaudeCompactionSummary,
 } from '../src/oauth/responses-websocket/state.js';
@@ -1480,6 +1469,113 @@ beforeEach(() => {
     await readAll(second);
   });
 
+  it('keeps an omitted queued task event in the active Responses lineage', async () => {
+    const diagnostics: ResponsesWebSocketDiagnosticEvent[] = [];
+    const initial = { role: 'user', content: [{ type: 'input_text', text: 'run checks' }] };
+    const event = {
+      role: 'developer',
+      content: '<task-notification><status>completed</status></task-notification>',
+    };
+    const wsFetch = createResponsesWebSocketFetch(WS_URL, undefined, {
+      providerId: 'openai',
+      accountId: 'acct-queued-task-event',
+      onDiagnostic: value => diagnostics.push(value),
+    });
+    const first = await wsFetch('https://x', {
+      method: 'POST', headers: {}, body: JSON.stringify(sessionPayload([initial, event])),
+    });
+    const socket = lastSocket();
+    socket.emit('open');
+    emitTextResponse(socket, 'resp_queued_event', 'working');
+    await readAll(first);
+
+    const assistant = { role: 'assistant', content: [{ type: 'output_text', text: 'working' }] };
+    const next = { role: 'user', content: [{ type: 'input_text', text: 'continue' }] };
+    const second = await wsFetch('https://x', {
+      method: 'POST',
+      headers: {},
+      body: JSON.stringify(sessionPayload([initial, assistant, next])),
+    });
+
+    // The queued event is absent from Claude's replay but remains inside
+    // resp_queued_event, so only the true append-only delta is sent.
+    // SAFETY: The fake socket records serialized response.create payloads.
+    const sent = JSON.parse(socket.send.mock.calls[1]![0] as string);
+    expect(sent.previous_response_id).toBe('resp_queued_event');
+    expect(sent.input).toEqual([next]);
+    expect(diagnostics.at(-1)).toMatchObject({
+      event: 'ws_head_decision',
+      decision: 'continuation',
+      continuationMatchMode: 'omitted_queued_event',
+    });
+    emitTextResponse(socket, 'resp_after_queued_event', 'done');
+    await readAll(second);
+  });
+
+  it('serializes same-agent queued input behind the active sample', async () => {
+    const diagnostics: ResponsesWebSocketDiagnosticEvent[] = [];
+    const initial = { role: 'user', content: [{ type: 'input_text', text: 'start work' }] };
+    const event = {
+      role: 'user',
+      content: [{
+        type: 'input_text',
+        text: 'The user sent a new message while you were working:\nuse the new plan\n\n'
+          + 'Address the message above as you continue this turn.',
+      }],
+    };
+    const wsFetch = createResponsesWebSocketFetch(WS_URL, undefined, {
+      providerId: 'openai',
+      accountId: 'acct-serialized-queued-input',
+      onDiagnostic: value => diagnostics.push(value),
+    });
+    const first = await withResponsesWebSocketDiagnosticContext(
+      { claudeAgentId: 'parent-agent' },
+      () => wsFetch('https://x', {
+        method: 'POST', headers: {}, body: JSON.stringify(sessionPayload([initial])),
+      }),
+    );
+    const socket = lastSocket();
+    socket.emit('open');
+
+    const queuedResponse = withResponsesWebSocketDiagnosticContext(
+      { claudeAgentId: 'parent-agent' },
+      () => wsFetch('https://x', {
+        method: 'POST',
+        headers: {},
+        body: JSON.stringify(sessionPayload([initial, event])),
+      }),
+    );
+    await Bun.sleep(5);
+    expect(fakeSockets).toHaveLength(1);
+    expect(socket.send).toHaveBeenCalledTimes(1);
+    expect(diagnostics).toContainEqual(expect.objectContaining({
+      event: 'ws_queued_input',
+      outcome: 'waiting',
+      queuedItems: 1,
+    }));
+
+    emitTextResponse(socket, 'resp_active_sample', 'first answer');
+    await readAll(first);
+    const second = await queuedResponse;
+    expect(socket.send).toHaveBeenCalledTimes(2);
+    // SAFETY: The fake socket records serialized response.create payloads.
+    const sent = JSON.parse(socket.send.mock.calls[1]![0] as string);
+    expect(sent.previous_response_id).toBe('resp_active_sample');
+    expect(sent.input).toEqual([event]);
+    expect(diagnostics).toContainEqual(expect.objectContaining({
+      event: 'ws_queued_input',
+      outcome: 'released',
+      queuedItems: 1,
+    }));
+    expect(diagnostics.at(-1)).toMatchObject({
+      event: 'ws_head_decision',
+      decision: 'continuation',
+      continuationMatchMode: 'queued_after_active',
+    });
+    emitTextResponse(socket, 'resp_after_steer', 'second answer');
+    await readAll(second);
+  });
+
   it('re-homes oversized instructions once and continues with only the new delta', async () => {
     const diagnostics: ResponsesWebSocketDiagnosticEvent[] = [];
     const oversizedInstructions = 'i'.repeat(RESPONSES_INSTRUCTIONS_MAX_CHARACTERS + 1);
@@ -1847,18 +1943,12 @@ beforeEach(() => {
   });
 
   it('returns a synthetic Claude summary and re-anchors it to native compacted state', async () => {
-    mkdirSync(process.env.CLODEX_HOME!, { recursive: true });
-    const checkpointStoreDir = mkdtempSync(join(
-      process.env.CLODEX_HOME!,
-      'claude-summary-anchor-checkpoints-',
-    ));
     const diagnostics: ResponsesWebSocketDiagnosticEvent[] = [];
     const compactFetch = vi.fn();
     const options = {
       accountId: 'acct-claude-summary-anchor',
       compactThreshold: 900,
       contextWindow: 2_000,
-      checkpointStoreDir,
       // SAFETY: The test fixture defines the asserted runtime shape.
       compactFetch: compactFetch as typeof fetch,
       onDiagnostic: event => diagnostics.push(event),
@@ -1962,7 +2052,7 @@ beforeEach(() => {
     const syntheticText = compactFrames
       .find(event => event.type === 'response.output_text.delta')?.delta as string;
     expect(syntheticText).toMatch(
-      /^<summary>Context compacted natively by OpenAI and retained in Clodex checkpoint /,
+      /^<summary>Context compacted natively by OpenAI and retained in Clodex process checkpoint /,
     );
     expect(compactFrames.find(event => event.type === 'response.completed').response.usage)
       .toMatchObject({
@@ -1976,7 +2066,6 @@ beforeEach(() => {
       event: 'ws_compaction',
       outcome: 'synthetic_checkpoint',
       transport: 'claude_compaction_response',
-      checkpointDurable: true,
     }));
     expect(diagnostics).toContainEqual(expect.objectContaining({
       event: 'ws_head_decision',
@@ -2087,107 +2176,9 @@ beforeEach(() => {
     });
     await readAll(continued);
 
-    resetResponsesWebSocketConnectionsForTests();
-    fakeSockets.length = 0;
-    const resumedFetch = createResponsesWebSocketFetch(WS_URL, undefined, {
-      ...options,
-      compactThreshold: 1_500,
-      contextWindow: 2_500,
-    });
-    const durableResume = await resumedFetch('https://example.test/responses', {
-      method: 'POST',
-      headers: {},
-      body: JSON.stringify(sessionPayload([rewrittenUser])),
-    });
-    const durableSocket = lastSocket();
-    durableSocket.emit('open');
-    // SAFETY: The test fixture defines the asserted runtime shape.
-    expect(JSON.parse(durableSocket.send.mock.calls[0]![0] as string).input).toEqual(
-      expect.arrayContaining([expect.objectContaining({ type: 'compaction' })]),
-    );
-    emitTextResponse(durableSocket, 'resp_durable_anchor', 'Still anchored.', {
-      input_tokens: 1_200,
-      output_tokens: 10,
-    });
-    await readAll(durableResume);
-
-    resetResponsesWebSocketConnectionsForTests();
-    fakeSockets.length = 0;
-    const handoffFetch = createResponsesWebSocketFetch(WS_URL, undefined, {
-      ...options,
-      compactThreshold: 1_500,
-      contextWindow: 4_000,
-    });
-
-    const compactBodies: unknown[][] = [];
-    compactFetch.mockImplementation(async (_url: string | URL | Request, init?: RequestInit) => {
-      const body = JSON.parse(String(init?.body));
-      compactBodies.push(body.input);
-      return new Response(JSON.stringify({
-        output: [{ type: 'compaction', encrypted_content: 'account-handoff-rebase' }],
-        usage: { input_tokens: 850, output_tokens: 20 },
-      }), {
-        status: 200,
-        headers: { 'content-type': 'application/json' },
-      });
-    });
-    const staleAccountHistory = {
-      role: 'user',
-      content: [{ type: 'input_text', text: `stale-account:${'x'.repeat(8_000)}` }],
-    };
-    const retainedTurns = Array.from({ length: 6 }, (_, index) => ([
-      {
-        type: 'message',
-        role: 'assistant',
-        content: [{ type: 'output_text', text: `retained-${index}:${'a'.repeat(600)}` }],
-      },
-      {
-        type: 'message',
-        role: 'user',
-        content: [{ type: 'input_text', text: `current-${index}:${'u'.repeat(300)}` }],
-      },
-    ])).flat();
-    const retainedUser = retainedTurns.at(-1)!;
-    const handedOff = await withResponsesWebSocketDiagnosticContext(
-      { estimatedInputTokens: 4_300, claudeAgentId: 'account-handoff-resume' },
-      () => handoffFetch('https://example.test/responses', {
-        method: 'POST',
-        headers: {},
-        body: JSON.stringify(sessionPayload([
-          staleAccountHistory,
-          rewrittenUser,
-          ...retainedTurns,
-        ])),
-      }),
-    );
-
-    expect(compactBodies.length).toBeGreaterThan(0);
-    expect(JSON.stringify(compactBodies)).not.toContain('stale-account:');
-    const handedOffSocket = lastSocket();
-    handedOffSocket.emit('open');
-    // SAFETY: The test fixture defines the asserted runtime shape.
-    const handedOffPayload = JSON.parse(handedOffSocket.send.mock.calls[0]![0] as string);
-    expect(handedOffPayload.previous_response_id).toBeUndefined();
-    expect(handedOffPayload.input).toEqual(expect.arrayContaining([
-      expect.objectContaining({ type: 'compaction', encrypted_content: 'account-handoff-rebase' }),
-      retainedUser,
-    ]));
-    emitTextResponse(handedOffSocket, 'resp_account_handoff', 'Resumed safely.');
-    await readAll(handedOff);
-    expect(diagnostics).toContainEqual(expect.objectContaining({
-      event: 'ws_overflow_recovery',
-      outcome: 'stage_accepted',
-      reason: 'known_oversized',
-    }));
-    rmSync(checkpointStoreDir, { recursive: true, force: true });
   });
 
   it('uses model summarization when an anchored compact endpoint is missing', async () => {
-    mkdirSync(process.env.CLODEX_HOME!, { recursive: true });
-    const checkpointStoreDir = mkdtempSync(join(
-      process.env.CLODEX_HOME!,
-      'claude-anchor-compact-404-',
-    ));
     const accountId = 'acct-claude-anchor-compact-404';
     const diagnostics: ResponsesWebSocketDiagnosticEvent[] = [];
     const compactFetch = vi.fn(async () => new Response(JSON.stringify({
@@ -2210,14 +2201,18 @@ beforeEach(() => {
     )!;
     // SAFETY: The synthetic summary is always long enough to produce an anchor hash.
     const summaryHash = compactionSummaryHash(summaryText)!;
-    expect(saveStoredResponsesCheckpoint(checkpointStoreDir, {
-      version: 2,
-      checkpointKey,
+    registerCompactionCheckpoint({
+      connectionId: 0,
+      lineageId: 1,
       lineageKey: randomUUID(),
+      key: checkpointKey,
+      requestInput: [originalUser],
+      expectedAssistant: [assistantItem],
       requestInputHashes: [checkpointItemHash(originalUser)],
       requestInputKinds: ['user'],
       expectedAssistantHashes: [checkpointItemHash(assistantItem)],
       expectedAssistantKinds: ['message'],
+      queuedEventHashes: [],
       compactedInput: [
         { type: 'compaction', encrypted_content: 'anchored-native-state' },
         assistantItem,
@@ -2225,11 +2220,11 @@ beforeEach(() => {
       lastInputTokens: 50,
       claudeCompactionSummaryHash: summaryHash,
       lastUsedAt: Date.now(),
-    }, 16, 64)).toBe(true);
+      ttlMs: 60_000,
+    });
 
     const wsFetch = createResponsesWebSocketFetch(WS_URL, undefined, {
       accountId,
-      checkpointStoreDir,
       compactThreshold: 10_000,
       contextWindow: 100_000,
       // SAFETY: The test fixture defines the asserted runtime shape.
@@ -2290,11 +2285,6 @@ beforeEach(() => {
   });
 
   it('uses Claude portable history when its opaque anchor exceeds the hard window', async () => {
-    mkdirSync(process.env.CLODEX_HOME!, { recursive: true });
-    const checkpointStoreDir = mkdtempSync(join(
-      process.env.CLODEX_HOME!,
-      'claude-anchor-context-overflow-',
-    ));
     const accountId = 'acct-claude-anchor-context-overflow';
     const diagnostics: ResponsesWebSocketDiagnosticEvent[] = [];
     const compactFetch = vi.fn(async () => new Response('unexpected compaction', { status: 500 }));
@@ -2312,14 +2302,18 @@ beforeEach(() => {
     )!;
     // SAFETY: The synthetic summary is always long enough to produce an anchor hash.
     const summaryHash = compactionSummaryHash(summaryText)!;
-    expect(saveStoredResponsesCheckpoint(checkpointStoreDir, {
-      version: 2,
-      checkpointKey,
+    registerCompactionCheckpoint({
+      connectionId: 0,
+      lineageId: 1,
       lineageKey: randomUUID(),
+      key: checkpointKey,
+      requestInput: [originalUser],
+      expectedAssistant: [assistantItem],
       requestInputHashes: [checkpointItemHash(originalUser)],
       requestInputKinds: ['user'],
       expectedAssistantHashes: [checkpointItemHash(assistantItem)],
       expectedAssistantKinds: ['message'],
+      queuedEventHashes: [],
       compactedInput: [
         { type: 'compaction', encrypted_content: 'large-native-state' },
         assistantItem,
@@ -2329,11 +2323,11 @@ beforeEach(() => {
       nextCompactionInputTokens: 900,
       claudeCompactionSummaryHash: summaryHash,
       lastUsedAt: Date.now(),
-    }, 16, 64)).toBe(true);
+      ttlMs: 60_000,
+    });
 
     const wsFetch = createResponsesWebSocketFetch(WS_URL, undefined, {
       accountId,
-      checkpointStoreDir,
       compactThreshold: 100,
       contextWindow: 1_000,
       // SAFETY: The test fixture defines the asserted runtime shape.
@@ -2385,7 +2379,6 @@ beforeEach(() => {
       output_tokens: 10,
     });
     await readAll(response);
-    rmSync(checkpointStoreDir, { recursive: true, force: true });
   });
 
   it('does not anchor a tampered synthetic Claude compaction summary', async () => {
@@ -2493,143 +2486,6 @@ beforeEach(() => {
     emitTextResponse(fallbackSocket, 'resp_short_summary_fallback', 'done');
     await readAll(continued);
   });
-
-  it.each([
-    // SAFETY: The test fixture defines the asserted runtime shape.
-    { label: 'parent orchestrator', claudeAgentId: undefined, prefix: [] as unknown[] },
-    // SAFETY: The test fixture defines the asserted runtime shape.
-    { label: 'ordinary subagent', claudeAgentId: 'subagent-compact', prefix: [] as unknown[] },
-    {
-      label: 'dynamic workflow agent',
-      claudeAgentId: 'workflow-compact',
-      // SAFETY: The test fixture defines the asserted runtime shape.
-      prefix: [{
-        role: 'developer',
-        content: [{ type: 'input_text', text: 'workflow phase context' }],
-      }] as unknown[],
-    },
-  ])(
-    'restores $label synthetic compact checkpoint and token reporting after restart',
-    async ({ label, claudeAgentId, prefix }) => {
-      mkdirSync(process.env.CLODEX_HOME!, { recursive: true });
-      const checkpointStoreDir = mkdtempSync(
-        join(process.env.CLODEX_HOME!, `synthetic-${label.replaceAll(' ', '-')}-`),
-      );
-      const compactInstruction = {
-        role: 'user',
-        content: [{
-          type: 'input_text',
-          text: 'Your task is to create a detailed summary of the conversation so far.',
-        }],
-      };
-      const canonical = [
-        { type: 'compaction', encrypted_content: `opaque-${label}` },
-      ];
-      const compactFetch = vi.fn(async () => new Response(JSON.stringify({
-        output: canonical,
-        usage: {
-          input_tokens: 210,
-          input_tokens_details: { cached_tokens: 180, cache_write_tokens: 4 },
-          output_tokens: 18,
-        },
-      }), {
-        status: 200,
-        headers: { 'content-type': 'application/json' },
-      }));
-      const accountId = `acct-synthetic-${label.replaceAll(' ', '-')}`;
-      const compactingFetch = createResponsesWebSocketFetch(WS_URL, undefined, {
-        accountId,
-        compactThreshold: 100,
-        // SAFETY: The test fixture defines the asserted runtime shape.
-        compactFetch: compactFetch as typeof fetch,
-        checkpointStoreDir,
-      });
-      const compactResponse = await withResponsesWebSocketDiagnosticContext(
-        { claudeAgentId, forceCompaction: true },
-        () => compactingFetch('https://example.test/responses', {
-          method: 'POST',
-          headers: {},
-          body: JSON.stringify(sessionPayload([...prefix, compactInstruction])),
-        }),
-      );
-      const compactEvents = (await readAll(compactResponse))
-        .split('\n\n')
-        .filter(Boolean)
-        .map(frame => JSON.parse(frame.replace(/^data: /, '')));
-      // SAFETY: The test fixture defines the asserted runtime shape.
-      const summaryText = compactEvents
-        .find(event => event.type === 'response.output_text.delta').delta as string;
-      const summaryBody = summaryText.match(/<summary>([\s\S]*)<\/summary>/)![1]!;
-      expect(compactEvents.find(event => event.type === 'response.completed').response.usage)
-        .toMatchObject({
-          input_tokens: 210,
-          input_tokens_details: { cached_tokens: 180, cache_write_tokens: 4 },
-          output_tokens: 18,
-        });
-      expect(fakeSockets).toHaveLength(0);
-      expect(readdirSync(checkpointStoreDir)).toHaveLength(1);
-
-      resetResponsesWebSocketConnectionsForTests();
-      fakeSockets.length = 0;
-      const compactAfterRestart = vi.fn();
-      const resumedFetch = createResponsesWebSocketFetch(WS_URL, undefined, {
-        accountId,
-        compactThreshold: 100,
-        // SAFETY: The test fixture defines the asserted runtime shape.
-        compactFetch: compactAfterRestart as typeof fetch,
-        checkpointStoreDir,
-      });
-      const continuationPrefix =
-        'This session is being continued from a previous conversation that ran out of context. '
-        + 'The summary below covers the earlier portion of the conversation.\n\n';
-      const continuationSuffix =
-        'Continue the conversation from where it left off without asking the user any further questions. '
-        + 'Resume directly — do not acknowledge the summary, do not recap what was happening, '
-        + 'do not preface with "I\'ll continue" or similar. Pick up the last task as if the break never happened.';
-      const nextPrompt = { type: 'input_text', text: `${label} next turn` };
-      const rewrittenUser = {
-        role: 'user',
-        content: [{
-          type: 'input_text',
-          text: `${continuationPrefix}Summary:\n${summaryBody}\n${continuationSuffix}`,
-        }, nextPrompt],
-      };
-      const resumed = await withResponsesWebSocketDiagnosticContext(
-        { claudeAgentId },
-        () => resumedFetch('https://example.test/responses', {
-          method: 'POST',
-          headers: {},
-          body: JSON.stringify(sessionPayload([rewrittenUser])),
-        }),
-      );
-      const socket = lastSocket();
-      socket.emit('open');
-      // SAFETY: The test fixture defines the asserted runtime shape.
-      const sent = JSON.parse(socket.send.mock.calls[0]![0] as string);
-      expect(sent.previous_response_id).toBeUndefined();
-      expect(sent.input).toEqual(expect.arrayContaining([
-        canonical[0],
-        expect.objectContaining({ role: 'assistant' }),
-        { role: 'user', content: [nextPrompt] },
-      ]));
-      emitTextResponse(socket, `resp_${label}`, `${label} continued`, {
-        input_tokens: 50,
-        input_tokens_details: { cached_tokens: 40 },
-        output_tokens: 7,
-      });
-      const completed = (await readAll(resumed))
-        .split('\n\n')
-        .filter(Boolean)
-        .map(frame => JSON.parse(frame.replace(/^data: /, '')))
-        .find(event => event.type === 'response.completed');
-      expect(completed.response.usage).toMatchObject({
-        input_tokens: 50,
-        input_tokens_details: { cached_tokens: 40 },
-        output_tokens: 7,
-      });
-      expect(compactAfterRestart).not.toHaveBeenCalled();
-    },
-  );
 
   it('bounds retained user messages to the Codex 64K policy during a native rebase', async () => {
     const compactFetch = vi.fn();
@@ -3376,129 +3232,6 @@ beforeEach(() => {
     expect(compactFetch).not.toHaveBeenCalled();
   });
 
-  it('restores an oversized compacted session after the transport process restarts', async () => {
-    mkdirSync(process.env.CLODEX_HOME!, { recursive: true });
-    const checkpointStoreDir = mkdtempSync(join(process.env.CLODEX_HOME!, 'restart-checkpoints-'));
-    const diagnostics: ResponsesWebSocketDiagnosticEvent[] = [];
-    const oldTurns = Array.from({ length: 1_625 }, (_, index) => ({
-      role: 'user',
-      content: [{
-        type: 'input_text',
-        text: `historical turn ${index} ${'x'.repeat(1_800)}`,
-      }],
-    }));
-    const retainedUser = oldTurns.at(-1)!;
-    const compactedCanonical = [
-      retainedUser,
-      { type: 'compaction', encrypted_content: 'restart-safe-opaque-state' },
-    ];
-    const compactFetch = vi.fn(async () => new Response(JSON.stringify({
-      output: compactedCanonical,
-      usage: {
-        input_tokens: 260_000,
-        input_tokens_details: { cached_tokens: 250_000 },
-        output_tokens: 900,
-      },
-    }), {
-      status: 200,
-      headers: { 'content-type': 'application/json' },
-    }));
-    const initialFetch = createResponsesWebSocketFetch(WS_URL, undefined, {
-      accountId: 'acct-restart-recovery',
-      compactThreshold: 258_000,
-      // SAFETY: The test fixture defines the asserted runtime shape.
-      compactFetch: compactFetch as typeof fetch,
-      checkpointStoreDir,
-      onDiagnostic: event => diagnostics.push(event),
-    });
-    const initial = await withResponsesWebSocketDiagnosticContext(
-      { estimatedInputTokens: 300_000 },
-      () => initialFetch('https://example.test/responses', {
-        method: 'POST',
-        headers: { Authorization: 'Bearer access-token-before-restart' },
-        body: JSON.stringify(sessionPayload(oldTurns, {
-          instructions: 'MCP tools are ready.',
-          tools: [{ type: 'function', name: 'Read', parameters: { type: 'object' } }],
-        })),
-      }),
-    );
-    const compactedSocket = lastSocket();
-    compactedSocket.emit('open');
-    emitTextResponse(compactedSocket, 'resp_before_restart', 'checkpointed answer', {
-      input_tokens: 40_000,
-      input_tokens_details: { cached_tokens: 35_000 },
-      output_tokens: 250,
-    });
-    await readAll(initial);
-
-    expect(compactFetch).toHaveBeenCalledOnce();
-    const persistedFiles = readdirSync(checkpointStoreDir);
-    expect(persistedFiles).toHaveLength(1);
-    const persistedPath = join(checkpointStoreDir, persistedFiles[0]!);
-    expect(statSync(checkpointStoreDir).mode & 0o777).toBe(0o700);
-    expect(statSync(persistedPath).mode & 0o777).toBe(0o600);
-    const persisted = readFileSync(persistedPath, 'utf8');
-    expect(persisted).toContain('restart-safe-opaque-state');
-    expect(persisted).not.toContain('historical turn 0 ');
-
-    // Simulate a fresh Clodex process: all sockets and process-local heads are
-    // gone, while the private durable checkpoint remains.
-    resetResponsesWebSocketConnectionsForTests();
-    fakeSockets.length = 0;
-    const compactAfterRestart = vi.fn(async () => {
-      throw new Error('the oversized transcript must not reach standalone compact');
-    });
-    const resumedFetch = createResponsesWebSocketFetch(WS_URL, undefined, {
-      accountId: 'acct-restart-recovery',
-      compactThreshold: 258_000,
-      // SAFETY: The test fixture defines the asserted runtime shape.
-      compactFetch: compactAfterRestart as typeof fetch,
-      checkpointStoreDir,
-      onDiagnostic: event => diagnostics.push(event),
-    });
-    const echoedAssistant = {
-      role: 'assistant',
-      content: [{ type: 'output_text', text: 'checkpointed answer' }],
-    };
-    const nextUser = {
-      role: 'user',
-      content: [{ type: 'input_text', text: 'continue after restart' }],
-    };
-    const oversizedResume = [...oldTurns, echoedAssistant, nextUser];
-    const resumed = await withResponsesWebSocketDiagnosticContext(
-      { estimatedInputTokens: 400_000 },
-      () => resumedFetch('https://example.test/responses', {
-        method: 'POST',
-        // OAuth token rotation must not orphan a checkpoint for the same account.
-        headers: { Authorization: 'Bearer access-token-after-restart' },
-        body: JSON.stringify(sessionPayload(oversizedResume, {
-          instructions: 'MCP tools are still starting.',
-          tools: [],
-        })),
-      }),
-    );
-    const restoredSocket = lastSocket();
-    restoredSocket.emit('open');
-    // SAFETY: The test fixture defines the asserted runtime shape.
-    const restoredPayload = JSON.parse(restoredSocket.send.mock.calls[0]![0] as string);
-    expect(restoredPayload.previous_response_id).toBeUndefined();
-    expect(restoredPayload.input).toEqual([
-      ...compactedCanonical,
-      echoedAssistant,
-      nextUser,
-    ]);
-    expect(Buffer.byteLength(JSON.stringify(restoredPayload.input), 'utf8'))
-      .toBeLessThan(Buffer.byteLength(JSON.stringify(oversizedResume), 'utf8') / 100);
-    expect(compactAfterRestart).not.toHaveBeenCalled();
-    expect(diagnostics).toContainEqual(expect.objectContaining({
-      event: 'ws_head_decision',
-      decision: 'compaction_checkpoint',
-      matchingCheckpointCount: 1,
-    }));
-    emitTextResponse(restoredSocket, 'resp_after_restart', 'recovered');
-    await readAll(resumed);
-  });
-
   it('keeps hidden native-compaction work out of visible context usage', async () => {
     const user = {
       role: 'user',
@@ -3943,446 +3676,6 @@ beforeEach(() => {
     expect(compactFetch).toHaveBeenCalledOnce();
   });
 
-  it('restores multiple workflow checkpoints after restart', async () => {
-    mkdirSync(process.env.CLODEX_HOME!, { recursive: true });
-    const checkpointStoreDir = mkdtempSync(join(process.env.CLODEX_HOME!, 'workflow-checkpoints-'));
-    const compactFetch = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
-      const body = JSON.parse(String(init?.body));
-      const lastUser = body.input.toReversed().find(
-        (item: { role?: string }) => item.role === 'user',
-      );
-      return new Response(JSON.stringify({
-        output: [
-          lastUser,
-          {
-            type: 'compaction',
-            encrypted_content: `opaque-${lastUser.content[0].text}`,
-          },
-        ],
-        usage: {
-          input_tokens: 210,
-          input_tokens_details: { cached_tokens: 180 },
-          output_tokens: 18,
-        },
-      }), {
-        status: 200,
-        headers: { 'content-type': 'application/json' },
-      });
-    });
-    const workflowFetch = createResponsesWebSocketFetch(WS_URL, undefined, {
-      accountId: 'acct-workflow-restart',
-      compactThreshold: 258_000,
-      // SAFETY: The test fixture defines the asserted runtime shape.
-      compactFetch: compactFetch as typeof fetch,
-      checkpointStoreDir,
-    });
-    const roots = Array.from({ length: 16 }, (_, index) => [{
-      role: 'user',
-      content: [{ type: 'input_text', text: `workflow ${index}` }],
-    }]);
-    const firstWaveBodies: string[] = [];
-    for (let index = 0; index < roots.length; index += 1) {
-      const response = await withResponsesWebSocketDiagnosticContext(
-        { claudeAgentId: `workflow-${index}`, estimatedInputTokens: 300_000 },
-        () => workflowFetch('https://example.test/responses', {
-          method: 'POST',
-          headers: {},
-          body: JSON.stringify(sessionPayload(roots[index]!)),
-        }),
-      );
-      const socket = lastSocket();
-      socket.emit('open');
-      emitTextResponse(socket, `resp_workflow_wave1_${index}`, `wave one ${index}`, {
-        input_tokens: 40_000,
-        input_tokens_details: { cached_tokens: 35_000 },
-        output_tokens: 250,
-      });
-      firstWaveBodies.push(await readAll(response));
-    }
-    expect(fakeSockets).toHaveLength(roots.length);
-    for (const body of firstWaveBodies) {
-      const completed = body.split('\n\n')
-        .filter(Boolean)
-        .map(frame => JSON.parse(frame.replace(/^data: /, '')))
-        .find(event => event.type === 'response.completed');
-      expect(completed.response.usage).toMatchObject({
-        input_tokens: 40_000,
-        output_tokens: 250,
-        input_tokens_details: { cached_tokens: 35_000 },
-      });
-    }
-    expect(compactFetch).toHaveBeenCalledTimes(roots.length);
-    expect(readdirSync(checkpointStoreDir)).toHaveLength(roots.length);
-
-    resetResponsesWebSocketConnectionsForTests();
-    fakeSockets.length = 0;
-    const compactAfterRestart = vi.fn();
-    const resumedFetch = createResponsesWebSocketFetch(WS_URL, undefined, {
-      accountId: 'acct-workflow-restart',
-      compactThreshold: 258_000,
-      // SAFETY: The test fixture defines the asserted runtime shape.
-      compactFetch: compactAfterRestart as typeof fetch,
-      checkpointStoreDir,
-    });
-    const resumedBodies: string[] = [];
-    for (let index = 0; index < roots.length; index += 1) {
-      const assistant = {
-        role: 'assistant',
-        content: [{ type: 'output_text', text: `wave one ${index}` }],
-      };
-      const nextUser = {
-        role: 'user',
-        content: [{ type: 'input_text', text: `wave two ${index}` }],
-      };
-      const response = await withResponsesWebSocketDiagnosticContext(
-        { claudeAgentId: `workflow-${index}`, estimatedInputTokens: 400_000 },
-        () => resumedFetch('https://example.test/responses', {
-          method: 'POST',
-          headers: {},
-          body: JSON.stringify(sessionPayload([
-            ...roots[index]!,
-            assistant,
-            nextUser,
-          ])),
-        }),
-      );
-      const socket = lastSocket();
-      socket.emit('open');
-      // SAFETY: The test fixture defines the asserted runtime shape.
-      const sent = JSON.parse(socket.send.mock.calls[0]![0] as string);
-      expect(sent.previous_response_id).toBeUndefined();
-      expect(sent.input).toEqual([
-        roots[index]![0],
-        {
-          type: 'compaction',
-          encrypted_content: `opaque-workflow ${index}`,
-        },
-        assistant,
-        nextUser,
-      ]);
-      emitTextResponse(socket, `resp_workflow_wave2_${index}`, `wave two done ${index}`, {
-        input_tokens: 60_000,
-        input_tokens_details: { cached_tokens: 55_000 },
-        output_tokens: 200,
-      });
-      resumedBodies.push(await readAll(response));
-    }
-    expect(fakeSockets).toHaveLength(roots.length);
-    for (const body of resumedBodies) {
-      const completed = body.split('\n\n')
-        .filter(Boolean)
-        .map(frame => JSON.parse(frame.replace(/^data: /, '')))
-        .find(event => event.type === 'response.completed');
-      expect(completed.response.usage).toMatchObject({
-        input_tokens: 60_000,
-        output_tokens: 200,
-        input_tokens_details: { cached_tokens: 55_000 },
-      });
-    }
-    expect(compactAfterRestart).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    { label: 'retries a failed checkpoint-store scan', initialStore: 'symlink', nextNow: 0 },
-    { label: 'rescans for checkpoints written by another process', initialStore: 'empty', nextNow: 6_000 },
-  ])('$label', async ({ initialStore, nextNow }) => {
-    mkdirSync(process.env.CLODEX_HOME!, { recursive: true });
-    const target = mkdtempSync(join(process.env.CLODEX_HOME!, 'checkpoint-rescan-target-'));
-    const checkpointStoreDir = initialStore === 'symlink'
-      ? join(process.env.CLODEX_HOME!, `checkpoint-rescan-link-${randomUUID()}`)
-      : target;
-    if (initialStore === 'symlink') symlinkSync(target, checkpointStoreDir, 'dir');
-
-    let now = 0;
-    const accountId = `acct-checkpoint-rescan-${initialStore}`;
-    const wsFetch = createResponsesWebSocketFetch(WS_URL, undefined, {
-      accountId,
-      compactThreshold: 100,
-      checkpointStoreDir,
-      now: () => now,
-    });
-    const user = {
-      role: 'user',
-      content: [{ type: 'input_text', text: `initial ${initialStore}` }],
-    };
-    const assistant = {
-      role: 'assistant',
-      content: [{ type: 'output_text', text: 'initial answer' }],
-    };
-    const first = await wsFetch('https://example.test/responses', {
-      method: 'POST',
-      headers: {},
-      body: JSON.stringify(sessionPayload([user])),
-    });
-    const firstSocket = lastSocket();
-    firstSocket.emit('open');
-    emitTextResponse(firstSocket, `resp_rescan_${initialStore}`, 'initial answer', {
-      input_tokens: 50,
-      output_tokens: 10,
-    });
-    await readAll(first);
-    firstSocket.emit('close', 1000, Buffer.from(''));
-
-    if (initialStore === 'symlink') {
-      rmSync(checkpointStoreDir);
-      mkdirSync(checkpointStoreDir, { mode: 0o700 });
-    }
-    const checkpointKey = responsesWebSocketPartitionKey(
-      WS_URL,
-      sessionPayload([user]),
-      { accountId },
-    )!;
-    const compactedInput = [
-      user,
-      { type: 'compaction', encrypted_content: `external-${initialStore}` },
-    ];
-    expect(saveStoredResponsesCheckpoint(checkpointStoreDir, {
-      version: 2,
-      checkpointKey,
-      lineageKey: randomUUID(),
-      requestInputHashes: [checkpointItemHash(user)],
-      requestInputKinds: ['user'],
-      expectedAssistantHashes: [checkpointItemHash(assistant)],
-      expectedAssistantKinds: ['assistant'],
-      compactedInput,
-      lastInputTokens: 50,
-      lastUsedAt: now,
-    }, 16, 64)).toBe(true);
-
-    now = nextNow;
-    const nextUser = {
-      role: 'user',
-      content: [{ type: 'input_text', text: 'after external checkpoint' }],
-    };
-    const resumed = await wsFetch('https://example.test/responses', {
-      method: 'POST',
-      headers: {},
-      body: JSON.stringify(sessionPayload([user, assistant, nextUser])),
-    });
-    const resumedSocket = lastSocket();
-    resumedSocket.emit('open');
-    // SAFETY: The test fixture defines the asserted runtime shape.
-    const sent = JSON.parse(resumedSocket.send.mock.calls[0]![0] as string);
-    expect(sent.previous_response_id).toBeUndefined();
-    expect(sent.input).toEqual([...compactedInput, nextUser]);
-    emitTextResponse(resumedSocket, `resp_rescan_done_${initialStore}`, 'done');
-    await readAll(resumed);
-  });
-
-  it('restores a durable checkpoint when Claude reshapes opaque reasoning across old turns', async () => {
-    mkdirSync(process.env.CLODEX_HOME!, { recursive: true });
-    const checkpointStoreDir = mkdtempSync(join(process.env.CLODEX_HOME!, 'checkpoint-reasoning-replay-'));
-    const accountId = 'acct-checkpoint-reasoning-replay';
-    const user = { role: 'user', content: [{ type: 'input_text', text: 'start' }] };
-    const oldReasoning = { type: 'reasoning', encrypted_content: 'old-request-reasoning', summary: [] };
-    const call = {
-      type: 'function_call', call_id: 'call_replay', name: 'Bash', arguments: '{"command":"pwd"}',
-    };
-    const output = { type: 'function_call_output', call_id: 'call_replay', output: '/tmp' };
-    const oldAssistantReasoning = {
-      type: 'reasoning', encrypted_content: 'old-assistant-reasoning', summary: [],
-    };
-    const assistant = {
-      type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'done' }],
-    };
-    const requestInput = [user, oldReasoning, call, output];
-    const expectedAssistant = [oldAssistantReasoning, assistant];
-    const checkpointKey = responsesWebSocketPartitionKey(
-      WS_URL,
-      sessionPayload([user]),
-      { accountId },
-    )!;
-    const compactedInput = [user, { type: 'compaction', encrypted_content: 'durable-native-state' }];
-    expect(saveStoredResponsesCheckpoint(checkpointStoreDir, {
-      version: 2,
-      checkpointKey,
-      lineageKey: randomUUID(),
-      requestInputHashes: requestInput.map(checkpointItemHash),
-      requestInputKinds: requestInput.map(item => (
-        item instanceof Object && 'type' in item
-          ? String(item.type)
-          // SAFETY: The test fixture defines the asserted runtime shape.
-          : String((/* SAFETY: Request items without a type use the role field. */ item as { role?: unknown }).role)
-      )),
-      expectedAssistantHashes: expectedAssistant.map(checkpointItemHash),
-      expectedAssistantKinds: expectedAssistant.map(item => String(item.type)),
-      compactedInput,
-      lastInputTokens: 260_000,
-      postCompactionInputTokens: 200_000,
-      nextCompactionInputTokens: 250_000,
-      lastUsedAt: Date.now(),
-    }, 16, 64)).toBe(true);
-
-    const compactFetch = vi.fn(async () => new Response('unexpected compaction', { status: 500 }));
-    const wsFetch = createResponsesWebSocketFetch(WS_URL, undefined, {
-      accountId,
-      checkpointStoreDir,
-      compactFetch,
-      compactThreshold: 100,
-    });
-    const nextUser = { role: 'user', content: [{ type: 'input_text', text: 'continue' }] };
-    const replayedInput = [
-      user,
-      { type: 'reasoning', encrypted_content: 'reshaped-request-reasoning', summary: [{ text: 'new' }] },
-      call,
-      output,
-      { type: 'reasoning', encrypted_content: 'reshaped-assistant-reasoning', summary: [] },
-      assistant,
-      nextUser,
-    ];
-    const response = await wsFetch('https://example.test/responses', {
-      method: 'POST',
-      headers: {},
-      body: JSON.stringify(sessionPayload(replayedInput)),
-    });
-    const socket = lastSocket();
-    socket.emit('open');
-    // SAFETY: The test fixture defines the asserted runtime shape.
-    const sent = JSON.parse(socket.send.mock.calls[0]![0] as string);
-    expect(sent.previous_response_id).toBeUndefined();
-    expect(sent.input).toEqual([...compactedInput, nextUser]);
-    expect(compactFetch).toHaveBeenCalledOnce();
-    expect(JSON.parse(String(compactFetch.mock.calls[0]![1]?.body)).input)
-      .toEqual([...compactedInput, nextUser]);
-    emitTextResponse(socket, 'resp_reasoning_replay_restored', 'continued', {
-      input_tokens: 42_000,
-      output_tokens: 100,
-    });
-    const body = await readAll(response);
-    expect(body).toContain('response.completed');
-    expect(body).toContain('42000');
-  });
-
-  it('does not restore durable checkpoints when native compaction is disabled', async () => {
-    mkdirSync(process.env.CLODEX_HOME!, { recursive: true });
-    const checkpointStoreDir = mkdtempSync(join(process.env.CLODEX_HOME!, 'checkpoint-disabled-'));
-    const accountId = 'acct-checkpoint-disabled';
-    const user = {
-      role: 'user',
-      content: [{ type: 'input_text', text: 'native compaction disabled' }],
-    };
-    const assistant = {
-      role: 'assistant',
-      content: [{ type: 'output_text', text: 'prior answer' }],
-    };
-    const checkpointKey = responsesWebSocketPartitionKey(
-      WS_URL,
-      sessionPayload([user]),
-      { accountId },
-    )!;
-    saveStoredResponsesCheckpoint(checkpointStoreDir, {
-      version: 2,
-      checkpointKey,
-      lineageKey: randomUUID(),
-      requestInputHashes: [checkpointItemHash(user)],
-      requestInputKinds: ['user'],
-      expectedAssistantHashes: [checkpointItemHash(assistant)],
-      expectedAssistantKinds: ['assistant'],
-      compactedInput: [{ type: 'compaction', encrypted_content: 'must-not-load' }],
-      lastInputTokens: 300_000,
-      lastUsedAt: Date.now(),
-    }, 16, 64);
-
-    const wsFetch = createResponsesWebSocketFetch(WS_URL, undefined, {
-      accountId,
-      checkpointStoreDir,
-    });
-    const nextUser = {
-      role: 'user',
-      content: [{ type: 'input_text', text: 'continue without native state' }],
-    };
-    const fullInput = [user, assistant, nextUser];
-    const response = await wsFetch('https://example.test/responses', {
-      method: 'POST',
-      headers: {},
-      body: JSON.stringify(sessionPayload(fullInput)),
-    });
-    const socket = lastSocket();
-    socket.emit('open');
-    // SAFETY: The test fixture defines the asserted runtime shape.
-    const sent = JSON.parse(socket.send.mock.calls[0]![0] as string);
-    expect(sent.input).toEqual(fullInput);
-    expect(sent.input).not.toContainEqual(expect.objectContaining({
-      encrypted_content: 'must-not-load',
-    }));
-    emitTextResponse(socket, 'resp_checkpoint_disabled', 'done');
-    await readAll(response);
-  });
-
-  it('keeps newer in-memory checkpoint state when a periodic rescan finds stale disk state', async () => {
-    mkdirSync(process.env.CLODEX_HOME!, { recursive: true });
-    const checkpointStoreDir = mkdtempSync(join(process.env.CLODEX_HOME!, 'checkpoint-stale-rescan-'));
-    let now = 10;
-    const compactFetch = vi.fn(async () => new Response(JSON.stringify({
-      output: [{ type: 'compaction', encrypted_content: 'newer-memory-state' }],
-    }), {
-      status: 200,
-      headers: { 'content-type': 'application/json' },
-    }));
-    const accountId = 'acct-checkpoint-stale-rescan';
-    const wsFetch = createResponsesWebSocketFetch(WS_URL, undefined, {
-      accountId,
-      compactThreshold: 100,
-      // SAFETY: The test fixture defines the asserted runtime shape.
-      compactFetch: compactFetch as typeof fetch,
-      checkpointStoreDir,
-      now: () => now,
-    });
-    const user = {
-      role: 'user',
-      content: [{ type: 'input_text', text: 'create newer checkpoint' }],
-    };
-    const first = await withResponsesWebSocketDiagnosticContext(
-      { estimatedInputTokens: 150 },
-      () => wsFetch('https://example.test/responses', {
-        method: 'POST',
-        headers: {},
-        body: JSON.stringify(sessionPayload([user])),
-      }),
-    );
-    const firstSocket = lastSocket();
-    firstSocket.emit('open');
-    emitTextResponse(firstSocket, 'resp_newer_checkpoint', 'newer answer', {
-      input_tokens: 50,
-      output_tokens: 10,
-    });
-    await readAll(first);
-    firstSocket.emit('close', 1000, Buffer.from(''));
-
-    const [checkpointName] = readdirSync(checkpointStoreDir);
-    const checkpointPath = join(checkpointStoreDir, checkpointName!);
-    const stale = JSON.parse(readFileSync(checkpointPath, 'utf8'));
-    stale.lastUsedAt = 5;
-    stale.compactedInput = [{ type: 'compaction', encrypted_content: 'stale-disk-state' }];
-    writeFileSync(checkpointPath, JSON.stringify(stale), { mode: 0o600 });
-
-    now = 6_010;
-    const assistant = {
-      role: 'assistant',
-      content: [{ type: 'output_text', text: 'newer answer' }],
-    };
-    const nextUser = {
-      role: 'user',
-      content: [{ type: 'input_text', text: 'continue from newer state' }],
-    };
-    const resumed = await wsFetch('https://example.test/responses', {
-      method: 'POST',
-      headers: {},
-      body: JSON.stringify(sessionPayload([user, assistant, nextUser])),
-    });
-    const resumedSocket = lastSocket();
-    resumedSocket.emit('open');
-    // SAFETY: The test fixture defines the asserted runtime shape.
-    const sent = JSON.parse(resumedSocket.send.mock.calls[0]![0] as string);
-    expect(sent.input).toContainEqual(expect.objectContaining({
-      encrypted_content: 'newer-memory-state',
-    }));
-    expect(sent.input).not.toContainEqual(expect.objectContaining({
-      encrypted_content: 'stale-disk-state',
-    }));
-    emitTextResponse(resumedSocket, 'resp_newer_checkpoint_done', 'done');
-    await readAll(resumed);
-  });
 
   it('compacts oversized sibling workflow branches concurrently', async () => {
     const diagnostics: ResponsesWebSocketDiagnosticEvent[] = [];
@@ -6894,247 +6187,4 @@ beforeEach(() => {
     })));
     await readAll(terminal);
     expect(compactFetch).toHaveBeenCalledOnce();
-  });
-
-  it('admits an oversized raw resume from its smaller durable checkpoint after restart', async () => {
-    mkdirSync(process.env.CLODEX_HOME!, { recursive: true });
-    const checkpointStoreDir = mkdtempSync(join(
-      process.env.CLODEX_HOME!,
-      'oversized-raw-resume-checkpoints-',
-    ));
-    const canonical = [{ type: 'compaction', encrypted_content: 'durable-resume' }];
-    const compactBodies: unknown[][] = [];
-    const compactFetch = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
-      const body = JSON.parse(String(init?.body));
-      compactBodies.push(body.input);
-      return new Response(JSON.stringify({ output: canonical }), {
-        status: 200,
-        headers: { 'content-type': 'application/json' },
-      });
-    });
-    const options = {
-      accountId: 'acct-oversized-raw-resume',
-      compactThreshold: 265_000,
-      contextWindow: 1_000_000,
-      checkpointStoreDir,
-      // SAFETY: The test fixture defines the asserted runtime shape.
-      compactFetch: compactFetch as typeof fetch,
-    };
-    const root = [{
-      role: 'user',
-      content: [{ type: 'input_text', text: 'r'.repeat(400_000) }],
-    }];
-    const beforeRestartFetch = createResponsesWebSocketFetch(WS_URL, undefined, options);
-    const first = await withResponsesWebSocketDiagnosticContext(
-      { estimatedInputTokens: 270_000, claudeAgentId: 'oversized-raw-resume' },
-      () => beforeRestartFetch('https://example.test/responses', {
-        method: 'POST',
-        headers: {},
-        body: JSON.stringify(sessionPayload(root, { model: 'gpt-5.6-luna' })),
-      }),
-    );
-    const firstSocket = lastSocket();
-    firstSocket.emit('open');
-    const assistant = {
-      type: 'function_call',
-      id: 'fc_durable_resume',
-      call_id: 'call_durable_resume',
-      name: 'Bash',
-      arguments: '{"command":"pwd"}',
-      status: 'completed',
-    };
-    firstSocket.emit('message', Buffer.from(JSON.stringify({
-      type: 'response.created', response: { id: 'resp_durable_resume' },
-    })));
-    firstSocket.emit('message', Buffer.from(JSON.stringify({
-      type: 'response.output_item.done', output_index: 0, item: assistant,
-    })));
-    firstSocket.emit('message', Buffer.from(JSON.stringify({
-      type: 'response.completed',
-      response: {
-        id: 'resp_durable_resume',
-        usage: { input_tokens: 220_000, output_tokens: 5 },
-      },
-    })));
-    await readAll(first);
-    expect(compactBodies).toEqual([root]);
-    expect(readdirSync(checkpointStoreDir)).toHaveLength(1);
-
-    resetResponsesWebSocketConnectionsForTests();
-    fakeSockets.length = 0;
-    const afterRestartFetch = createResponsesWebSocketFetch(WS_URL, undefined, options);
-    const echoedCall = {
-      type: 'function_call',
-      call_id: 'call_durable_resume',
-      name: 'Bash',
-      arguments: '{"command":"pwd"}',
-    };
-    const toolOutput = {
-      type: 'function_call_output',
-      call_id: 'call_durable_resume',
-      output: 'continued after restart',
-    };
-    const resumed = await withResponsesWebSocketDiagnosticContext(
-      { estimatedInputTokens: 1_100_000, claudeAgentId: 'oversized-raw-resume' },
-      () => afterRestartFetch('https://example.test/responses', {
-        method: 'POST',
-        headers: {},
-        body: JSON.stringify(sessionPayload(
-          [...root, echoedCall, toolOutput],
-          { model: 'gpt-5.6-luna' },
-        )),
-      }),
-    );
-
-    expect(compactBodies).toHaveLength(1);
-    const resumedSocket = lastSocket();
-    resumedSocket.emit('open');
-    // SAFETY: The test fixture defines the asserted runtime shape.
-    const sent = JSON.parse(resumedSocket.send.mock.calls[0]![0] as string);
-    expect(sent.previous_response_id).toBeUndefined();
-    expect(sent.input).toEqual([canonical[0], echoedCall, toolOutput]);
-    emitTextResponse(resumedSocket, 'resp_durable_resume_done', 'done');
-    await readAll(resumed);
-    rmSync(checkpointStoreDir, { recursive: true, force: true });
-  });
-
-  it('recovers an oversized Workflow tool tail from its durable checkpoint after restart', async () => {
-    mkdirSync(process.env.CLODEX_HOME!, { recursive: true });
-    const checkpointStoreDir = mkdtempSync(join(
-      process.env.CLODEX_HOME!,
-      'overflow-restart-checkpoints-',
-    ));
-    const firstCanonical = [{ type: 'compaction', encrypted_content: 'before-restart' }];
-    const secondCanonical = [{ type: 'compaction', encrypted_content: 'after-restart' }];
-    const compactBodies: unknown[][] = [];
-    const compactFetch = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
-      const body = JSON.parse(String(init?.body));
-      compactBodies.push(body.input);
-      return new Response(JSON.stringify({
-        output: compactBodies.length === 1 ? firstCanonical : secondCanonical,
-      }), {
-        status: 200,
-        headers: { 'content-type': 'application/json' },
-      });
-    });
-    const options = {
-      accountId: 'acct-overflow-restart',
-      compactThreshold: 115_200,
-      contextWindow: 128_000,
-      checkpointStoreDir,
-      // SAFETY: The test fixture defines the asserted runtime shape.
-      compactFetch: compactFetch as typeof fetch,
-    };
-    const root = [{
-      role: 'user',
-      content: [{ type: 'input_text', text: 'p'.repeat(400_000) }],
-    }];
-    const beforeRestartFetch = createResponsesWebSocketFetch(WS_URL, undefined, options);
-    const first = await withResponsesWebSocketDiagnosticContext(
-      { estimatedInputTokens: 120_000, claudeAgentId: 'workflow-restart' },
-      () => beforeRestartFetch('https://example.test/responses', {
-        method: 'POST',
-        headers: {},
-        body: JSON.stringify(sessionPayload(root, { model: 'gpt-5.4' })),
-      }),
-    );
-    const firstSocket = lastSocket();
-    firstSocket.emit('open');
-    firstSocket.emit('message', Buffer.from(JSON.stringify({
-      type: 'response.created', response: { id: 'resp_overflow_before_restart' },
-    })));
-    const firstAssistantItems = [
-      { type: 'reasoning', id: 'rs_restart', encrypted_content: 'opaque-restart', summary: [] },
-      {
-        type: 'function_call', id: 'fc_restart', call_id: 'call_restart',
-        name: 'Bash', arguments: '{"command":"pwd"}', status: 'completed',
-      },
-      {
-        type: 'custom_tool_call', id: 'ct_restart', call_id: 'custom_restart',
-        name: 'computer', input: '{"action":"screenshot"}', status: 'completed',
-      },
-    ];
-    firstAssistantItems.forEach((item, outputIndex) => firstSocket.emit(
-      'message',
-      Buffer.from(JSON.stringify({ type: 'response.output_item.done', output_index: outputIndex, item })),
-    ));
-    firstSocket.emit('message', Buffer.from(JSON.stringify({
-      type: 'response.completed',
-      response: {
-        id: 'resp_overflow_before_restart',
-        usage: { input_tokens: 90_000, output_tokens: 5 },
-      },
-    })));
-    await readAll(first);
-    expect(readdirSync(checkpointStoreDir)).toHaveLength(1);
-
-    resetResponsesWebSocketConnectionsForTests();
-    fakeSockets.length = 0;
-    const afterRestartFetch = createResponsesWebSocketFetch(WS_URL, undefined, options);
-    const echoedReasoning = { type: 'reasoning', encrypted_content: 'opaque-restart', summary: [] };
-    const echoedCall = {
-      type: 'function_call', call_id: 'call_restart', name: 'Bash', arguments: '{"command":"pwd"}',
-    };
-    const echoedCustomCall = {
-      type: 'custom_tool_call', call_id: 'custom_restart', name: 'computer',
-      input: '{"action":"screenshot"}',
-    };
-    const toolOutput = {
-      type: 'function_call_output', call_id: 'call_restart', output: 'x'.repeat(100_000),
-    };
-    const customOutput = {
-      type: 'custom_tool_call_output', call_id: 'custom_restart', output: 'y'.repeat(100_000),
-    };
-    const afterRestart = await withResponsesWebSocketDiagnosticContext(
-      { estimatedInputTokens: 150_000, claudeAgentId: 'workflow-restart' },
-      () => afterRestartFetch('https://example.test/responses', {
-        method: 'POST',
-        headers: {},
-        body: JSON.stringify(sessionPayload(
-          [...root, echoedReasoning, echoedCall, echoedCustomCall, toolOutput, customOutput],
-          { model: 'gpt-5.4' },
-        )),
-      }),
-    );
-
-    expect(compactBodies).toHaveLength(2);
-    expect(compactBodies[0]).toEqual(root);
-    expect(compactBodies[1]).toEqual(firstCanonical);
-    const recoveredSocket = lastSocket();
-    recoveredSocket.emit('open');
-    // SAFETY: The test fixture defines the asserted runtime shape.
-    const sent = JSON.parse(recoveredSocket.send.mock.calls[0]![0] as string);
-    expect(sent.previous_response_id).toBeUndefined();
-    expect(sent.input).toEqual([
-      secondCanonical[0],
-      echoedReasoning,
-      echoedCall,
-      echoedCustomCall,
-      toolOutput,
-      customOutput,
-    ]);
-    emitTextResponse(recoveredSocket, 'resp_overflow_after_restart', 'done');
-    await readAll(afterRestart);
-
-    const nextUser = { role: 'user', content: [{ type: 'input_text', text: 'continue' }] };
-    const continued = await afterRestartFetch('https://example.test/responses', {
-      method: 'POST', headers: {},
-      body: JSON.stringify(sessionPayload([
-        ...root,
-        echoedReasoning,
-        echoedCall,
-        echoedCustomCall,
-        toolOutput,
-        customOutput,
-        { role: 'assistant', content: [{ type: 'output_text', text: 'done' }] },
-        nextUser,
-      ], { model: 'gpt-5.4' })),
-    });
-    // SAFETY: The test fixture defines the asserted runtime shape.
-    const continuationPayload = JSON.parse(recoveredSocket.send.mock.calls.at(-1)![0] as string);
-    expect(continuationPayload.previous_response_id).toBe('resp_overflow_after_restart');
-    expect(continuationPayload.input).toEqual([nextUser]);
-    emitTextResponse(recoveredSocket, 'resp_overflow_continued', 'continued');
-    await readAll(continued);
-    rmSync(checkpointStoreDir, { recursive: true, force: true });
   });
