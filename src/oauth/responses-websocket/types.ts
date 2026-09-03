@@ -119,6 +119,8 @@ export interface RequestContext {
   claudeCompactionRequest?: boolean;
   /** Portable summary anchor inherited by a continuation of compacted state. */
   claudeCompactionSummaryHash?: string;
+  /** Claude-owned queued events already committed to the selected Responses lineage. */
+  queuedEventHashes?: string[];
   claudeAgentId?: string;
   promptFieldHashes: Record<string, string>;
   instructionsSnapshot?: string;
@@ -148,6 +150,8 @@ export interface RequestContext {
   entry?: ConnectionEntry;
   createReplacement: () => ConnectionEntry;
   abortCleanup?: () => void;
+  settled?: Promise<void>;
+  resolveSettled?: () => void;
 }
 
 export interface ConnectionEntry {
@@ -178,6 +182,7 @@ export interface ConnectionEntry {
   requestInputKinds?: string[];
   expectedAssistantHashes?: string[];
   expectedAssistantKinds?: string[];
+  queuedEventHashes?: string[];
   compactedInput?: JsonValue[];
   lastInputTokens?: number;
   postCompactionInputTokens?: number;
@@ -200,6 +205,7 @@ export interface CompactionCheckpoint {
   requestInputKinds: string[];
   expectedAssistantHashes: string[];
   expectedAssistantKinds: string[];
+  queuedEventHashes: string[];
   compactedInput?: JsonValue[];
   lastInputTokens?: number;
   postCompactionInputTokens?: number;

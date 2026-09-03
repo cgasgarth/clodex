@@ -296,7 +296,9 @@ const CLAUDE_MID_TURN_MESSAGE_PREFIX = 'The user sent a new message while you we
 const CLAUDE_MID_TURN_MESSAGE_SUFFIX = 'Address the message above as you continue this turn.';
 
 function isTaskNotificationText(text: string): boolean {
-  return text.includes('<task-notification>') && text.includes('</task-notification>');
+  const trimmed = text.trim();
+  return trimmed.startsWith('<task-notification>')
+    && trimmed.endsWith('</task-notification>');
 }
 
 function isClaudeMidTurnMessage(text: string): boolean {

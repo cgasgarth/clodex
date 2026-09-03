@@ -34,6 +34,7 @@ function checkpoint(
     requestInputKinds: ['user'],
     expectedAssistantHashes: [`assistant-${lastUsedAt}`],
     expectedAssistantKinds: ['assistant'],
+    queuedEventHashes: [`queued-event-${lastUsedAt}`],
     compactedInput: [{ type: 'compaction', encrypted_content: `state-${lastUsedAt}` }],
     lastUsedAt,
     ttlMs: 60_000,
@@ -81,6 +82,7 @@ describe('Responses WebSocket checkpoint state', () => {
 
     loadCompactionCheckpointStore(directory, 31, requestedKey);
     expect(checkpointEntries(requestedKey)[0]?.requestInputHashes).toEqual(['request-10']);
+    expect(checkpointEntries(requestedKey)[0]?.queuedEventHashes).toEqual(['queued-event-10']);
     expect(checkpointEntries(requestedKey)[0]?.compactedInput).toBeUndefined();
     expect(checkpointEntries(otherKey)[0]?.requestInputHashes).toEqual([]);
     expect(hydrateCompactionCheckpoint(checkpointEntries(requestedKey)[0]!, 31)?.compactedInput)

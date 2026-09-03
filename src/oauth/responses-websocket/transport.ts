@@ -34,6 +34,7 @@ import {
   compactionSummaryHash,
   conversationItemHash,
   conversationItemKind,
+  queuedEventItemHashes,
 } from './continuation.js';
 import {
   eventType,
@@ -85,6 +86,7 @@ export function beginRecycledLineage(entry: ConnectionEntry): void {
   entry.requestInputKinds = undefined;
   entry.expectedAssistantHashes = undefined;
   entry.expectedAssistantKinds = undefined;
+  entry.queuedEventHashes = undefined;
   entry.compactedInput = undefined;
   entry.lastInputTokens = undefined;
   entry.postCompactionInputTokens = undefined;
@@ -583,6 +585,10 @@ function handleSocketMessage(entry: ConnectionEntry, data: RawData): void {
       entry.requestInputKinds = entry.requestInput.map(conversationItemKind);
       entry.expectedAssistantHashes = assistantItems.map(conversationItemHash);
       entry.expectedAssistantKinds = assistantItems.map(conversationItemKind);
+      entry.queuedEventHashes = Array.from(new Set([
+        ...(ctx.queuedEventHashes ?? []),
+        ...queuedEventItemHashes(entry.requestInput),
+      ]));
       entry.compactedInput = ctx.compactedInputBase
         ? [...ctx.compactedInputBase, ...assistantItems]
         : undefined;

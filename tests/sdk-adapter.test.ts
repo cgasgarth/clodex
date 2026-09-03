@@ -419,6 +419,21 @@ describe('translateMessages', () => {
     });
   });
 
+  it('does not promote text that only contains task-notification tags', () => {
+    const embedded = 'Explain this example: '
+      + '<task-notification><status>completed</status></task-notification> after the prefix.';
+    const params = translateRequest({
+      model: 'sol',
+      messages: [
+        { role: 'user', content: 'explain it' },
+        { role: 'system', content: embedded },
+      ],
+    }, '@ai-sdk/openai', { openAiOAuth: true });
+
+    expect(params.messages).toHaveLength(1);
+    expect(params.providerOptions?.openai?.instructions).toContain(embedded);
+  });
+
   it('keeps the queued-event policy out of non-OAuth routes', () => {
     const body = {
       model: 'gpt-5.6-sol',

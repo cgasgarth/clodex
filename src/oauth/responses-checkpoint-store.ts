@@ -15,7 +15,6 @@ import { isNumber, isObject, isString } from '../runtime/type-guards.js';
 import type { PromptFieldHashes } from './responses-websocket/fingerprint.js';
 import type { JsonObject, JsonValue } from './responses-websocket/types.js';
 
-const STORE_VERSION = 2;
 // Native compact output can legitimately retain a large, dependency-closed
 // tool tail (screenshots and workflow results are the common case). Refusing
 // those records makes an otherwise healthy session unrecoverable after a
@@ -34,13 +33,13 @@ export interface StoredResponsesCheckpointFile {
 }
 
 export interface StoredResponsesCheckpoint {
-  version: typeof STORE_VERSION;
   checkpointKey: string;
   lineageKey: string;
   requestInputHashes: string[];
   requestInputKinds: string[];
   expectedAssistantHashes: string[];
   expectedAssistantKinds: string[];
+  queuedEventHashes: string[];
   compactedInput: JsonValue[];
   lastInputTokens?: number;
   postCompactionInputTokens?: number;
@@ -61,8 +60,7 @@ function isJsonObject<Value>(value: Value): value is Value & JsonObject {
 function isStoredCheckpoint<Value>(value: Value): value is Value & StoredResponsesCheckpoint {
   if (!isJsonObject(value)) return false;
   const record = value;
-  return record.version === STORE_VERSION
-    && isString(record.checkpointKey)
+  return isString(record.checkpointKey)
     && CHECKPOINT_KEY_PATTERN.test(record.checkpointKey)
     && isString(record.lineageKey)
     && LINEAGE_KEY_PATTERN.test(record.lineageKey)
@@ -72,6 +70,7 @@ function isStoredCheckpoint<Value>(value: Value): value is Value & StoredRespons
     && isStringArray(record.expectedAssistantHashes)
     && isStringArray(record.expectedAssistantKinds)
     && record.expectedAssistantHashes.length === record.expectedAssistantKinds.length
+    && isStringArray(record.queuedEventHashes)
     && Array.isArray(record.compactedInput)
     && (record.postCompactionInputTokens === undefined
       || (isNumber(record.postCompactionInputTokens)

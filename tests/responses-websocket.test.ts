@@ -1480,6 +1480,113 @@ beforeEach(() => {
     await readAll(second);
   });
 
+  it('keeps an omitted queued task event in the active Responses lineage', async () => {
+    const diagnostics: ResponsesWebSocketDiagnosticEvent[] = [];
+    const initial = { role: 'user', content: [{ type: 'input_text', text: 'run checks' }] };
+    const event = {
+      role: 'developer',
+      content: '<task-notification><status>completed</status></task-notification>',
+    };
+    const wsFetch = createResponsesWebSocketFetch(WS_URL, undefined, {
+      providerId: 'openai',
+      accountId: 'acct-queued-task-event',
+      onDiagnostic: value => diagnostics.push(value),
+    });
+    const first = await wsFetch('https://x', {
+      method: 'POST', headers: {}, body: JSON.stringify(sessionPayload([initial, event])),
+    });
+    const socket = lastSocket();
+    socket.emit('open');
+    emitTextResponse(socket, 'resp_queued_event', 'working');
+    await readAll(first);
+
+    const assistant = { role: 'assistant', content: [{ type: 'output_text', text: 'working' }] };
+    const next = { role: 'user', content: [{ type: 'input_text', text: 'continue' }] };
+    const second = await wsFetch('https://x', {
+      method: 'POST',
+      headers: {},
+      body: JSON.stringify(sessionPayload([initial, assistant, next])),
+    });
+
+    // The queued event is absent from Claude's replay but remains inside
+    // resp_queued_event, so only the true append-only delta is sent.
+    // SAFETY: The fake socket records serialized response.create payloads.
+    const sent = JSON.parse(socket.send.mock.calls[1]![0] as string);
+    expect(sent.previous_response_id).toBe('resp_queued_event');
+    expect(sent.input).toEqual([next]);
+    expect(diagnostics.at(-1)).toMatchObject({
+      event: 'ws_head_decision',
+      decision: 'continuation',
+      continuationMatchMode: 'omitted_queued_event',
+    });
+    emitTextResponse(socket, 'resp_after_queued_event', 'done');
+    await readAll(second);
+  });
+
+  it('serializes same-agent queued input behind the active sample', async () => {
+    const diagnostics: ResponsesWebSocketDiagnosticEvent[] = [];
+    const initial = { role: 'user', content: [{ type: 'input_text', text: 'start work' }] };
+    const event = {
+      role: 'user',
+      content: [{
+        type: 'input_text',
+        text: 'The user sent a new message while you were working:\nuse the new plan\n\n'
+          + 'Address the message above as you continue this turn.',
+      }],
+    };
+    const wsFetch = createResponsesWebSocketFetch(WS_URL, undefined, {
+      providerId: 'openai',
+      accountId: 'acct-serialized-queued-input',
+      onDiagnostic: value => diagnostics.push(value),
+    });
+    const first = await withResponsesWebSocketDiagnosticContext(
+      { claudeAgentId: 'parent-agent' },
+      () => wsFetch('https://x', {
+        method: 'POST', headers: {}, body: JSON.stringify(sessionPayload([initial])),
+      }),
+    );
+    const socket = lastSocket();
+    socket.emit('open');
+
+    const queuedResponse = withResponsesWebSocketDiagnosticContext(
+      { claudeAgentId: 'parent-agent' },
+      () => wsFetch('https://x', {
+        method: 'POST',
+        headers: {},
+        body: JSON.stringify(sessionPayload([initial, event])),
+      }),
+    );
+    await Bun.sleep(5);
+    expect(fakeSockets).toHaveLength(1);
+    expect(socket.send).toHaveBeenCalledTimes(1);
+    expect(diagnostics).toContainEqual(expect.objectContaining({
+      event: 'ws_queued_input',
+      outcome: 'waiting',
+      queuedItems: 1,
+    }));
+
+    emitTextResponse(socket, 'resp_active_sample', 'first answer');
+    await readAll(first);
+    const second = await queuedResponse;
+    expect(socket.send).toHaveBeenCalledTimes(2);
+    // SAFETY: The fake socket records serialized response.create payloads.
+    const sent = JSON.parse(socket.send.mock.calls[1]![0] as string);
+    expect(sent.previous_response_id).toBe('resp_active_sample');
+    expect(sent.input).toEqual([event]);
+    expect(diagnostics).toContainEqual(expect.objectContaining({
+      event: 'ws_queued_input',
+      outcome: 'released',
+      queuedItems: 1,
+    }));
+    expect(diagnostics.at(-1)).toMatchObject({
+      event: 'ws_head_decision',
+      decision: 'continuation',
+      continuationMatchMode: 'queued_after_active',
+    });
+    emitTextResponse(socket, 'resp_after_steer', 'second answer');
+    await readAll(second);
+  });
+
   it('re-homes oversized instructions once and continues with only the new delta', async () => {
     const diagnostics: ResponsesWebSocketDiagnosticEvent[] = [];
     const oversizedInstructions = 'i'.repeat(RESPONSES_INSTRUCTIONS_MAX_CHARACTERS + 1);
@@ -2211,13 +2318,13 @@ beforeEach(() => {
     // SAFETY: The synthetic summary is always long enough to produce an anchor hash.
     const summaryHash = compactionSummaryHash(summaryText)!;
     expect(saveStoredResponsesCheckpoint(checkpointStoreDir, {
-      version: 2,
       checkpointKey,
       lineageKey: randomUUID(),
       requestInputHashes: [checkpointItemHash(originalUser)],
       requestInputKinds: ['user'],
       expectedAssistantHashes: [checkpointItemHash(assistantItem)],
       expectedAssistantKinds: ['message'],
+      queuedEventHashes: [],
       compactedInput: [
         { type: 'compaction', encrypted_content: 'anchored-native-state' },
         assistantItem,
@@ -2313,13 +2420,13 @@ beforeEach(() => {
     // SAFETY: The synthetic summary is always long enough to produce an anchor hash.
     const summaryHash = compactionSummaryHash(summaryText)!;
     expect(saveStoredResponsesCheckpoint(checkpointStoreDir, {
-      version: 2,
       checkpointKey,
       lineageKey: randomUUID(),
       requestInputHashes: [checkpointItemHash(originalUser)],
       requestInputKinds: ['user'],
       expectedAssistantHashes: [checkpointItemHash(assistantItem)],
       expectedAssistantKinds: ['message'],
+      queuedEventHashes: [],
       compactedInput: [
         { type: 'compaction', encrypted_content: 'large-native-state' },
         assistantItem,
@@ -4137,13 +4244,13 @@ beforeEach(() => {
       { type: 'compaction', encrypted_content: `external-${initialStore}` },
     ];
     expect(saveStoredResponsesCheckpoint(checkpointStoreDir, {
-      version: 2,
       checkpointKey,
       lineageKey: randomUUID(),
       requestInputHashes: [checkpointItemHash(user)],
       requestInputKinds: ['user'],
       expectedAssistantHashes: [checkpointItemHash(assistant)],
       expectedAssistantKinds: ['assistant'],
+      queuedEventHashes: [],
       compactedInput,
       lastInputTokens: 50,
       lastUsedAt: now,
@@ -4194,7 +4301,6 @@ beforeEach(() => {
     )!;
     const compactedInput = [user, { type: 'compaction', encrypted_content: 'durable-native-state' }];
     expect(saveStoredResponsesCheckpoint(checkpointStoreDir, {
-      version: 2,
       checkpointKey,
       lineageKey: randomUUID(),
       requestInputHashes: requestInput.map(checkpointItemHash),
@@ -4206,6 +4312,7 @@ beforeEach(() => {
       )),
       expectedAssistantHashes: expectedAssistant.map(checkpointItemHash),
       expectedAssistantKinds: expectedAssistant.map(item => String(item.type)),
+      queuedEventHashes: [],
       compactedInput,
       lastInputTokens: 260_000,
       postCompactionInputTokens: 200_000,
@@ -4271,13 +4378,13 @@ beforeEach(() => {
       { accountId },
     )!;
     saveStoredResponsesCheckpoint(checkpointStoreDir, {
-      version: 2,
       checkpointKey,
       lineageKey: randomUUID(),
       requestInputHashes: [checkpointItemHash(user)],
       requestInputKinds: ['user'],
       expectedAssistantHashes: [checkpointItemHash(assistant)],
       expectedAssistantKinds: ['assistant'],
+      queuedEventHashes: [],
       compactedInput: [{ type: 'compaction', encrypted_content: 'must-not-load' }],
       lastInputTokens: 300_000,
       lastUsedAt: Date.now(),

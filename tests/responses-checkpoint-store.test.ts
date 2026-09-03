@@ -24,13 +24,13 @@ function checkpoint(
   lastUsedAt = Date.now(),
 ): StoredResponsesCheckpoint {
   return {
-    version: 2,
     checkpointKey,
     lineageKey,
     requestInputHashes: ['request-hash'],
     requestInputKinds: ['user'],
     expectedAssistantHashes: ['assistant-hash'],
     expectedAssistantKinds: ['assistant'],
+    queuedEventHashes: ['queued-event-hash'],
     compactedInput: [{ type: 'compaction', encrypted_content: 'opaque-state' }],
     lastInputTokens: 42,
     postCompactionInputTokens: 40,
@@ -131,7 +131,7 @@ describe('Responses checkpoint store', () => {
     }
     expect(readdirSync(directory)).toHaveLength(5);
     for (const name of readdirSync(directory)) {
-      expect(readFileSync(join(directory, name), 'utf8')).toContain('"version":2');
+      expect(readFileSync(join(directory, name), 'utf8')).toContain('"queuedEventHashes"');
     }
   });
 });

@@ -12,6 +12,7 @@ import {
   continuationMismatchSummary,
   conversationItemKind,
   historyContinuationMatch,
+  queuedEventExtensionMatch,
   prepareConversationItems,
   type ContinuationMatch,
   type PreparedConversationItems,
@@ -99,7 +100,10 @@ export function planResponsesSessionHead({
   const matches = idleCandidates
     .map(entry => ({
       entry,
-      match: continuationMatch(entry, payload, preparedConversation),
+      match: continuationMatch(entry, payload, preparedConversation)
+        ?? (entry.claudeAgentId === claudeAgentId
+          ? queuedEventExtensionMatch(entry, payload, preparedConversation)
+          : undefined),
     }))
     .filter((candidate): candidate is MatchingHead => candidate.match !== undefined)
     .toSorted((left, right) => left.match.delta.length - right.match.delta.length
@@ -259,13 +263,17 @@ export function finalizeResponsesSession({
     }
     decision = 'continuation';
     debugMessage = `continuing chain with ${selectedDelta.length} incremental input item(s)`
-      + (selectedMatch.mode === 'replayed_reasoning'
+      + (selectedMatch.mode === 'queued_after_active'
+        ? ' after serializing queued input behind the active sample'
+        : selectedMatch.mode === 'replayed_reasoning'
         ? ' after accepting replayed opaque reasoning'
         : selectedMatch.mode === 'omitted_reasoning'
           ? ' after accepting omitted reasoning'
-          : selectedMatch.mode === 'claude_compaction_summary'
-            ? ' after re-anchoring Claude compacted history'
-            : '');
+          : selectedMatch.mode === 'omitted_queued_event'
+            ? ' after retaining an omitted queued event'
+            : selectedMatch.mode === 'claude_compaction_summary'
+              ? ' after re-anchoring Claude compacted history'
+              : '');
   } else if (selectedCheckpoint && checkpointMatch) {
     const compactedInput = [...selectedCheckpoint.compactedInput, ...checkpointMatch.delta];
     sendPayload = { ...payload, input: compactedInput };

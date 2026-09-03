@@ -164,6 +164,7 @@ export function saveCompactionCheckpoint(entry: ConnectionEntry): void {
       ?? entry.expectedAssistant.map(conversationItemHash),
     expectedAssistantKinds: entry.expectedAssistantKinds
       ?? entry.expectedAssistant.map(conversationItemKind),
+    queuedEventHashes: entry.queuedEventHashes ?? [],
     compactedInput: entry.compactedInput,
     lastInputTokens: entry.lastInputTokens,
     postCompactionInputTokens: entry.postCompactionInputTokens,
@@ -190,13 +191,13 @@ export function persistCompactionCheckpoint(
   }
   try {
     const persisted = saveStoredResponsesCheckpoint(checkpoint.checkpointStoreDir, {
-        version: 2,
         checkpointKey: checkpoint.key,
         lineageKey: checkpoint.lineageKey,
         requestInputHashes: checkpoint.requestInputHashes,
         requestInputKinds: checkpoint.requestInputKinds,
         expectedAssistantHashes: checkpoint.expectedAssistantHashes,
         expectedAssistantKinds: checkpoint.expectedAssistantKinds,
+        queuedEventHashes: checkpoint.queuedEventHashes,
         compactedInput: checkpoint.compactedInput,
         lastInputTokens: checkpoint.lastInputTokens,
         postCompactionInputTokens: checkpoint.postCompactionInputTokens,
@@ -264,6 +265,7 @@ function refreshChangedStoredCheckpoint(
     requestInputKinds: stored.requestInputKinds,
     expectedAssistantHashes: stored.expectedAssistantHashes,
     expectedAssistantKinds: stored.expectedAssistantKinds,
+    queuedEventHashes: stored.queuedEventHashes,
     lastInputTokens: stored.lastInputTokens,
     postCompactionInputTokens: stored.postCompactionInputTokens,
     nextCompactionInputTokens: stored.nextCompactionInputTokens,
@@ -392,6 +394,7 @@ export function loadCompactionCheckpointStore(
           requestInputKinds: [],
           expectedAssistantHashes: [],
           expectedAssistantKinds: [],
+          queuedEventHashes: [],
           lastUsedAt: file.mtimeMs,
           ttlMs: RESPONSES_COMPACTION_DURABLE_CHECKPOINT_TTL_MS,
           checkpointStoreDir: directory,
@@ -411,6 +414,7 @@ export function loadCompactionCheckpointStore(
           requestInputKinds: stored.requestInputKinds,
           expectedAssistantHashes: stored.expectedAssistantHashes,
           expectedAssistantKinds: stored.expectedAssistantKinds,
+          queuedEventHashes: stored.queuedEventHashes,
           lastInputTokens: stored.lastInputTokens,
           postCompactionInputTokens: stored.postCompactionInputTokens,
           nextCompactionInputTokens: stored.nextCompactionInputTokens,

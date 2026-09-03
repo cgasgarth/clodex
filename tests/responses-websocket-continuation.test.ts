@@ -4,15 +4,21 @@ import {
   conversationItemKind,
   historyContinuationMatch,
   prepareConversationItems,
+  queuedEventItemHashes,
   type ContinuationSource,
 } from '../src/oauth/responses-websocket/continuation.js';
 
-function cachedSource(requestInput: unknown[], expectedAssistant: unknown[]): ContinuationSource {
+function cachedSource(
+  requestInput: unknown[],
+  expectedAssistant: unknown[],
+  queuedEventHashes: string[] = [],
+): ContinuationSource {
   return {
     requestInputHashes: requestInput.map(conversationItemHash),
     requestInputKinds: requestInput.map(conversationItemKind),
     expectedAssistantHashes: expectedAssistant.map(conversationItemHash),
     expectedAssistantKinds: expectedAssistant.map(conversationItemKind),
+    queuedEventHashes,
   };
 }
 
@@ -48,6 +54,60 @@ describe('prepared conversation continuation matching', () => {
       payload,
       prepareConversationItems(payload),
     )).toEqual({ delta: [output], mode: 'exact' });
+  });
+
+  it('retains a task event when Claude omits it from the next replay', () => {
+    const user = { role: 'user', content: [{ type: 'input_text', text: 'run checks' }] };
+    const event = {
+      role: 'developer',
+      content: '<task-notification><status>completed</status></task-notification>',
+    };
+    const call = {
+      type: 'function_call', call_id: 'call_1', name: 'Read', arguments: '{"path":"result.txt"}',
+    };
+    const output = { type: 'function_call_output', call_id: 'call_1', output: 'passed' };
+    const payload = { input: [user, call, output] };
+
+    expect(historyContinuationMatch(
+      cachedSource([user, event], [call], queuedEventItemHashes([event])),
+      payload,
+      prepareConversationItems(payload),
+    )).toEqual({ delta: [output], mode: 'omitted_queued_event' });
+
+    const userEvent = {
+      role: 'user',
+      content: [{ type: 'input_text', text: event.content }],
+    };
+    expect(queuedEventItemHashes([userEvent])).toHaveLength(1);
+  });
+
+  it('retains a queued human steer but not an ordinary omitted user item', () => {
+    const initial = { role: 'user', content: [{ type: 'input_text', text: 'start' }] };
+    const steer = {
+      role: 'user',
+      content: [{
+        type: 'input_text',
+        text: 'The user sent a new message while you were working:\nchange direction\n\n'
+          + 'Address the message above as you continue this turn.',
+      }],
+    };
+    const ordinary = { role: 'user', content: [{ type: 'input_text', text: 'ordinary' }] };
+    const assistant = {
+      role: 'assistant', content: [{ type: 'output_text', text: 'working' }],
+    };
+    const next = { role: 'user', content: [{ type: 'input_text', text: 'next' }] };
+    const payload = { input: [initial, assistant, next] };
+
+    expect(historyContinuationMatch(
+      cachedSource([initial, steer], [assistant], queuedEventItemHashes([steer])),
+      payload,
+      prepareConversationItems(payload),
+    )).toEqual({ delta: [next], mode: 'omitted_queued_event' });
+    expect(historyContinuationMatch(
+      cachedSource([initial, ordinary], [assistant]),
+      payload,
+      prepareConversationItems(payload),
+    )).toBeUndefined();
   });
 
   it('reuses a compact checkpoint when Claude reshapes reasoning throughout old history', () => {
