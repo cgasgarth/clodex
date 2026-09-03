@@ -70,23 +70,13 @@ describe('daemon control API', () => {
       // SAFETY: The test fixture defines the asserted runtime shape.
       processingMode: processingMode as 'standard' | 'fast',
     }));
-    let secondwindMode: 'off' | 'shadow' | 'on' = 'off';
+    let secondwindMode: 'off' | 'on' = 'off';
     const secondwindSnapshot = () => ({
       mode: secondwindMode,
       since: new Date(0).toISOString(),
       loaded: false,
       sessions: 0,
       applied: {
-        requests: 0,
-        pricedRequests: 0,
-        unpricedRequests: 0,
-        blocksRewritten: 0,
-        inputTokensConsidered: 0,
-        tokensReduced: 0,
-        estimatedTokenRequests: 0,
-        estimatedSavingsUsd: 0,
-      },
-      shadow: {
         requests: 0,
         pricedRequests: 0,
         unpricedRequests: 0,
@@ -217,13 +207,13 @@ describe('daemon control API', () => {
       expect(await daemonControlRequest('/v1/secondwind/mode', {
         socketPath,
         method: 'POST',
-        body: { mode: 'shadow' },
-      })).toMatchObject({ mode: 'shadow' });
+        body: { mode: 'on' },
+      })).toMatchObject({ mode: 'on' });
       await expect(daemonControlRequest('/v1/secondwind/mode', {
         socketPath,
         method: 'POST',
         body: { mode: 'invalid' },
-      })).rejects.toThrow('Secondwind mode must be off, shadow, or on');
+      })).rejects.toThrow('Secondwind mode must be off or on');
       await expect(daemonControlRequest(
         `/v1/metrics?start=${encodeURIComponent(new Date(now - 3_600_000).toISOString())}`
         + `&end=${encodeURIComponent(new Date(now).toISOString())}`

@@ -235,8 +235,8 @@ subagents. OpenAI OAuth uses persistent Responses WebSockets with
 `previous_response_id` continuation. State is isolated by account, model,
 effort, Claude session, and agent lineage.
 
-[Secondwind](https://github.com/orchetron/secondwind) can run `off`, `shadow`,
-or `on`. It keeps unchanged request bytes when there is no rewrite and fails
+[Secondwind](https://github.com/orchetron/secondwind) can run `off` or `on`.
+It keeps unchanged request bytes when there is no rewrite and fails
 open if optimization fails. Its selected daemon mode persists.
 
 See [background agents](docs/background-agents.md) for child-process routing and

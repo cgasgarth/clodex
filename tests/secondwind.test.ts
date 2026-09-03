@@ -38,11 +38,10 @@ describe('Secondwind daemon service', () => {
       mode: 'on',
       loaded: true,
       applied: { requests: 1 },
-      shadow: { requests: 0 },
     });
   });
 
-  it('measures shadow requests, applies on requests, and persists mode changes', async () => {
+  it('applies on requests, bypasses off requests, and persists mode changes', async () => {
     const close = vi.fn();
     const rewrite = vi.fn((_request: JsonObject) => ({
       request: toolRequest('short'),
@@ -56,7 +55,7 @@ describe('Secondwind daemon service', () => {
     const persistMode = vi.fn();
     let clock = 0;
     const service = new SecondwindService({
-      initialMode: 'shadow',
+      initialMode: 'on',
       persistMode,
       createSession: async () => ({ rewrite, close }),
       now: () => {
@@ -67,24 +66,6 @@ describe('Secondwind daemon service', () => {
     const original = toolRequest('long tool output '.repeat(1_000));
     const body = Buffer.from(JSON.stringify(original));
 
-    expect(await service.rewrite({
-      body,
-      request: original,
-      sessionId: 'session-1',
-      modelId: 'gpt-5.6-sol',
-    })).toBe(body);
-    expect(service.snapshot().shadow).toMatchObject({
-      requests: 1,
-      pricedRequests: 1,
-      unpricedRequests: 0,
-      blocksRewritten: 1,
-      tokensReduced: 3_000,
-      estimatedTokenRequests: 0,
-    });
-    expect(service.snapshot().shadow.estimatedSavingsUsd).toBeGreaterThan(0);
-
-    service.setMode('on');
-    expect(persistMode).toHaveBeenCalledWith('on');
     const applied = await service.rewrite({
       body,
       request: original,
@@ -93,14 +74,23 @@ describe('Secondwind daemon service', () => {
     });
     expect(applied).not.toBe(body);
     expect(JSON.parse(applied.toString())).toEqual(toolRequest('short'));
+    expect(service.snapshot().applied).toMatchObject({
+      requests: 1,
+      pricedRequests: 1,
+      unpricedRequests: 0,
+      blocksRewritten: 1,
+      tokensReduced: 3_000,
+      estimatedTokenRequests: 0,
+    });
+    expect(service.snapshot().applied.estimatedSavingsUsd).toBeGreaterThan(0);
     expect(service.snapshot()).toMatchObject({
       mode: 'on',
       loaded: true,
       sessions: 0,
       applied: { requests: 1, blocksRewritten: 1 },
-      latency: { samples: 2, medianMs: 5, p95Ms: 5 },
+      latency: { samples: 1, medianMs: 5, p95Ms: 5 },
     });
-    expect(rewrite).toHaveBeenCalledTimes(2);
+    expect(rewrite).toHaveBeenCalledTimes(1);
 
     service.setMode('off');
     expect(await service.rewrite({
@@ -109,9 +99,10 @@ describe('Secondwind daemon service', () => {
       sessionId: 'session-1',
       modelId: 'gpt-5.6-sol',
     })).toBe(body);
-    expect(rewrite).toHaveBeenCalledTimes(2);
+    expect(rewrite).toHaveBeenCalledTimes(1);
 
     service.setMode('on');
+    expect(persistMode).toHaveBeenLastCalledWith('on');
     const resumed = await service.rewrite({
       body,
       request: original,
@@ -119,10 +110,10 @@ describe('Secondwind daemon service', () => {
       modelId: 'gpt-5.6-sol',
     });
     expect(resumed.equals(applied)).toBe(true);
-    expect(rewrite).toHaveBeenCalledTimes(3);
+    expect(rewrite).toHaveBeenCalledTimes(2);
 
     service.close();
-    expect(close).toHaveBeenCalledTimes(3);
+    expect(close).toHaveBeenCalledTimes(2);
   });
 
   it('rewrites count requests without booking savings metrics', async () => {
@@ -151,7 +142,7 @@ describe('Secondwind daemon service', () => {
 
   it('marks the compatibility estimate when optimizer token stats are absent', async () => {
     const service = new SecondwindService({
-      initialMode: 'shadow',
+      initialMode: 'on',
       createSession: async () => ({
         rewrite: () => ({
           request: toolRequest('short'),
@@ -169,12 +160,12 @@ describe('Secondwind daemon service', () => {
       modelId: 'gpt-5.6-sol',
     });
 
-    expect(service.snapshot().shadow).toMatchObject({
+    expect(service.snapshot().applied).toMatchObject({
       requests: 1,
       tokensReduced: expect.any(Number),
       estimatedTokenRequests: 1,
     });
-    expect(service.snapshot().shadow.tokensReduced).toBeGreaterThan(0);
+    expect(service.snapshot().applied.tokensReduced).toBeGreaterThan(0);
   });
 
   it('estimates recurring savings when a persistent session reuses frozen blocks', async () => {
@@ -295,7 +286,7 @@ describe('Secondwind daemon service', () => {
 
   it('reports unsupported models as unpriced instead of zero-dollar savings', async () => {
     const service = new SecondwindService({
-      initialMode: 'shadow',
+      initialMode: 'on',
       createSession: async () => ({
         rewrite: () => ({
           request: toolRequest('short'),
@@ -312,7 +303,7 @@ describe('Secondwind daemon service', () => {
       modelId: 'gpt-5.4',
     });
 
-    expect(service.snapshot().shadow).toMatchObject({
+    expect(service.snapshot().applied).toMatchObject({
       requests: 1,
       pricedRequests: 0,
       unpricedRequests: 1,
@@ -525,7 +516,7 @@ describe('Secondwind daemon service', () => {
       };
     });
     const service = new SecondwindService({
-      initialMode: 'shadow',
+      initialMode: 'on',
       createSession,
     });
     const request = toolRequest('concurrent');
@@ -560,7 +551,7 @@ describe('Secondwind daemon service', () => {
       close,
     }));
     const service = new SecondwindService({
-      initialMode: 'shadow',
+      initialMode: 'on',
       createSession,
     });
     const request = toolRequest('isolated');

@@ -216,8 +216,8 @@ export async function dispatchDaemonControlRequest(
         const mode = body && isObject(body)
           ? diagnosticRecord(body).mode
           : undefined;
-        if (mode !== 'off' && mode !== 'shadow' && mode !== 'on') {
-          return sendJson(400, { error: 'Secondwind mode must be off, shadow, or on' });
+        if (mode !== 'off' && mode !== 'on') {
+          return sendJson(400, { error: 'Secondwind mode must be off or on' });
         }
         options.secondwind.setMode(mode);
         return sendJson(200, options.secondwind.snapshot());

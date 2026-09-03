@@ -129,22 +129,6 @@ describe('dashboard controls', () => {
     expect(VIEW_SWITCH_HINT).toBe('Press 1–5 to switch views');
   });
 
-  it('renders both Secondwind metric blocks without duplicate React keys', async () => {
-    const child = Bun.spawn({
-      cmd: [process.execPath, 'tests/fixtures/dashboard-secondwind-render.tsx'],
-      cwd: import.meta.dir.replace(/\/tests$/, ''),
-      stdout: 'pipe',
-      stderr: 'pipe',
-    });
-    const [exitCode, stderr] = await Promise.all([
-      child.exited,
-      new Response(child.stderr).text(),
-    ]);
-
-    expect(exitCode).toBe(0);
-    expect(stderr).not.toContain('Encountered two children with the same key');
-  });
-
   it('shows compaction lifecycle, thread identity, sizes, and duration', () => {
     expect(diagnosticLines({
       timestamp: '2026-08-06T06:09:39.288Z',
