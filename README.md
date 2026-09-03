@@ -241,7 +241,8 @@ open if optimization fails. Its selected daemon mode persists.
 
 See [background agents](docs/background-agents.md) for child-process routing and
 [native compaction](docs/native-codex-compaction.md) for checkpoint, overflow,
-and recovery behavior.
+and recovery behavior. See the [OpenAI OAuth prompt contract](docs/openai-oauth-prompt-contract.md)
+for instruction ownership and provider-route boundaries.
 
 ## Standalone server
 
