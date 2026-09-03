@@ -200,6 +200,8 @@ describe('inference request log', () => {
         effort: 'high',
         provider: 'openai',
         route: 'translated',
+        queuedHumanSteeringMessages: 1,
+        durableTaskNotifications: 2,
       });
       const entry = JSON.parse((await readLog(path)).trim());
       expect(entry).toMatchObject({
@@ -208,10 +210,13 @@ describe('inference request log', () => {
         effort: 'high',
         provider: 'openai',
         route: 'translated',
+        queuedHumanSteeringMessages: 1,
+        durableTaskNotifications: 2,
       });
       expect(entry.timestamp).toEqual(expect.any(String));
       expect(Object.keys(entry).toSorted()).toEqual([
-        'claudeSessionId', 'effort', 'modelId', 'provider', 'route', 'timestamp',
+        'claudeSessionId', 'durableTaskNotifications', 'effort', 'modelId', 'provider',
+        'queuedHumanSteeringMessages', 'route', 'timestamp',
       ]);
     } finally {
       rmSync(dir, { recursive: true, force: true });

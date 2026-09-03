@@ -279,6 +279,8 @@ export interface InferenceRequestLogEntry {
   effort?: string;
   route: 'passthrough' | 'translated';
   stream?: boolean;
+  queuedHumanSteeringMessages?: number;
+  durableTaskNotifications?: number;
   requestPreview?: string;
 }
 
@@ -587,6 +589,8 @@ export function writeInferenceRequestLog(
     provider: compactLogValue(entry.provider, 200),
     route: entry.route,
     stream: entry.stream,
+    queuedHumanSteeringMessages: entry.queuedHumanSteeringMessages,
+    durableTaskNotifications: entry.durableTaskNotifications,
     requestPreview: requestPreview
       ? compactLogValue(requestPreview, REQUEST_PREVIEW_MAX + 20)
       : undefined,

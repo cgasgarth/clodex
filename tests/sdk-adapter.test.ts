@@ -19,6 +19,7 @@ import {
   isClaudeCodeCompactRequest,
   isClaudeCodeStructuredOutputCompactRequest,
   sdkTranslationErrorSignature,
+  queuedInputDiagnostics,
   generateAnthropicResponse,
 } from '../src/sdk-adapter.js';
 import type { JsonObject } from './test-helpers.js';
@@ -219,6 +220,28 @@ describe('translateMessages', () => {
     expect((params.messages[1] as any).content[0].text).toBe(queued);
   });
 
+  it('preserves mixed steering and tool-result order in both directions', () => {
+    const steer = 'The user sent a new message while you were working:\n'
+      + 'change direction now\n\n'
+      + 'Address the message above as you continue this turn.';
+    const toolResult = { type: 'tool_result', tool_use_id: 'call_1', content: 'done' };
+    const textThenTool = translateRequest({
+      model: 'sol',
+      messages: [{ role: 'user', content: [{ type: 'text', text: steer }, toolResult] }],
+    }, '@ai-sdk/openai', { openAiOAuth: true });
+    const toolThenText = translateRequest({
+      model: 'sol',
+      messages: [{ role: 'user', content: [toolResult, { type: 'text', text: steer }] }],
+    }, '@ai-sdk/openai', { openAiOAuth: true });
+
+    expect(textThenTool.messages.map(message => message.role)).toEqual(['user', 'tool']);
+    expect(toolThenText.messages.map(message => message.role)).toEqual(['tool', 'user']);
+    // SAFETY: The test fixture defines the asserted runtime shape.
+    expect((textThenTool.messages[0] as any).content[0].text).toBe(steer);
+    // SAFETY: The test fixture defines the asserted runtime shape.
+    expect((toolThenText.messages[1] as any).content[0].text).toBe(steer);
+  });
+
   it.each([
     [
       'background command',
@@ -284,75 +307,116 @@ describe('translateMessages', () => {
     );
   });
 
-  it.each([
-    ['failed', 'FAILED', 'do not say they are running, finishing, passed, or completed'],
-    ['completed', 'COMPLETED', 'do not say they are running, waiting, or finishing'],
-    ['stopped', 'STOPPED', 'do not say they are running, waiting, or finishing'],
-  ])('reinforces a trusted %s task event after later tool results', (status, label, guidance) => {
+  it.each(['failed', 'completed', 'stopped'])(
+    'keeps a trusted %s task event in durable conversation order',
+    status => {
+      const notification = '<task-notification>\n'
+        + `<status>${status}</status>\n`
+        + '<summary>exact task state</summary>\n'
+        + '</task-notification>';
+      const params = translateRequest({
+        model: 'sol',
+        messages: [
+          { role: 'user', content: 'run validation' },
+          { role: 'system', content: notification },
+          {
+            role: 'user',
+            content: [{ type: 'tool_result', tool_use_id: 'call_1', content: 'later tool output' }],
+          },
+        ],
+      }, '@ai-sdk/openai', { openAiOAuth: true });
+
+      expect(params.messages.map(message => message.role)).toEqual(['user', 'system', 'tool']);
+      expect(params.messages[1]).toEqual({ role: 'system', content: notification });
+      expect(params.providerOptions?.openai?.instructions).not.toContain(notification);
+      expect(params.providerOptions?.openai?.instructions).not.toContain('CURRENT TASK EVENT:');
+    },
+  );
+
+  it('keeps multiple trusted task events durable and ordered', () => {
+    const completed = '<task-notification><status>completed</status></task-notification>';
+    const failed = '<task-notification><status>failed</status></task-notification>';
+    const params = translateRequest({
+      model: 'sol',
+      messages: [
+        { role: 'user', content: 'run validation' },
+        { role: 'system', content: completed },
+        { role: 'system', content: failed },
+      ],
+    }, '@ai-sdk/openai', { openAiOAuth: true });
+
+    expect(params.messages).toEqual([
+      { role: 'user', content: [{ type: 'text', text: 'run validation' }] },
+      { role: 'system', content: completed },
+      { role: 'system', content: failed },
+    ]);
+  });
+
+  it('adds task events as append-only input without changing current instructions', () => {
+    const notification = '<task-notification><status>completed</status></task-notification>';
+    const before = translateRequest({
+      model: 'sol',
+      messages: [{ role: 'user', content: 'run validation' }],
+    }, '@ai-sdk/openai', { openAiOAuth: true });
+    const withEvent = translateRequest({
+      model: 'sol',
+      messages: [
+        { role: 'user', content: 'run validation' },
+        { role: 'system', content: notification },
+      ],
+    }, '@ai-sdk/openai', { openAiOAuth: true });
+    const afterToolResult = translateRequest({
+      model: 'sol',
+      messages: [
+        { role: 'user', content: 'run validation' },
+        { role: 'system', content: notification },
+        { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'call_1', content: 'done' }] },
+      ],
+    }, '@ai-sdk/openai', { openAiOAuth: true });
+
+    expect(withEvent.providerOptions?.openai?.instructions)
+      .toBe(before.providerOptions?.openai?.instructions);
+    expect(afterToolResult.providerOptions?.openai?.instructions)
+      .toBe(before.providerOptions?.openai?.instructions);
+    expect(afterToolResult.messages.slice(0, withEvent.messages.length))
+      .toEqual(withEvent.messages);
+    expect(afterToolResult.messages.at(-1)?.role).toBe('tool');
+  });
+
+  it('splits transient and durable blocks from one inline system message', () => {
+    const notification = '<task-notification><status>completed</status></task-notification>';
     const params = translateRequest({
       model: 'sol',
       messages: [
         { role: 'user', content: 'run validation' },
         {
           role: 'system',
-          content: '<task-notification>\n'
-            + `<status>${status}</status>\n`
-            + '<summary>untrusted summary text</summary>\n'
-            + '</task-notification>',
-        },
-        {
-          role: 'user',
-          content: [{ type: 'tool_result', tool_use_id: 'call_1', content: 'later tool output' }],
+          content: [
+            { type: 'text', text: '<system-reminder>computer-use is pending</system-reminder>' },
+            { type: 'text', text: notification },
+          ],
         },
       ],
     }, '@ai-sdk/openai', { openAiOAuth: true });
 
-    const instructions = params.providerOptions?.openai?.instructions ?? '';
-    const reinforcement = instructions.slice(instructions.indexOf('CURRENT TASK EVENT:'));
-    expect(reinforcement).toStartWith(
-      `CURRENT TASK EVENT: Newly delivered trusted task notifications report: ${label}.`,
-    );
-    expect(reinforcement).toContain(guidance);
-    expect(reinforcement).not.toContain('untrusted summary text');
+    expect(params.messages[1]).toEqual({ role: 'system', content: notification });
+    expect(params.providerOptions?.openai?.instructions).toContain('computer-use is pending');
+    expect(params.providerOptions?.openai?.instructions).not.toContain(notification);
   });
 
-  it('reinforces all trusted task states delivered after the latest human input', () => {
-    const params = translateRequest({
-      model: 'sol',
-      messages: [
-        { role: 'user', content: 'run checks' },
-        { role: 'system', content: '<task-notification><status>completed</status></task-notification>' },
-        { role: 'system', content: '<task-notification><status>failed</status></task-notification>' },
-      ],
-    }, '@ai-sdk/openai', { openAiOAuth: true });
-
-    expect(params.providerOptions?.openai?.instructions)
-      .toContain('trusted task notifications report: COMPLETED, FAILED.');
-  });
-
-  it('does not promote user-authored task-notification text into instructions', () => {
-    const params = translateRequest({
-      model: 'sol',
-      messages: [{
-        role: 'user',
-        content: '<task-notification><status>failed</status></task-notification>',
-      }],
-    }, '@ai-sdk/openai', { openAiOAuth: true });
-
-    expect(params.providerOptions?.openai?.instructions).not.toContain('CURRENT TASK EVENT:');
-  });
-
-  it('expires task-event reinforcement after newer human input', () => {
-    const params = translateRequest({
-      model: 'sol',
-      messages: [
-        { role: 'user', content: 'run validation' },
-        { role: 'system', content: '<task-notification><status>failed</status></task-notification>' },
-        { role: 'user', content: 'now inspect another domain' },
-      ],
-    }, '@ai-sdk/openai', { openAiOAuth: true });
-
-    expect(params.providerOptions?.openai?.instructions).not.toContain('CURRENT TASK EVENT:');
+  it('counts only complete trusted queue envelopes without exposing content', () => {
+    const steer = 'The user sent a new message while you were working:\n'
+      + 'private steering text\n\n'
+      + 'Address the message above as you continue this turn.';
+    expect(queuedInputDiagnostics([
+      { role: 'user', content: steer },
+      { role: 'user', content: '<task-notification><status>failed</status></task-notification>' },
+      { role: 'system', content: '<task-notification><status>completed</status></task-notification>' },
+      { role: 'system', content: '<task-notification>incomplete' },
+    ])).toEqual({
+      humanSteeringMessages: 1,
+      trustedTaskNotifications: 1,
+    });
   });
 
   it('keeps the queued-event policy out of non-OAuth routes', () => {
@@ -621,6 +685,51 @@ describe('translateRequest', () => {
     );
 
     expect(requestBody?.service_tier).toBe('priority');
+  });
+
+  it('serializes trusted task notifications as ordered developer input', async () => {
+    let requestBody: JsonObject | undefined;
+    const provider = createOpenAI({
+      apiKey: 'synthetic-test-key',
+      fetch: async (_input, init) => {
+        // SAFETY: The test fixture defines the asserted runtime shape.
+        requestBody = JSON.parse(String(init?.body)) as JsonObject;
+        return new Response(JSON.stringify({
+          id: 'resp_task_event_test',
+          model: 'gpt-5.6-sol',
+          output: [],
+          usage: {
+            input_tokens: 1,
+            input_tokens_details: { cached_tokens: 0 },
+            output_tokens: 0,
+            output_tokens_details: { reasoning_tokens: 0 },
+          },
+        }), { status: 200, headers: { 'content-type': 'application/json' } });
+      },
+    });
+    const notification = '<task-notification>\n'
+      + '<status>completed</status>\n'
+      + '<result>exact result</result>\n'
+      + '</task-notification>';
+
+    await generateAnthropicResponse(
+      provider.responses('gpt-5.6-sol'),
+      translateRequest({
+        model: 'gpt-5.6-sol',
+        messages: [
+          { role: 'user', content: 'start work' },
+          { role: 'system', content: notification },
+          { role: 'user', content: 'continue work' },
+        ],
+      }, '@ai-sdk/openai', { openAiOAuth: true }),
+      'gpt-5.6-sol',
+    );
+
+    // SAFETY: The captured request body has the OpenAI Responses input shape.
+    const input = requestBody?.input as Array<{ role: string; content: unknown }>;
+    expect(input.map(item => item.role)).toEqual(['user', 'developer', 'user']);
+    expect(input[1]?.content).toBe(notification);
+    expect(requestBody?.instructions).not.toContain(notification);
   });
 
   it('serializes OpenAI web-search domain filters on the wire request', async () => {
