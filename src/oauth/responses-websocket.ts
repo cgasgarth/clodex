@@ -18,7 +18,6 @@ import {
 } from './responses-overflow-recovery.js';
 import {
   RESPONSES_COMPACTION_CHECKPOINT_TTL_MS,
-  RESPONSES_COMPACTION_DURABLE_CHECKPOINT_TTL_MS,
   diagnosticContext,
 } from './responses-websocket/types.js';
 import type {
@@ -27,7 +26,7 @@ import type {
   JsonValue,
   RequestContext,
   ConnectionEntry,
-  HydratedCompactionCheckpoint,
+  CompactionCheckpoint,
 } from './responses-websocket/types.js';
 import type {
   ResponsesWebSocketFetchOptions,
@@ -39,12 +38,10 @@ import {
   connectionCount,
   connectionCountByGeneration,
   checkpointEntries,
-  persistCompactionCheckpoint,
+  registerCompactionCheckpoint,
   syntheticClaudeCompactionSummary,
   syntheticAssistantMessage,
   syntheticClaudeCompactionResponse,
-  loadCompactionCheckpointStore,
-  hydrateCompactionCheckpoint,
   debugKey,
   emitDiagnostic,
 } from './responses-websocket/state.js';
@@ -80,7 +77,6 @@ import {
 import { createOverflowRecoveryHandler } from './responses-websocket/overflow/recovery-handler.js';
 import { runCompactionTrigger } from './responses-websocket/compaction/trigger.js';
 import {
-  checkpointStoreDirectory,
   prepareResponsesRequest,
   resolveWebSocketOptions,
 } from './responses-websocket/request/setup.js';
@@ -140,9 +136,6 @@ export function createResponsesWebSocketFetch(
   const debug = (message: string) => { try { log?.(`ws: ${message}`); } catch { /* ignore */ } };
   let standaloneCompactionNotFound = false;
   const resolvedOptions = resolveWebSocketOptions(options);
-  // Durable native state must never remain active after the user disables the
-  // native compaction setting, even if a caller accidentally supplies a path.
-  const checkpointStoreDir = checkpointStoreDirectory(options);
 
   // SAFETY: This async implementation matches the provider-utils FetchFunction contract.
   return (async (requestUrl, init): Promise<Response> => {
@@ -170,7 +163,6 @@ export function createResponsesWebSocketFetch(
       }, diagnosticCorrelation);
     }
     let now = resolvedOptions.now();
-    loadCompactionCheckpointStore(checkpointStoreDir, now, checkpointKey);
     const forceCompaction = diagnosticCorrelation?.forceCompaction === true;
     let candidates = partitionKey ? connectionEntries(partitionKey) : [];
     const queuedBehindActive = candidates
@@ -204,7 +196,6 @@ export function createResponsesWebSocketFetch(
         queuedItems,
       }, diagnosticCorrelation);
       now = resolvedOptions.now();
-      loadCompactionCheckpointStore(checkpointStoreDir, now, checkpointKey);
       candidates = partitionKey ? connectionEntries(partitionKey) : [];
     }
     const evictions = cleanupExpiredConnections(now);
@@ -214,10 +205,8 @@ export function createResponsesWebSocketFetch(
       payload,
       candidates,
       checkpoints,
-      now,
       forceCompaction,
       claudeAgentId: diagnosticCorrelation?.claudeAgentId,
-      hydrateCheckpoint: hydrateCompactionCheckpoint,
     });
     const {
       preparedConversation,
@@ -647,7 +636,6 @@ export function createResponsesWebSocketFetch(
               Boolean(partitionKey),
               partitionKey,
               checkpointKey,
-              checkpointStoreDir,
               resolvedOptions,
               debug,
               proxyUrl,
@@ -1011,7 +999,7 @@ export function createResponsesWebSocketFetch(
       if (!summaryHash) {
         throw new ResponsesCompactionError('Synthetic Claude compaction marker was not anchorable');
       }
-      const checkpoint: HydratedCompactionCheckpoint = {
+      const checkpoint: CompactionCheckpoint = {
         connectionId: 0,
         lineageId: allocateLineageDebugId(),
         lineageKey: randomUUID(),
@@ -1029,12 +1017,9 @@ export function createResponsesWebSocketFetch(
         promptFieldHashes,
         instructionsSnapshot,
         lastUsedAt: now,
-        ttlMs: checkpointStoreDir
-          ? RESPONSES_COMPACTION_DURABLE_CHECKPOINT_TTL_MS
-          : RESPONSES_COMPACTION_CHECKPOINT_TTL_MS,
-        checkpointStoreDir,
+        ttlMs: RESPONSES_COMPACTION_CHECKPOINT_TTL_MS,
       };
-      const checkpointDurable = persistCompactionCheckpoint(checkpoint, debug);
+      registerCompactionCheckpoint(checkpoint);
       if (supersededEntry) deleteEntry(supersededEntry);
       emitDiagnostic(options, {
         event: 'ws_compaction',
@@ -1042,7 +1027,6 @@ export function createResponsesWebSocketFetch(
         transport: 'claude_compaction_response',
         reason: compactionReason,
         checkpointItems: checkpoint.compactedInput.length,
-        checkpointDurable,
         ...compactionUsage,
       }, diagnosticCorrelation);
       return syntheticClaudeCompactionResponse(
@@ -1124,7 +1108,6 @@ export function createResponsesWebSocketFetch(
             persistent,
             partitionKey,
             checkpointKey,
-            checkpointStoreDir,
             resolvedOptions,
             debug,
             proxyUrl,
@@ -1141,7 +1124,6 @@ export function createResponsesWebSocketFetch(
           persistent,
           partitionKey,
           checkpointKey,
-          checkpointStoreDir,
           resolvedOptions,
           debug,
           proxyUrl,

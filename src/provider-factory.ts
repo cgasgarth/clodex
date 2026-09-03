@@ -16,7 +16,6 @@ import {
   injectClaudeIdentity,
 } from './oauth/claude-identity.js';
 import { isCredentialBearingHeader } from './credentials/headers.js';
-import { getResponsesCheckpointsPath } from './config/paths.js';
 import {
   createXaiSubscriptionFetch,
   XAI_SUBSCRIPTION_BASE_URL,
@@ -224,9 +223,6 @@ export async function createLanguageModel(
                   accountId,
                   compactThreshold: spec.openAiCompactThreshold,
                   contextWindow: spec.openAiContextWindow,
-                  checkpointStoreDir: spec.openAiCompactThreshold !== undefined
-                    ? getResponsesCheckpointsPath()
-                    : undefined,
                   onDiagnostic: spec.onWebSocketDiagnostic,
                   },
                 ),

@@ -20,7 +20,6 @@ import {
 import type {
   CompactionCheckpoint,
   ConnectionEntry,
-  HydratedCompactionCheckpoint,
   JsonObject,
   JsonValue,
   ResponsesWebSocketDiagnosticEvent,
@@ -60,7 +59,7 @@ export interface ResponsesSessionHeadPlan {
   selected?: ConnectionEntry;
   selectedMatch?: ContinuationMatch;
   selectedDelta?: JsonValue[];
-  selectedCheckpoint?: HydratedCompactionCheckpoint;
+  selectedCheckpoint?: CompactionCheckpoint;
   checkpointMatch?: ContinuationMatch;
   diagnosticEntry?: ConnectionEntry;
   compactionEnvelopeCount: number;
@@ -72,13 +71,8 @@ export interface PlanResponsesSessionHeadOptions {
   payload: JsonObject;
   candidates: ConnectionEntry[];
   checkpoints: CompactionCheckpoint[];
-  now: number;
   forceCompaction: boolean;
   claudeAgentId?: string;
-  hydrateCheckpoint: (
-    checkpoint: CompactionCheckpoint,
-    now: number,
-  ) => HydratedCompactionCheckpoint | undefined;
 }
 
 /**
@@ -90,10 +84,8 @@ export function planResponsesSessionHead({
   payload,
   candidates,
   checkpoints,
-  now,
   forceCompaction,
   claudeAgentId,
-  hydrateCheckpoint,
 }: PlanResponsesSessionHeadOptions): ResponsesSessionHeadPlan {
   const idleCandidates = candidates.filter(entry => !entry.inFlight);
   const preparedConversation = prepareConversationItems(payload);
@@ -142,10 +134,8 @@ export function planResponsesSessionHead({
       || (left.checkpoint.lastInputTokens ?? Number.MAX_SAFE_INTEGER)
         - (right.checkpoint.lastInputTokens ?? Number.MAX_SAFE_INTEGER));
   const checkpointCandidate = selected ? undefined : checkpointMatches[0];
-  const selectedCheckpoint = checkpointCandidate
-    ? hydrateCheckpoint(checkpointCandidate.checkpoint, now)
-    : undefined;
-  const checkpointMatch = selectedCheckpoint ? checkpointCandidate?.match : undefined;
+  const selectedCheckpoint = checkpointCandidate?.checkpoint;
+  const checkpointMatch = selectedCheckpoint ? checkpointCandidate.match : undefined;
   const compactionEnvelopeCount = claudeCompactionEnvelopeOccurrenceCount(payload);
   const anchored = selectedMatch?.mode === 'claude_compaction_summary'
     || checkpointMatch?.mode === 'claude_compaction_summary';
@@ -197,7 +187,7 @@ export interface FinalizeResponsesSessionOptions {
 
 export interface ResponsesSessionDispatchPlan {
   selected?: ConnectionEntry;
-  selectedCheckpoint?: HydratedCompactionCheckpoint;
+  selectedCheckpoint?: CompactionCheckpoint;
   selectedMatch?: ContinuationMatch;
   checkpointMatch?: ContinuationMatch;
   sendPayload: JsonObject;

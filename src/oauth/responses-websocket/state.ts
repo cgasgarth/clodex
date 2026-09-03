@@ -1,13 +1,6 @@
 import type { ResponsesCompactionUsage } from '../responses-compaction.js';
 import {
-  listStoredResponsesCheckpointFiles,
-  loadStoredResponsesCheckpoint,
-  saveStoredResponsesCheckpoint,
-  type StoredResponsesCheckpointFile,
-} from '../responses-checkpoint-store.js';
-import {
   RESPONSES_COMPACTION_CHECKPOINT_TTL_MS,
-  RESPONSES_COMPACTION_DURABLE_CHECKPOINT_TTL_MS,
   diagnosticContext,
 } from './types.js';
 import type {
@@ -15,7 +8,6 @@ import type {
   JsonObject,
   ConnectionEntry,
   CompactionCheckpoint,
-  HydratedCompactionCheckpoint,
 } from './types.js';
 import { conversationItemKind, conversationItemHash } from './continuation.js';
 import { isString } from '../../runtime/type-guards.js';
@@ -31,13 +23,7 @@ import { isString } from '../../runtime/type-guards.js';
 // One-shot nursery traffic never consumes the established LRU's 32 reserved slots.
 const connections = new Map<string, Set<ConnectionEntry>>();
 export const compactionCheckpoints = new Map<string, CompactionCheckpoint[]>();
-const checkpointStoreNextScanAt = new Map<string, number>();
-const CHECKPOINT_STORE_RESCAN_INTERVAL_MS = 5_000;
 const MAX_COMPACTION_CHECKPOINTS_PER_PARTITION = 16;
-const MAX_HYDRATED_DURABLE_CHECKPOINTS = 8;
-// 64 global records is only four fully branched Claude sessions. Workflow-heavy
-// use reaches that while sessions are still active, so a restart can lose the
-// only canonical rebase. The seven-day TTL remains the primary retention bound.
 const MAX_COMPACTION_CHECKPOINTS = 256;
 let nextConnectionDebugId = 1;
 let nextLineageDebugId = 1;
@@ -134,12 +120,10 @@ function upsertCompactionCheckpoint(
     if (entries.length) compactionCheckpoints.set(oldest.key, entries);
     else compactionCheckpoints.delete(oldest.key);
   }
-  const hydratedDurable = checkpointEntries()
-    .filter(candidate => candidate.checkpointStoreDir && candidate.compactedInput)
-    .toSorted((left, right) => right.lastUsedAt - left.lastUsedAt);
-  for (const candidate of hydratedDurable.slice(MAX_HYDRATED_DURABLE_CHECKPOINTS)) {
-    candidate.compactedInput = undefined;
-  }
+}
+
+export function registerCompactionCheckpoint(checkpoint: CompactionCheckpoint): void {
+  upsertCompactionCheckpoint(checkpoint);
 }
 
 export function saveCompactionCheckpoint(entry: ConnectionEntry): void {
@@ -149,7 +133,7 @@ export function saveCompactionCheckpoint(entry: ConnectionEntry): void {
     || !entry.expectedAssistant
     || !entry.compactedInput
   ) return;
-  const checkpoint: HydratedCompactionCheckpoint = {
+  const checkpoint: CompactionCheckpoint = {
     connectionId: entry.debugId,
     lineageId: entry.lineageId,
     lineageKey: entry.lineageKey,
@@ -173,111 +157,13 @@ export function saveCompactionCheckpoint(entry: ConnectionEntry): void {
     promptFieldHashes: entry.promptFieldHashes,
     instructionsSnapshot: entry.instructionsSnapshot,
     lastUsedAt: entry.lastUsedAt,
-    ttlMs: entry.checkpointStoreDir
-      ? RESPONSES_COMPACTION_DURABLE_CHECKPOINT_TTL_MS
-      : RESPONSES_COMPACTION_CHECKPOINT_TTL_MS,
-    checkpointStoreDir: entry.checkpointStoreDir,
+    ttlMs: RESPONSES_COMPACTION_CHECKPOINT_TTL_MS,
   };
-  persistCompactionCheckpoint(checkpoint, entry.debug);
-}
-
-export function persistCompactionCheckpoint(
-  checkpoint: HydratedCompactionCheckpoint,
-  debug: (message: string) => void,
-): boolean {
-  if (!checkpoint.checkpointStoreDir) {
-    upsertCompactionCheckpoint(checkpoint);
-    return false;
-  }
-  try {
-    const persisted = saveStoredResponsesCheckpoint(checkpoint.checkpointStoreDir, {
-        checkpointKey: checkpoint.key,
-        lineageKey: checkpoint.lineageKey,
-        requestInputHashes: checkpoint.requestInputHashes,
-        requestInputKinds: checkpoint.requestInputKinds,
-        expectedAssistantHashes: checkpoint.expectedAssistantHashes,
-        expectedAssistantKinds: checkpoint.expectedAssistantKinds,
-        queuedEventHashes: checkpoint.queuedEventHashes,
-        compactedInput: checkpoint.compactedInput,
-        lastInputTokens: checkpoint.lastInputTokens,
-        postCompactionInputTokens: checkpoint.postCompactionInputTokens,
-        nextCompactionInputTokens: checkpoint.nextCompactionInputTokens,
-        claudeCompactionSummaryHash: checkpoint.claudeCompactionSummaryHash,
-        promptFieldHashes: checkpoint.promptFieldHashes,
-        lastUsedAt: checkpoint.lastUsedAt,
-    }, MAX_COMPACTION_CHECKPOINTS_PER_PARTITION, MAX_COMPACTION_CHECKPOINTS);
-    if (!persisted) {
-      debug('compact checkpoint exceeded 64 MiB durable store size cap');
-      upsertCompactionCheckpoint(checkpoint);
-      return false;
-    }
-    // Keep only a small hot set. Older durable payloads are hydrated after
-    // their lightweight lineage metadata matches.
-    upsertCompactionCheckpoint(checkpoint);
-    return persisted;
-  } catch (error) {
-    debug(`compact checkpoint persistence unavailable: ${error instanceof Error ? error.message : String(error)}`);
-    return false;
-  }
-}
-
-export function hydrateCompactionCheckpoint(
-  checkpoint: CompactionCheckpoint,
-  now = Date.now(),
-): HydratedCompactionCheckpoint | undefined {
-  let compactedInput = checkpoint.compactedInput;
-  if (compactedInput === undefined && checkpoint.checkpointStoreDir) {
-    compactedInput = loadStoredResponsesCheckpoint(
-      checkpoint.checkpointStoreDir,
-      checkpoint.key,
-      checkpoint.lineageKey,
-    )?.compactedInput;
-  }
-  if (compactedInput === undefined) return undefined;
-  const hydrated: HydratedCompactionCheckpoint = {
-    ...checkpoint,
-    compactedInput,
-    lastUsedAt: Math.max(checkpoint.lastUsedAt, now),
-  };
-  upsertCompactionCheckpoint(hydrated);
-  return hydrated;
-}
-
-function refreshChangedStoredCheckpoint(
-  directory: string,
-  file: StoredResponsesCheckpointFile,
-  existing: CompactionCheckpoint,
-  requestedCheckpointKey: string | undefined,
-): void {
-  if (
-    existing.checkpointStoreMtimeMs === file.mtimeMs
-    || file.checkpointKey !== requestedCheckpointKey
-  ) return;
-  const stored = loadStoredResponsesCheckpoint(directory, file.checkpointKey, file.lineageKey);
-  if (!stored || stored.lastUsedAt <= existing.lastUsedAt) {
-    existing.checkpointStoreMtimeMs = file.mtimeMs;
-    return;
-  }
-  upsertCompactionCheckpoint({
-    ...existing,
-    compactedInput: undefined,
-    requestInputHashes: stored.requestInputHashes,
-    requestInputKinds: stored.requestInputKinds,
-    expectedAssistantHashes: stored.expectedAssistantHashes,
-    expectedAssistantKinds: stored.expectedAssistantKinds,
-    queuedEventHashes: stored.queuedEventHashes,
-    lastInputTokens: stored.lastInputTokens,
-    postCompactionInputTokens: stored.postCompactionInputTokens,
-    nextCompactionInputTokens: stored.nextCompactionInputTokens,
-    claudeCompactionSummaryHash: stored.claudeCompactionSummaryHash,
-    promptFieldHashes: stored.promptFieldHashes,
-    lastUsedAt: stored.lastUsedAt,
-    checkpointStoreMtimeMs: file.mtimeMs,
-  });
+  registerCompactionCheckpoint(checkpoint);
 }
 
 export function syntheticClaudeCompactionSummary(checkpointId: string): string {
-  return '<summary>Context compacted natively by OpenAI and retained in Clodex '
+  return '<summary>Context compacted natively by OpenAI and retained in Clodex process '
     + `checkpoint ${checkpointId}. Continue from the attached native context.</summary>`;
 }
 
@@ -356,81 +242,6 @@ export function syntheticClaudeCompactionResponse(
   });
 }
 
-export function loadCompactionCheckpointStore(
-  directory: string | undefined,
-  now: number,
-  requestedCheckpointKey?: string,
-): void {
-  if (!directory) return;
-  try {
-    if (now >= (checkpointStoreNextScanAt.get(directory) ?? 0)) {
-      const files = listStoredResponsesCheckpointFiles(
-        directory,
-        now,
-        RESPONSES_COMPACTION_DURABLE_CHECKPOINT_TTL_MS,
-      );
-      const liveFiles = new Set(files.map(file => `${file.checkpointKey}:${file.lineageKey}`));
-      for (const [key, checkpoints] of compactionCheckpoints) {
-        const retained = checkpoints.filter(checkpoint => (
-          checkpoint.checkpointStoreDir !== directory
-          || liveFiles.has(`${checkpoint.key}:${checkpoint.lineageKey}`)
-        ));
-        if (retained.length) compactionCheckpoints.set(key, retained);
-        else compactionCheckpoints.delete(key);
-      }
-      for (const file of files) {
-        const existing = (compactionCheckpoints.get(file.checkpointKey) ?? [])
-          .find(checkpoint => checkpoint.lineageKey === file.lineageKey);
-        if (existing) {
-          refreshChangedStoredCheckpoint(directory, file, existing, requestedCheckpointKey);
-          continue;
-        }
-        upsertCompactionCheckpoint({
-          connectionId: 0,
-          lineageId: allocateLineageDebugId(),
-          lineageKey: file.lineageKey,
-          key: file.checkpointKey,
-          requestInputHashes: [],
-          requestInputKinds: [],
-          expectedAssistantHashes: [],
-          expectedAssistantKinds: [],
-          queuedEventHashes: [],
-          lastUsedAt: file.mtimeMs,
-          ttlMs: RESPONSES_COMPACTION_DURABLE_CHECKPOINT_TTL_MS,
-          checkpointStoreDir: directory,
-          checkpointStoreMtimeMs: file.mtimeMs,
-        });
-      }
-      checkpointStoreNextScanAt.set(directory, now + CHECKPOINT_STORE_RESCAN_INTERVAL_MS);
-    }
-    if (requestedCheckpointKey) {
-      for (const checkpoint of checkpointEntries(requestedCheckpointKey)) {
-        if (checkpoint.requestInputHashes.length > 0 || checkpoint.checkpointStoreDir !== directory) continue;
-        const stored = loadStoredResponsesCheckpoint(directory, checkpoint.key, checkpoint.lineageKey);
-        if (!stored) continue;
-        upsertCompactionCheckpoint({
-          ...checkpoint,
-          requestInputHashes: stored.requestInputHashes,
-          requestInputKinds: stored.requestInputKinds,
-          expectedAssistantHashes: stored.expectedAssistantHashes,
-          expectedAssistantKinds: stored.expectedAssistantKinds,
-          queuedEventHashes: stored.queuedEventHashes,
-          lastInputTokens: stored.lastInputTokens,
-          postCompactionInputTokens: stored.postCompactionInputTokens,
-          nextCompactionInputTokens: stored.nextCompactionInputTokens,
-          claudeCompactionSummaryHash: stored.claudeCompactionSummaryHash,
-          promptFieldHashes: stored.promptFieldHashes,
-          lastUsedAt: Math.max(checkpoint.lastUsedAt, stored.lastUsedAt),
-        });
-      }
-    }
-  } catch {
-    // Do not cache a failed scan. The next request retries recovery while
-    // normal inference remains available.
-    checkpointStoreNextScanAt.delete(directory);
-  }
-}
-
 export function registerEntry(entry: ConnectionEntry): void {
   if (!entry.key) return;
   let entries = connections.get(entry.key);
@@ -478,7 +289,6 @@ export function resetResponsesWebSocketConnectionsForTests(): void {
   }
   connections.clear();
   compactionCheckpoints.clear();
-  checkpointStoreNextScanAt.clear();
   nextConnectionDebugId = 1;
   nextLineageDebugId = 1;
 }

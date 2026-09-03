@@ -756,10 +756,9 @@ export function translateRequest(
   const baseSystem = systemToString(body.system, options?.openAiOAuth === true);
   // Claude can add and remove inline system reminders while MCP servers start.
   // The Codex Responses API accepts fresh instructions on every request, so
-  // keep these current instructions out of replayed conversation history. This
-  // lets a durable native-compaction checkpoint survive a daemon restart while
-  // the MCP tool set is still settling. Other providers retain positional
-  // system messages because their semantics can differ.
+  // keep these current instructions out of replayed conversation history.
+  // Other providers retain positional system messages because their semantics
+  // can differ.
   const oauthPartition = options?.openAiOAuth
     ? partitionOpenAiOAuthMessages(messages)
     : undefined;

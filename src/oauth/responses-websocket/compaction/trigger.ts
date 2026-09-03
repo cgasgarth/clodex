@@ -134,7 +134,7 @@ export async function runCompactionTrigger({
         // The trigger advances the connection-local previous-response slot, so
         // the pre-trigger response id is no longer usable. Its canonical
         // compact checkpoint remains a valid fallback until the rebased
-        // response establishes a newer durable checkpoint.
+        // response establishes a newer checkpoint.
         deleteEntry(completedEntry);
       }
       if (output.length !== 1) {

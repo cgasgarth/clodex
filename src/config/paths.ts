@@ -41,10 +41,6 @@ export function getLogsPath(env: HomeEnv = process.env): string {
   return join(getAppHome(env), 'logs');
 }
 
-export function getResponsesCheckpointsPath(env: HomeEnv = process.env): string {
-  return join(getAppHome(env), 'responses-checkpoints');
-}
-
 export function getDaemonRuntimePath(env: HomeEnv = process.env): string {
   return join(getAppHome(env), 'daemon-runtime.json');
 }
