@@ -5447,7 +5447,7 @@ beforeEach(() => {
     await readAll(recovered);
   });
 
-  it('uses a 400k recovery window when missed state has no stored input usage', async () => {
+  it('uses a 400k recovery window when no checkpoint state exists', async () => {
     const diagnostics: ResponsesWebSocketDiagnosticEvent[] = [];
     const compactBodies: unknown[][] = [];
     const compactFetch = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
@@ -5460,23 +5460,13 @@ beforeEach(() => {
       });
     });
     const wsFetch = createResponsesWebSocketFetch(WS_URL, undefined, {
-      accountId: 'acct-checkpoint-miss-default-usage',
+      accountId: 'acct-checkpoint-miss-no-state',
       compactThreshold: 350_000,
       contextWindow: 1_000_000,
       // SAFETY: The test fixture defines the asserted runtime shape.
       compactFetch: compactFetch as typeof fetch,
       onDiagnostic: event => diagnostics.push(event),
     });
-    const first = await wsFetch('https://example.test/responses', {
-      method: 'POST', headers: {}, body: JSON.stringify(sessionPayload([
-        { role: 'user', content: [{ type: 'input_text', text: 'original' }] },
-      ])),
-    });
-    const original = lastSocket();
-    original.emit('open');
-    emitTextResponse(original, 'resp_checkpoint_miss_no_usage', 'done');
-    await readAll(first);
-
     const fullReplay = Array.from({ length: 84 }, (_, index) => ({
       role: 'user',
       content: [{ type: 'input_text', text: `${index}-${'x'.repeat(50_000)}` }],
@@ -5642,7 +5632,8 @@ beforeEach(() => {
     expect(compactFetch).toHaveBeenCalledOnce();
   });
 
-  it('does not mutate transport state or dispatch when every compacted candidate exceeds the hard window', async () => {
+  it('dispatches a bounded recent window when compacted output exceeds the hard window', async () => {
+    const diagnostics: ResponsesWebSocketDiagnosticEvent[] = [];
     const compactFetch = vi.fn(async () => new Response(JSON.stringify({
       output: [{ type: 'compaction', encrypted_content: 'still-too-large' }],
       usage: { input_tokens: 100_000, output_tokens: 200_000 },
@@ -5656,6 +5647,7 @@ beforeEach(() => {
       contextWindow: 128_000,
       // SAFETY: The test fixture defines the asserted runtime shape.
       compactFetch: compactFetch as typeof fetch,
+      onDiagnostic: event => diagnostics.push(event),
     });
     const input = [
       {
@@ -5678,12 +5670,23 @@ beforeEach(() => {
       }),
     );
 
-    expect(response.status).toBe(400);
-    expect(fakeSockets).toHaveLength(0);
-    expect(compactFetch).toHaveBeenCalled();
-    expect(await response.json()).toMatchObject({
-      error: { code: 'context_length_exceeded' },
-    });
+    expect(response.status).toBe(200);
+    expect(compactFetch).toHaveBeenCalledOnce();
+    const socket = lastSocket();
+    socket.emit('open');
+    // SAFETY: The test fixture defines the asserted runtime shape.
+    const sent = JSON.parse(socket.send.mock.calls[0]![0] as string);
+    expect(sent.previous_response_id).toBeUndefined();
+    expect(sent.input).toEqual([input.at(-1)]);
+    expect(diagnostics).toContainEqual(expect.objectContaining({
+      event: 'ws_compaction',
+      outcome: 'fallback',
+      mode: 'checkpoint_miss',
+      fallback: 'bounded_recent_window',
+      skipReason: 'compacted_output_exceeds_context',
+    }));
+    emitTextResponse(socket, 'resp_bounded_compaction_fallback', 'recovered');
+    await readAll(response);
   });
 
   it('commits only a later accepted candidate and replaces the original logical head', async () => {

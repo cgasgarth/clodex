@@ -498,7 +498,6 @@ export function createResponsesWebSocketFetch(
       && estimatedInputTokens !== undefined
       && contextWindow !== undefined
       && estimatedInputTokens >= contextWindow
-      && (candidates.length > 0 || checkpoints.length > 0)
       && overflowRecovery
     ) {
       const missRecovery = await recoverCheckpointMiss({
