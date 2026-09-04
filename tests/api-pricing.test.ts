@@ -3,8 +3,8 @@ import {
   API_PRICING_AS_OF,
   API_PRICING_SOURCE,
   GROK_4_5_API_RATES,
-  GPT_5_6_API_RATES,
-  GPT_5_6_PRIORITY_API_RATES,
+  OPENAI_API_RATES,
+  OPENAI_PRIORITY_API_RATES,
   canonicalPricedModelId,
   effectiveApiProcessingMode,
   estimateApiCost,
@@ -13,15 +13,19 @@ import {
 
 describe('API-equivalent pricing', () => {
   it('uses the current published OpenAI and xAI rates', () => {
-    expect(API_PRICING_AS_OF).toBe('2026-08-29');
+    expect(API_PRICING_AS_OF).toBe('2026-09-04');
     expect(API_PRICING_SOURCE).toBe('OpenAI and xAI API pricing');
-    expect(GPT_5_6_API_RATES['gpt-5.6-terra'])
+    expect(OPENAI_API_RATES['gpt-6-astra'])
+      .toEqual({ input: 10, cachedInput: 1, output: 50 });
+    expect(OPENAI_PRIORITY_API_RATES['gpt-6-astra'])
+      .toEqual({ input: 20, cachedInput: 2, output: 100 });
+    expect(OPENAI_API_RATES['gpt-5.6-terra'])
       .toEqual({ input: 2, cachedInput: 0.2, output: 12 });
-    expect(GPT_5_6_API_RATES['gpt-5.6-luna'])
+    expect(OPENAI_API_RATES['gpt-5.6-luna'])
       .toEqual({ input: 0.2, cachedInput: 0.02, output: 1.2 });
-    expect(GPT_5_6_PRIORITY_API_RATES['gpt-5.6-terra'])
+    expect(OPENAI_PRIORITY_API_RATES['gpt-5.6-terra'])
       .toEqual({ input: 4, cachedInput: 0.4, output: 24 });
-    expect(GPT_5_6_PRIORITY_API_RATES['gpt-5.6-luna'])
+    expect(OPENAI_PRIORITY_API_RATES['gpt-5.6-luna'])
       .toEqual({ input: 0.4, cachedInput: 0.04, output: 2.4 });
     expect(GROK_4_5_API_RATES).toEqual({
       shortContext: { input: 2, cachedInput: 0.3, output: 6 },
@@ -30,6 +34,9 @@ describe('API-equivalent pricing', () => {
   });
 
   it('recognizes Claude aliases for OpenAI and Grok models', () => {
+    expect(canonicalPricedModelId('astra')).toBe('gpt-6-astra');
+    expect(canonicalPricedModelId('anthropic-openai-oauth__gpt-6-astra[1m]'))
+      .toBe('gpt-6-astra');
     expect(canonicalPricedModelId('sol')).toBe('gpt-5.6-sol');
     expect(canonicalPricedModelId('anthropic-openai-oauth__gpt-5.6-terra'))
       .toBe('gpt-5.6-terra');
@@ -40,6 +47,36 @@ describe('API-equivalent pricing', () => {
     expect(canonicalPricedModelId('anthropic-xai-oauth__grok-4.6'))
       .toBe('grok-4.6');
     expect(canonicalPricedModelId('gpt-unpriced')).toBeUndefined();
+  });
+
+  it('prices GPT-6 Astra cache writes and output at published Standard rates', () => {
+    expect(estimateApiCost({
+      modelId: 'astra',
+      inputTokens: 100_000,
+      cachedInputTokens: 100_000,
+      cacheWriteTokens: 50_000,
+      outputTokens: 10_000,
+    })).toEqual({
+      input: 1,
+      cache: 0.725,
+      output: 0.5,
+      total: 2.225,
+    });
+  });
+
+  it('applies GPT-6 Astra long-context multipliers above 272K input tokens', () => {
+    expect(estimateApiCost({
+      modelId: 'gpt-6-astra',
+      inputTokens: 272_001,
+      cachedInputTokens: 0,
+      cacheWriteTokens: 0,
+      outputTokens: 10_000,
+    })).toEqual({
+      input: 5.44002,
+      cache: 0,
+      output: 0.75,
+      total: 6.19002,
+    });
   });
 
   it('breaks standard Sol pricing into uncached input, cache, and output', () => {

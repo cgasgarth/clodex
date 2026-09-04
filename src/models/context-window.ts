@@ -36,7 +36,7 @@ const HEURISTIC_RULES: Array<[RegExp, number]> = [
   [/claude/i, 200_000],
   [/deepseek-v4|deepseek-r1|deepseek-reasoner/i, 1_000_000],
   [/deepseek/i, 64_000],
-  [/gpt-5|gpt-4\.1|o3-|o4-/i, 1_000_000],
+  [/gpt-6-astra|gpt-5|gpt-4\.1|o3-|o4-/i, 1_000_000],
   [/gpt-4o|gpt-4-turbo|gpt-4/i, 128_000],
   [/gpt-oss/i, 131_072],
   [/qwen3|qwen-3|qwen2\.5-72b|qwen2\.5-32b|qwen-coder/i, 262_144],

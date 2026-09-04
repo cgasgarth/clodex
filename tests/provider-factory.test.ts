@@ -95,6 +95,7 @@ describe('modelPrefersResponsesApi', () => {
     expect(modelPrefersResponsesApi('gpt-5.6-sol')).toBe(true);
     expect(modelPrefersResponsesApi('gpt-5.6-terra')).toBe(true);
     expect(modelPrefersResponsesApi('gpt-5.6-luna')).toBe(true);
+    expect(modelPrefersResponsesApi('gpt-6-astra')).toBe(true);
     expect(modelPrefersResponsesApi('gpt-5.2-pro')).toBe(true);
     expect(modelPrefersResponsesApi('gpt-4o')).toBe(false);
     expect(modelPrefersResponsesApi('gpt-5.2')).toBe(false);
@@ -160,6 +161,12 @@ describe('getReasoningCapabilities', () => {
     expect(caps.defaultLevel).toBe('medium');
   });
 
+  it('returns the documented GPT-6 Astra effort levels with the medium default', () => {
+    const caps = getReasoningCapabilities('@ai-sdk/openai', 'gpt-6-astra');
+    expect(caps.levels).toEqual(['low', 'medium', 'high', 'xhigh', 'max']);
+    expect(caps.defaultLevel).toBe('medium');
+  });
+
   it('returns the documented SuperGrok effort levels for Grok 4.6', () => {
     const caps = getReasoningCapabilities('@ai-sdk/xai', 'grok-4.6');
     expect(caps.levels).toEqual(['low', 'medium', 'high', 'xhigh']);
@@ -218,6 +225,19 @@ describe('effortProviderOptions + deepMergeProviderOptions', () => {
     expect(effortProviderOptions('@ai-sdk/openai', 'xhigh', 'gpt-5.5')).toEqual({
       openai: { reasoningEffort: 'high' },
     });
+  });
+
+  it.each(['low', 'medium', 'high', 'xhigh', 'max'])(
+    'preserves GPT-6 Astra %s effort on the OpenAI wire',
+    (effort) => {
+      expect(effortProviderOptions('@ai-sdk/openai', effort, 'gpt-6-astra')).toEqual({
+        openai: { reasoningEffort: effort },
+      });
+    },
+  );
+
+  it('does not send unsupported GPT-6 Astra reasoning efforts', () => {
+    expect(effortProviderOptions('@ai-sdk/openai', 'none', 'gpt-6-astra')).toBeUndefined();
   });
 
   it('leaves the reasoning summary untouched for other Codex models', () => {

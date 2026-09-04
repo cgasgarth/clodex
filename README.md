@@ -21,6 +21,7 @@ clodex providers auth openai
 # Optional SuperGrok subscription:
 # clodex providers auth xai
 clodex models
+clodex models --alias astra=clodex:openai-oauth:gpt-6-astra
 clodex models --alias sol=clodex:openai-oauth:gpt-5.6-sol
 clodex models --alias luna=clodex:openai-oauth:gpt-5.6-luna
 clodex models --alias terra=clodex:openai-oauth:gpt-5.6-terra
@@ -75,6 +76,11 @@ your absolute home path. Keep other settings and hooks that you already use.
   "model": "sol",
   "modelPicker": {
     "options": [
+      {
+        "model": "astra[1m]",
+        "label": "astra",
+        "description": "GPT-6 Astra"
+      },
       {
         "model": "sol[1m]",
         "label": "sol",
@@ -228,6 +234,7 @@ Claude's native `/model` picker, and subagent model selection.
 ```bash
 clodex models
 clodex models --list
+clodex models --alias astra=clodex:openai-oauth:gpt-6-astra
 clodex models --alias sol=clodex:openai-oauth:gpt-5.6-sol
 clodex models --unalias sol
 ```

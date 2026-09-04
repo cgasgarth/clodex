@@ -15,6 +15,7 @@ describe('contextWindowFromHeuristics', () => {
     ['deepseek-v4-flash', 1_000_000],
     ['deepseek-chat', 64_000],
     ['gpt-5.4', 1_000_000],
+    ['gpt-6-astra', 1_000_000],
     ['gpt-4o-mini', 128_000],
     ['qwen3.6-plus-free', 262_144],
     ['kimi-k2.6', 262_144],

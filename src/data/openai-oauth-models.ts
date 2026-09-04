@@ -28,8 +28,16 @@ interface OAuthModelSeed {
   useResponsesLite?: boolean;
 }
 
-/** Claude-facing context policy shared by the GPT-5.6 Sol, Terra, and Luna routes. */
-export const GPT_5_6_CONTEXT_WINDOW = 1_000_000;
+/** Claude-facing context policy for current OpenAI million-token routes. */
+export const OPENAI_MILLION_CONTEXT_WINDOW = 1_000_000;
+
+/** Models whose live ChatGPT catalog still reports the old 272K window. */
+export const OPENAI_MILLION_CONTEXT_MODELS = new Set<string>([
+  'gpt-6-astra',
+  'gpt-5.6-sol',
+  'gpt-5.6-terra',
+  'gpt-5.6-luna',
+]);
 
 // Models that the ChatGPT Codex backend (chatgpt.com/backend-api/codex) explicitly rejects
 // for OAuth-authenticated ChatGPT accounts. The API returns HTTP 400 with:
@@ -43,10 +51,12 @@ export const CHATGPT_CODEX_UNSUPPORTED_MODELS = new Set<string>([
 // Models available via ChatGPT Plus/Pro OAuth (chatgpt.com/backend-api/codex).
 // Ordered from newest to oldest within each tier.
 const OPENAI_OAUTH_MODEL_SEEDS: OAuthModelSeed[] = [
+  // GPT-6 family
+  { id: 'gpt-6-astra',          name: 'GPT-6 Astra',       contextWindow: OPENAI_MILLION_CONTEXT_WINDOW, reasoning: true, useResponsesLite: true },
   // GPT-5.6 family (Sol / Terra / Luna)
-  { id: 'gpt-5.6-sol',          name: 'GPT-5.6 Sol',       contextWindow: GPT_5_6_CONTEXT_WINDOW, reasoning: true },
-  { id: 'gpt-5.6-terra',        name: 'GPT-5.6 Terra',     contextWindow: GPT_5_6_CONTEXT_WINDOW, reasoning: true },
-  { id: 'gpt-5.6-luna',         name: 'GPT-5.6 Luna',      contextWindow: GPT_5_6_CONTEXT_WINDOW, reasoning: true, useResponsesLite: true },
+  { id: 'gpt-5.6-sol',          name: 'GPT-5.6 Sol',       contextWindow: OPENAI_MILLION_CONTEXT_WINDOW, reasoning: true },
+  { id: 'gpt-5.6-terra',        name: 'GPT-5.6 Terra',     contextWindow: OPENAI_MILLION_CONTEXT_WINDOW, reasoning: true },
+  { id: 'gpt-5.6-luna',         name: 'GPT-5.6 Luna',      contextWindow: OPENAI_MILLION_CONTEXT_WINDOW, reasoning: true, useResponsesLite: true },
   // GPT-5.5 family (Pro)
   { id: 'gpt-5.5',              name: 'GPT-5.5',           contextWindow: 272_000, reasoning: true },
   // GPT-5.4 family

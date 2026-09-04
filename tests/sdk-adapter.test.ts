@@ -103,6 +103,30 @@ describe('supportsOpenAiPromptCacheBreakpoints', () => {
   });
 });
 
+describe('OpenAI model request parameters', () => {
+  it('omits the unsupported temperature parameter for GPT-6 Astra', () => {
+    const params = translateRequest({
+      model: 'gpt-6-astra',
+      messages: [{ role: 'user', content: 'test' }],
+      temperature: 0.7,
+    }, '@ai-sdk/openai', {
+      reasoningMetadata: { upstreamModelId: 'gpt-6-astra' },
+    });
+
+    expect(params.temperature).toBeUndefined();
+  });
+
+  it('preserves temperature for models that accept it', () => {
+    const params = translateRequest({
+      model: 'gpt-4o',
+      messages: [{ role: 'user', content: 'test' }],
+      temperature: 0.7,
+    }, '@ai-sdk/openai');
+
+    expect(params.temperature).toBe(0.7);
+  });
+});
+
 describe('translateTools', () => {
   it('builds client-side tools (no execute) keyed by name', () => {
     const tools = translateTools([
