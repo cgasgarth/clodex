@@ -1260,10 +1260,15 @@ beforeEach(() => {
 
     const body = await readAll(res);
     expect(body).toContain('Resets in 4 hours.');
+    expect(body).toContain('usage_limit_reached');
     // Inventing a hint here would become a real `retry-after: 5` header and
     // send the client back long before the limit resets.
     expect(body).not.toContain('retry after');
-    expect(await classifyThroughSdk(body)).toMatchObject({ statusCode: 429 });
+    expect(await classifyThroughSdk(body)).toMatchObject({
+      statusCode: 429,
+      usageLimitReached: true,
+      isRetryable: false,
+    });
   });
 
   it('reads a status nested under error, not only the top-level one', async () => {

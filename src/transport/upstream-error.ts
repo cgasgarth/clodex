@@ -25,6 +25,8 @@ export interface SdkUpstreamErrorDetails {
   /** Client backoff hint (seconds); only present on rate-limit (429) failures. */
   retryAfterSeconds?: number;
   transportCode?: 'websocket_transport_error';
+  /** The provider identified a durable account or plan usage limit, not a transient throttle. */
+  usageLimitReached: boolean;
 }
 
 /** Default downstream backoff hint when the upstream throttle gives none. */
@@ -104,6 +106,7 @@ interface ProviderErrorFrame {
   contextLengthExceeded: boolean;
   retryAfterSeconds?: number;
   transportCode?: 'websocket_transport_error';
+  usageLimitReached: boolean;
   /** Full payload, for the diagnostic log only — never the user-facing message. */
   serialized: string;
 }
@@ -117,6 +120,38 @@ function asRecord(cause: unknown): DiagnosticRecord | undefined {
 function nonEmptyString(record: DiagnosticRecord, key: string): string | undefined {
   const value = record[key];
   return isString(value) && value.trim() !== '' ? value : undefined;
+}
+
+const USAGE_LIMIT_IDENTIFIERS = new Set([
+  'insufficient_quota',
+  'quota_exceeded',
+  'usage_limit_exceeded',
+  'usage_limit_reached',
+]);
+
+export function isUsageLimitIdentifier(code: string | undefined, type: string | undefined): boolean {
+  return (code !== undefined && USAGE_LIMIT_IDENTIFIERS.has(code.toLowerCase()))
+    || (type !== undefined && USAGE_LIMIT_IDENTIFIERS.has(type.toLowerCase()));
+}
+
+function recordHasUsageLimit(record: DiagnosticRecord): boolean {
+  const response = asRecord(record.response);
+  const payload = asRecord(record.error) ?? asRecord(response?.error) ?? record;
+  return isUsageLimitIdentifier(errorCodeValue(payload), nonEmptyString(payload, 'type'));
+}
+
+function apiCallHasUsageLimit(error: InstanceType<typeof APICallError>): boolean {
+  const data = error.data && isObject(error.data) ? diagnosticRecord(error.data) : undefined;
+  if (data && recordHasUsageLimit(data)) return true;
+  if (!error.responseBody) return false;
+  try {
+    const parsed: unknown = JSON.parse(error.responseBody);
+    return isObject(parsed) && !Array.isArray(parsed)
+      ? recordHasUsageLimit(diagnosticRecord(parsed))
+      : false;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -162,7 +197,7 @@ function frameStatusCode(code: string | undefined, discriminator: string): numbe
   // before any auth check and so reports 400 here exactly as it does in the
   // SDK. Diverging would reintroduce the pre/post-output split this avoids,
   // and an auth failure cannot reach a mid-stream frame anyway.
-  if (/insufficient_quota|rate_limit/.test(discriminator)) return 429;
+  if (/insufficient_quota|quota_exceeded|rate_limit|usage_limit/.test(discriminator)) return 429;
   if (discriminator.includes('authentication')) return 401;
   if (discriminator.includes('permission')) return 403;
   if (discriminator.includes('not_found')) return 404;
@@ -268,6 +303,7 @@ function providerErrorFrame(cause: unknown): ProviderErrorFrame | undefined {
     statusCode,
     contextLengthExceeded: frameIsContextLengthExceeded(discriminator, message),
     serialized,
+    usageLimitReached: isUsageLimitIdentifier(code, type),
   };
   if (rawRetryAfter !== undefined) frame.retryAfterSeconds = clampRetryAfterSeconds(rawRetryAfter);
   if (code === 'websocket_transport_error') frame.transportCode = 'websocket_transport_error';
@@ -300,8 +336,9 @@ export function sdkUpstreamErrorDetails(cause: unknown): SdkUpstreamErrorDetails
     const details: SdkUpstreamErrorDetails = {
       statusCode: frame.statusCode,
       errorContent: frame.serialized,
-      isRetryable: frameIsRetryable(frame),
+      isRetryable: frameIsRetryable(frame) && !frame.usageLimitReached,
       attemptCount,
+      usageLimitReached: frame.usageLimitReached,
     };
     if (frame.retryAfterSeconds !== undefined) details.retryAfterSeconds = frame.retryAfterSeconds;
     if (frame.transportCode !== undefined) details.transportCode = frame.transportCode;
@@ -322,12 +359,14 @@ export function sdkUpstreamErrorDetails(cause: unknown): SdkUpstreamErrorDetails
     ? undefined
     : clampRetryAfterSeconds(rawRetryAfter);
   const transportCode = boundedTransportCode(inner.data);
+  const usageLimitReached = apiCallHasUsageLimit(inner);
 
   const details: SdkUpstreamErrorDetails = {
     statusCode: inner.statusCode,
     errorContent: errorContent || inner.message,
-    isRetryable: inner.isRetryable,
+    isRetryable: inner.isRetryable && !usageLimitReached,
     attemptCount: retry?.errors.length ?? 1,
+    usageLimitReached,
   };
   if (retryAfterSeconds !== undefined) details.retryAfterSeconds = retryAfterSeconds;
   if (transportCode !== undefined) details.transportCode = transportCode;

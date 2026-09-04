@@ -115,8 +115,8 @@ Configure Claude settings once, then use plain ${pc.bold('claude')}. Its
 SessionStart hook can run ${pc.bold('clodex start')} when needed. The internal
 ${pc.bold('clodex-claude')} wrapper routes Claude-spawned children through the
 restart-stable daemon port (default ${DEFAULT_DAEMON_PORT}).
-Account switching is explicit; quota or auth errors never fail over to another
-account.`;
+The Accounts dashboard can enable usage-limit failover for default-account
+launches. Explicit account launches remain pinned, and auth errors never fail over.`;
 }
 
 function daemonIsAlive(): boolean {

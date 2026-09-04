@@ -62,6 +62,7 @@ describe('daemon control API', () => {
       new DaemonMetricsStore(join(root, 'metrics.jsonl')),
     );
     const select = vi.fn();
+    let autoSwitchOnUsageLimit = false;
     const requestStop = vi.fn();
     const createLaunchTicket = vi.fn((_accountId?: string, processingMode = 'standard') => ({
       ticket: 'opaque',
@@ -121,6 +122,8 @@ describe('daemon control API', () => {
       accounts: {
         list: () => [{ id: 'one', email: 'one@example.com', selected: true }],
         select,
+        settings: () => ({ autoSwitchOnUsageLimit }),
+        setAutoSwitchOnUsageLimit: enabled => { autoSwitchOnUsageLimit = enabled; },
         createLaunchTicket,
       },
       secondwind: {
@@ -250,6 +253,16 @@ describe('daemon control API', () => {
         method: 'POST',
       });
       expect(select).toHaveBeenCalledWith('one');
+      await expect(daemonControlRequest('/v1/accounts/auto-switch', {
+        socketPath,
+        method: 'POST',
+        body: { enabled: true },
+      })).resolves.toEqual({ autoSwitchOnUsageLimit: true });
+      await expect(daemonControlRequest('/v1/accounts/auto-switch', {
+        socketPath,
+        method: 'POST',
+        body: { enabled: 'yes' },
+      })).rejects.toThrow('Account auto-switch enabled must be a boolean');
       await expect(daemonControlRequest('/v1/service/stop', {
         socketPath,
         method: 'POST',

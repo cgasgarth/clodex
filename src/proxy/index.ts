@@ -166,6 +166,7 @@ function createTranslationLifecycle(
   if (!logPath || !requestId) return undefined;
 
   const startedAt = Date.now();
+  let activeAccountId = accountId;
   let firstPartAt: number | undefined;
   let lastPartAt: number | undefined;
   let lastPartType: string | undefined;
@@ -183,7 +184,7 @@ function createTranslationLifecycle(
     event,
     requestId,
     claudeSessionId,
-    accountId,
+    accountId: activeAccountId,
     processingMode,
     modelId,
     resolvedModelId,
@@ -240,6 +241,9 @@ function createTranslationLifecycle(
       write('translation_retrying', {
         ...snapshot(Date.now()), retryAttempt, retryLimit, discardedBytes, errorCode,
       });
+    },
+    setAccountId(nextAccountId: string | undefined) {
+      activeAccountId = nextAccountId;
     },
     complete(usage?: ProcessingUsage) {
       if (stopped) return;
@@ -376,6 +380,8 @@ export interface ProxyRoute {
   providerData?: Record<string, ProviderDataValue>;
   /** Resolves the current OAuth token before dispatch and once more after an upstream HTTP 401. */
   refreshToken?: (rejectedAccessToken?: string) => Promise<string | null>;
+  /** Resolves and selects another managed account after a confirmed plan usage limit. */
+  usageLimitFailover?: () => Promise<ProxyRoute | null>;
   supportedParameters?: string[];
   reasoning?: boolean;
   interleavedReasoningField?: string;
@@ -509,6 +515,32 @@ async function runSdkRequestWithRecovery(
       return outcome;
     }
   }
+}
+
+async function resolveUsageLimitFailover(
+  route: ProxyRoute,
+  log: ProxyLog,
+): Promise<ProxyRoute | null> {
+  if (!route.usageLimitFailover) return null;
+  try {
+    return await route.usageLimitFailover();
+  } catch (error) {
+    log(() => (
+      `sdk account failover unavailable: ${error instanceof Error ? error.message : String(error)}`
+    ));
+    return null;
+  }
+}
+
+function logUsageLimitFailover(
+  log: ProxyLog,
+  previousAccountId: string | undefined,
+  nextAccountId: string | undefined,
+): void {
+  log(() => (
+    `sdk account usage exhausted; switched ${previousAccountId ?? 'unknown'} `
+    + `to ${nextAccountId ?? 'unknown'} and retrying once`
+  ));
 }
 
 function prepareAgentStreamTransaction(
@@ -868,6 +900,7 @@ export async function startProxyCatalog(
         if (clientAbort.signal.aborted) cancelTranslation();
         else clientAbort.signal.addEventListener('abort', cancelTranslation, { once: true });
         let responseStreamRetryCount = 0;
+        let usageLimitFailoverAttempted = false;
         const { transaction: streamTransaction, ensureHeaders: ensureStreamHeaders, state: streamState } =
           prepareAgentStreamTransaction(
             clientWantsStream, res, translationLifecycle, plog,
@@ -1035,6 +1068,21 @@ export async function startProxyCatalog(
             sdkAttempt += 1;
             plog(() => 'sdk oauth credential replaced after 401; retrying once');
             return 'retry';
+          }
+          const mayFailover = details?.usageLimitReached && !usageLimitFailoverAttempted
+            && streamTransaction.replaySafe;
+          if (mayFailover) {
+            usageLimitFailoverAttempted = true;
+            const replacementRoute = await resolveUsageLimitFailover(route, plog);
+            if (replacementRoute) {
+              const previousAccountId = route.metricsAccountId;
+              route = replacementRoute;
+              apiKey = replacementRoute.apiKey;
+              translationLifecycle?.setAccountId(route.metricsAccountId);
+              translationLifecycle?.retry(1, 1, streamTransaction.discard() ?? 0, 'usage_limit_failover');
+              logUsageLimitFailover(plog, previousAccountId, route.metricsAccountId);
+              return 'retry';
+            }
           }
           const clientRetryable = details?.isRetryable
             ?? isTransientUpstreamStatus(upstreamStatus);

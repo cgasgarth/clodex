@@ -65,6 +65,8 @@ describe('isolated daemon control plane', () => {
       accounts: {
         list: () => [],
         select: vi.fn(),
+        settings: () => ({ autoSwitchOnUsageLimit: false }),
+        setAutoSwitchOnUsageLimit: vi.fn(),
         createLaunchTicket: () => null,
       },
       secondwind: {
