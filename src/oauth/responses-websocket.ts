@@ -39,7 +39,8 @@ import {
   connectionCount,
   connectionCountByGeneration,
   checkpointEntries,
-  registerCompactionCheckpoint,
+  loadDurableCompactionCheckpoint,
+  persistCompactionCheckpoint,
   syntheticClaudeCompactionSummary,
   syntheticAssistantMessage,
   syntheticClaudeCompactionResponse,
@@ -202,6 +203,7 @@ export function createResponsesWebSocketFetch(
     }
     const evictions = cleanupExpiredConnections(now);
     candidates = partitionKey ? connectionEntries(partitionKey) : [];
+    loadDurableCompactionCheckpoint(options.checkpointStore, checkpointKey, now, debug);
     const checkpoints = checkpointKey ? checkpointEntries(checkpointKey) : [];
     const headPlan = planResponsesSessionHead({
       payload,
@@ -668,6 +670,7 @@ export function createResponsesWebSocketFetch(
               resolvedOptions,
               debug,
               proxyUrl,
+              options.checkpointStore,
             ),
             signal: init?.signal,
           });
@@ -1048,7 +1051,11 @@ export function createResponsesWebSocketFetch(
         lastUsedAt: now,
         ttlMs: RESPONSES_COMPACTION_CHECKPOINT_TTL_MS,
       };
-      registerCompactionCheckpoint(checkpoint);
+      const checkpointDurable = persistCompactionCheckpoint(
+        checkpoint,
+        options.checkpointStore,
+        debug,
+      );
       if (supersededEntry) deleteEntry(supersededEntry);
       emitDiagnostic(options, {
         event: 'ws_compaction',
@@ -1056,6 +1063,7 @@ export function createResponsesWebSocketFetch(
         transport: 'claude_compaction_response',
         reason: compactionReason,
         checkpointItems: checkpoint.compactedInput.length,
+        checkpointDurable,
         ...compactionUsage,
       }, diagnosticCorrelation);
       return syntheticClaudeCompactionResponse(
@@ -1140,6 +1148,7 @@ export function createResponsesWebSocketFetch(
             resolvedOptions,
             debug,
             proxyUrl,
+            options.checkpointStore,
           ),
           settled,
           resolveSettled,
@@ -1156,6 +1165,7 @@ export function createResponsesWebSocketFetch(
           resolvedOptions,
           debug,
           proxyUrl,
+          options.checkpointStore,
         );
         if (decision === 'history_mismatch_reused_head') beginRecycledLineage(entry);
         if (decision === 'compaction_checkpoint' && selectedCheckpoint) {

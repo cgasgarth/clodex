@@ -12,6 +12,10 @@ import {
   type ResponsesWebSocketDiagnosticEvent,
 } from './oauth/responses-websocket.js';
 import {
+  getDefaultResponsesCheckpointStore,
+} from './oauth/responses-checkpoint-store.js';
+import type { ResponsesCheckpointStore } from './oauth/responses-websocket/types.js';
+import {
   CLAUDE_CODE_USER_AGENT,
   injectClaudeIdentity,
 } from './oauth/claude-identity.js';
@@ -128,6 +132,7 @@ export interface ProviderFactoryDependencies {
   createOpenAICompatible?: typeof import('@ai-sdk/openai-compatible')['createOpenAICompatible'];
   createXai?: typeof import('@ai-sdk/xai')['createXai'];
   createResponsesWebSocketFetch?: typeof createResponsesWebSocketFetch;
+  getResponsesCheckpointStore?: () => ResponsesCheckpointStore | undefined;
   createXaiSubscriptionFetch?: typeof createXaiSubscriptionFetch;
   loadSdkProviderFactory?: typeof loadSdkProviderFactory;
 }
@@ -196,6 +201,22 @@ export async function createLanguageModel(
     const accountId = spec.authType === 'oauth'
       ? tokenAccountId || spec.oauthAccountId
       : undefined;
+    let checkpointStore: ResponsesCheckpointStore | undefined;
+    if (
+      spec.authType === 'oauth'
+      && useResponsesEndpoint
+      && spec.openAiCompactThreshold !== undefined
+    ) {
+      try {
+        checkpointStore = (
+          dependencies.getResponsesCheckpointStore ?? getDefaultResponsesCheckpointStore
+        )();
+      } catch (error) {
+        spec.onDebug?.(
+          `restart checkpoint storage unavailable: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
     const oauthOptions = spec.authType === 'oauth'
       ? {
           apiKey,
@@ -215,18 +236,19 @@ export async function createLanguageModel(
           // persistent WebSocket transport so connection-local
           // previous_response_id continuation remains available.
           ...(useResponsesEndpoint && {
-                fetch: (dependencies.createResponsesWebSocketFetch ?? createResponsesWebSocketFetch)(
-                  CODEX_RESPONSES_LITE_WS_URL,
-                  spec.onDebug,
-                  {
+            fetch: (dependencies.createResponsesWebSocketFetch ?? createResponsesWebSocketFetch)(
+              CODEX_RESPONSES_LITE_WS_URL,
+              spec.onDebug,
+              {
                   providerId: spec.providerId ?? 'openai',
                   accountId,
                   compactThreshold: spec.openAiCompactThreshold,
                   contextWindow: spec.openAiContextWindow,
+                  checkpointStore,
                   onDiagnostic: spec.onWebSocketDiagnostic,
-                  },
-                ),
-              }),
+              },
+            ),
+          }),
         }
       : spec.authType === 'none'
         ? {

@@ -8,6 +8,7 @@ import type {
   JsonObject,
   ConnectionEntry,
   CompactionCheckpoint,
+  ResponsesCheckpointStore,
 } from './types.js';
 import { conversationItemKind, conversationItemHash } from './continuation.js';
 import { isString } from '../../runtime/type-guards.js';
@@ -126,6 +127,45 @@ export function registerCompactionCheckpoint(checkpoint: CompactionCheckpoint): 
   upsertCompactionCheckpoint(checkpoint);
 }
 
+export function loadDurableCompactionCheckpoint(
+  store: ResponsesCheckpointStore | undefined,
+  key: string | undefined,
+  now: number,
+  debug: (message: string) => void,
+): void {
+  if (!store || !key || checkpointEntries(key).length > 0) return;
+  try {
+    const stored = store.load(key, now);
+    if (!stored) return;
+    upsertCompactionCheckpoint({
+      ...stored,
+      connectionId: 0,
+      lineageId: allocateLineageDebugId(),
+      requestInput: [],
+      expectedAssistant: [],
+      ttlMs: RESPONSES_COMPACTION_CHECKPOINT_TTL_MS,
+    });
+    debug(`loaded restart checkpoint key=${debugKey(key)}`);
+  } catch (error) {
+    debug(`restart checkpoint load unavailable: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+export function persistCompactionCheckpoint(
+  checkpoint: CompactionCheckpoint,
+  store: ResponsesCheckpointStore | undefined,
+  debug: (message: string) => void,
+): boolean {
+  upsertCompactionCheckpoint(checkpoint);
+  if (!store) return false;
+  try {
+    return store.save(checkpoint);
+  } catch (error) {
+    debug(`restart checkpoint save unavailable: ${error instanceof Error ? error.message : String(error)}`);
+    return false;
+  }
+}
+
 export function saveCompactionCheckpoint(entry: ConnectionEntry): void {
   if (
     !entry.checkpointKey
@@ -159,12 +199,12 @@ export function saveCompactionCheckpoint(entry: ConnectionEntry): void {
     lastUsedAt: entry.lastUsedAt,
     ttlMs: RESPONSES_COMPACTION_CHECKPOINT_TTL_MS,
   };
-  registerCompactionCheckpoint(checkpoint);
+  persistCompactionCheckpoint(checkpoint, entry.checkpointStore, entry.debug);
 }
 
 export function syntheticClaudeCompactionSummary(checkpointId: string): string {
-  return '<summary>Context compacted natively by OpenAI and retained in Clodex process '
-    + `checkpoint ${checkpointId}. Continue from the attached native context.</summary>`;
+  return '<summary>Context compacted natively by OpenAI and retained by Clodex in checkpoint '
+    + `${checkpointId}. Continue from the attached native context.</summary>`;
 }
 
 export function syntheticAssistantMessage(itemId: string, text: string): JsonObject {

@@ -44,6 +44,8 @@ export interface ResponsesWebSocketFetchOptions {
   overflowRecoveryMaxContextRejections?: number;
   overflowRecoveryDeadlineMs?: number;
   overflowRecoveryFinalCreateReserveMs?: number;
+  /** Restart recovery for the latest checkpoint in each session partition. */
+  checkpointStore?: ResponsesCheckpointStore;
   now?: () => number;
   /** Opt-in structured transport diagnostics; never receives conversation content. */
   onDiagnostic?: (event: ResponsesWebSocketDiagnosticEvent) => void;
@@ -163,6 +165,7 @@ export interface ConnectionEntry {
   lineageKey: string;
   key?: string;
   checkpointKey?: string;
+  checkpointStore?: ResponsesCheckpointStore;
   socket: ResponsesWebSocket;
   persistent: boolean;
   generation: 'nursery' | 'established' | 'isolated';
@@ -216,4 +219,27 @@ export interface CompactionCheckpoint {
   instructionsSnapshot?: string;
   lastUsedAt: number;
   ttlMs: number;
+}
+
+export interface StoredCompactionCheckpoint {
+  key: string;
+  lineageKey: string;
+  requestInputHashes: string[];
+  requestInputKinds: string[];
+  expectedAssistantHashes: string[];
+  expectedAssistantKinds: string[];
+  queuedEventHashes: string[];
+  compactedInput: JsonValue[];
+  lastInputTokens?: number;
+  postCompactionInputTokens?: number;
+  nextCompactionInputTokens?: number;
+  claudeCompactionSummaryHash?: string;
+  promptFieldHashes?: Record<string, string>;
+  lastUsedAt: number;
+}
+
+export interface ResponsesCheckpointStore {
+  load(key: string, now: number): StoredCompactionCheckpoint | undefined;
+  save(checkpoint: CompactionCheckpoint): boolean;
+  delete(key: string): void;
 }

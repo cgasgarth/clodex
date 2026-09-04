@@ -23,8 +23,8 @@ threshold override.
 After compaction, Clodex records the first real model-input count as the opaque
 compaction floor. It rearms automatic compaction only after the context grows by
 at least 5% of the model window or 16,000 tokens. This rearm state stays with
-the process-local checkpoint. Manual compaction and hard context-overflow recovery do
-not wait for the rearm threshold.
+the checkpoint. Manual compaction and hard context-overflow recovery do not wait
+for the rearm threshold.
 
 Compaction-call usage is recorded in structured diagnostics. It is not added to
 the visible response usage because Claude uses that value as its context meter.
@@ -51,8 +51,9 @@ recovery boundary.
 
 Automatic native compaction does not rewrite Claude's local transcript. Manual
 `/compact` does: after OpenAI returns canonical compacted state, Clodex gives
-the opaque state in process memory. Claude keeps its normal compacted-transcript
-UI/resume shape, while the next request reattaches to the native checkpoint.
+Claude a synthetic checkpoint marker and stores the opaque state. Claude keeps
+its normal compacted-transcript UI/resume shape, while the next request
+reattaches to the native checkpoint.
 
 With native ownership enabled, Claude-initiated `/compact` uses native OpenAI
 compaction. Clodex does not send the full transcript to a model with summary
@@ -60,27 +61,30 @@ instructions. A successful native result is acknowledged with a synthetic
 `<summary>` marker; if both native transports fail, Clodex preserves Claude's
 ordinary summary request instead of faking success.
 
-## Operations that can lose native state
+## Operations that can change native state
 
 After native compaction has occurred, these operations can abandon the live
 response chain or select a different partition:
 
-- restarting Clodex or using `--resume`;
+- using `--resume` with a different session identity;
 - leaving the session idle beyond the WebSocket/checkpoint lifetime;
 - switching the model or reasoning effort;
 - `/rewind`, `/fork`, or `/btw`;
 - checkpoint eviction;
 - a failed standalone recovery request.
 
-Process-local compact checkpoints expire after 30 minutes. They are capped at
-16 per model/account/session partition and 256 globally.
+Process-local branch checkpoints expire after 30 minutes. The latest checkpoint
+for each session partition is also stored in
+`~/.clodex/responses-checkpoints.sqlite`. A new checkpoint atomically replaces
+that session's older durable checkpoint. Stored checkpoints do not expire, and
+at most 256 session records are retained.
 
-Native `/compact` does not survive a daemon restart. Its marker is deliberately
-not a portable summary. It also cannot recover context after checkpoint expiry
-or across incompatible model/account partitions. Create an explicit portable
-handoff before a restart, model change, or account change. If native state is
-already gone and the saved transcript is over the model window, start a new
-session from that handoff rather than retrying the oversized transcript.
+Native `/compact` survives a daemon restart when its durable record still
+matches the session, account, model, reasoning effort, and prompt cache key. Its
+marker is deliberately not a portable summary and cannot cross those partition
+boundaries. Create an explicit portable handoff before a model or account
+change. If stored state is missing or invalid, Clodex uses its bounded
+recent-history recovery instead of retrying an oversized transcript.
 
 ## Request and cache behavior
 
@@ -91,9 +95,9 @@ For a matching live response head:
 2. OpenAI returns exactly one opaque compaction item.
 3. For an ordinary turn, Clodex starts a fresh response chain from recent
    retained user input plus that opaque item.
-4. For Claude `/compact`, Clodex stores that state in the current process and
-   returns the synthetic marker without a second inference.
-5. Later turns in that process restore the checkpoint and return to normal
+4. For Claude `/compact`, Clodex stores that state and returns the synthetic
+   marker without a second inference.
+5. Later turns restore the checkpoint from memory or SQLite and return to normal
    continuation.
 
 Claude can replay a resumed `/compact` transcript with non-semantic differences

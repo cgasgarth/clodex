@@ -408,6 +408,12 @@ describe('createLanguageModel', () => {
 
   it('passes the resolved native-compaction threshold into the OAuth transport', async () => {
     const responsesFetch = vi.fn();
+    const checkpointStore = {
+      load: vi.fn(),
+      save: vi.fn(() => true),
+      delete: vi.fn(),
+    };
+    const getResponsesCheckpointStore = vi.fn(() => checkpointStore);
     const createResponsesWebSocketFetch = vi.fn(() => responsesFetch);
     const responses = vi.fn((modelId: string) => ({ modelId, provider: 'openai-responses' }));
     const chat = vi.fn((modelId: string) => ({ modelId, provider: 'openai-chat' }));
@@ -417,6 +423,7 @@ describe('createLanguageModel', () => {
       createOpenAI: createOpenAI as never,
       // SAFETY: The test fixture defines the asserted runtime shape.
       createResponsesWebSocketFetch: createResponsesWebSocketFetch as never,
+      getResponsesCheckpointStore,
     });
     await create({
       npm: '@ai-sdk/openai',
@@ -435,6 +442,7 @@ describe('createLanguageModel', () => {
         accountId: 'acct-transport-threshold',
         compactThreshold: 244_800,
         contextWindow: 272_000,
+        checkpointStore,
       }),
     );
     expect(createOpenAI).toHaveBeenCalledWith(expect.objectContaining({
@@ -455,6 +463,7 @@ describe('createLanguageModel', () => {
         compactThreshold: undefined,
       }),
     );
+    expect(getResponsesCheckpointStore).toHaveBeenCalledOnce();
   });
 
   it('prefers the current OpenAI OAuth token account claim over stored metadata', async () => {

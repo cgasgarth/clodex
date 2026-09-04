@@ -154,8 +154,8 @@ selects the configured aliases in Claude Code.
 
 Native Codex compaction is on by default for ChatGPT/Codex OAuth models. It
 compacts the OpenAI response chain with an in-band `compaction_trigger` or
-`POST /responses/compact`, and it keeps recovery checkpoints only in the
-running Clodex process.
+`POST /responses/compact`. It stores the latest checkpoint for each session in
+a local SQLite database so sessions can continue after a daemon restart.
 
 The default trigger is 350,000 input tokens, capped at 90% of the model's
 advertised context window. There is no Clodex compaction environment flag or
