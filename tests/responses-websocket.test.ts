@@ -5373,6 +5373,131 @@ beforeEach(() => {
       .toBe(responsesWebSocketPromptFingerprint({ tools: [{ parameters: { a: 1, b: 2 }, name: 'x' }], model: 'm', input: ['different'] }));
   });
 
+  it('uses stored input usage for a bounded checkpoint-miss recovery window', async () => {
+    const diagnostics: ResponsesWebSocketDiagnosticEvent[] = [];
+    const compactBodies: unknown[][] = [];
+    const compactFetch = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      // SAFETY: This test supplies a JSON request body through the compaction transport.
+      const body = JSON.parse(String(init?.body)) as { input: unknown[] };
+      compactBodies.push(body.input);
+      return new Response(JSON.stringify({ error: { type: 'not_found' } }), {
+        status: 404,
+        headers: { 'content-type': 'application/json' },
+      });
+    });
+    const wsFetch = createResponsesWebSocketFetch(WS_URL, undefined, {
+      accountId: 'acct-checkpoint-miss-stored-usage',
+      compactThreshold: 3_500,
+      contextWindow: 10_000,
+      // SAFETY: The test fixture defines the asserted runtime shape.
+      compactFetch: compactFetch as typeof fetch,
+      onDiagnostic: event => diagnostics.push(event),
+    });
+    const originalInput = [{
+      role: 'user', content: [{ type: 'input_text', text: 'o'.repeat(36_000) }],
+    }];
+    const first = await wsFetch('https://example.test/responses', {
+      method: 'POST', headers: {}, body: JSON.stringify(sessionPayload(originalInput)),
+    });
+    const original = lastSocket();
+    original.emit('open');
+    emitTextResponse(original, 'resp_checkpoint_miss', 'done', {
+      input_tokens: 3_000,
+      output_tokens: 10,
+    });
+    await readAll(first);
+
+    const recent = {
+      role: 'user', content: [{ type: 'input_text', text: 'r'.repeat(8_000) }],
+    };
+    const fullReplay = [{
+      role: 'user', content: [{ type: 'input_text', text: 'changed'.repeat(5_200) }],
+    }, recent];
+    const recovered = await withResponsesWebSocketDiagnosticContext(
+      { estimatedInputTokens: 11_500 },
+      () => wsFetch('https://example.test/responses', {
+        method: 'POST', headers: {}, body: JSON.stringify(sessionPayload(fullReplay)),
+      }),
+    );
+
+    expect(compactBodies).toEqual([[recent]]);
+    const replacement = lastSocket();
+    expect(replacement).not.toBe(original);
+    replacement.emit('open');
+    // SAFETY: The test fixture defines the asserted runtime shape.
+    const sent = JSON.parse(replacement.send.mock.calls[0]![0] as string);
+    expect(sent.previous_response_id).toBeUndefined();
+    expect(sent.input).toEqual([recent]);
+    expect(sent.input).not.toEqual(fullReplay);
+    expect(diagnostics).toContainEqual(expect.objectContaining({
+      event: 'ws_compaction',
+      outcome: 'started',
+      mode: 'checkpoint_miss',
+      source: 'stored_input_tokens',
+      targetInputTokens: 3_000,
+    }));
+    expect(diagnostics).toContainEqual(expect.objectContaining({
+      event: 'ws_compaction',
+      outcome: 'fallback',
+      mode: 'checkpoint_miss',
+      fallback: 'bounded_recent_window',
+      statusCode: 404,
+    }));
+    emitTextResponse(replacement, 'resp_checkpoint_miss_recovered', 'recovered');
+    await readAll(recovered);
+  });
+
+  it('uses a 400k recovery window when no checkpoint state exists', async () => {
+    const diagnostics: ResponsesWebSocketDiagnosticEvent[] = [];
+    const compactBodies: unknown[][] = [];
+    const compactFetch = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      // SAFETY: This test supplies a JSON request body through the compaction transport.
+      const body = JSON.parse(String(init?.body)) as { input: unknown[] };
+      compactBodies.push(body.input);
+      return new Response(JSON.stringify({ error: { type: 'not_found' } }), {
+        status: 404,
+        headers: { 'content-type': 'application/json' },
+      });
+    });
+    const wsFetch = createResponsesWebSocketFetch(WS_URL, undefined, {
+      accountId: 'acct-checkpoint-miss-no-state',
+      compactThreshold: 350_000,
+      contextWindow: 1_000_000,
+      // SAFETY: The test fixture defines the asserted runtime shape.
+      compactFetch: compactFetch as typeof fetch,
+      onDiagnostic: event => diagnostics.push(event),
+    });
+    const fullReplay = Array.from({ length: 84 }, (_, index) => ({
+      role: 'user',
+      content: [{ type: 'input_text', text: `${index}-${'x'.repeat(50_000)}` }],
+    }));
+    const recovered = await withResponsesWebSocketDiagnosticContext(
+      { estimatedInputTokens: 1_051_000 },
+      () => wsFetch('https://example.test/responses', {
+        method: 'POST', headers: {}, body: JSON.stringify(sessionPayload(fullReplay)),
+      }),
+    );
+
+    expect(compactBodies).toHaveLength(1);
+    expect(compactBodies[0]!.length).toBeGreaterThan(0);
+    expect(compactBodies[0]!.length).toBeLessThan(fullReplay.length);
+    const replacement = lastSocket();
+    replacement.emit('open');
+    // SAFETY: The test fixture defines the asserted runtime shape.
+    const sent = JSON.parse(replacement.send.mock.calls[0]![0] as string);
+    expect(sent.input).toEqual(compactBodies[0]);
+    expect(sent.input).not.toEqual(fullReplay);
+    expect(diagnostics).toContainEqual(expect.objectContaining({
+      event: 'ws_compaction',
+      outcome: 'started',
+      mode: 'checkpoint_miss',
+      source: 'default_input_tokens',
+      targetInputTokens: 400_000,
+    }));
+    emitTextResponse(replacement, 'resp_checkpoint_miss_default_recovered', 'recovered');
+    await readAll(recovered);
+  });
+
   it('rebases a known-oversized tool turn without dispatching the full history', async () => {
     const diagnostics: ResponsesWebSocketDiagnosticEvent[] = [];
     const canonical = [{ type: 'compaction', encrypted_content: 'overflow-prefix' }];
@@ -5507,7 +5632,8 @@ beforeEach(() => {
     expect(compactFetch).toHaveBeenCalledOnce();
   });
 
-  it('does not mutate transport state or dispatch when every compacted candidate exceeds the hard window', async () => {
+  it('dispatches a bounded recent window when compacted output exceeds the hard window', async () => {
+    const diagnostics: ResponsesWebSocketDiagnosticEvent[] = [];
     const compactFetch = vi.fn(async () => new Response(JSON.stringify({
       output: [{ type: 'compaction', encrypted_content: 'still-too-large' }],
       usage: { input_tokens: 100_000, output_tokens: 200_000 },
@@ -5521,6 +5647,7 @@ beforeEach(() => {
       contextWindow: 128_000,
       // SAFETY: The test fixture defines the asserted runtime shape.
       compactFetch: compactFetch as typeof fetch,
+      onDiagnostic: event => diagnostics.push(event),
     });
     const input = [
       {
@@ -5543,12 +5670,23 @@ beforeEach(() => {
       }),
     );
 
-    expect(response.status).toBe(400);
-    expect(fakeSockets).toHaveLength(0);
-    expect(compactFetch).toHaveBeenCalled();
-    expect(await response.json()).toMatchObject({
-      error: { code: 'context_length_exceeded' },
-    });
+    expect(response.status).toBe(200);
+    expect(compactFetch).toHaveBeenCalledOnce();
+    const socket = lastSocket();
+    socket.emit('open');
+    // SAFETY: The test fixture defines the asserted runtime shape.
+    const sent = JSON.parse(socket.send.mock.calls[0]![0] as string);
+    expect(sent.previous_response_id).toBeUndefined();
+    expect(sent.input).toEqual([input.at(-1)]);
+    expect(diagnostics).toContainEqual(expect.objectContaining({
+      event: 'ws_compaction',
+      outcome: 'fallback',
+      mode: 'checkpoint_miss',
+      fallback: 'bounded_recent_window',
+      skipReason: 'compacted_output_exceeds_context',
+    }));
+    emitTextResponse(socket, 'resp_bounded_compaction_fallback', 'recovered');
+    await readAll(response);
   });
 
   it('commits only a later accepted candidate and replaces the original logical head', async () => {

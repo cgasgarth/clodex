@@ -2,6 +2,7 @@ import { describe, expect, it } from 'bun:test';
 import {
   estimatedRebasedInputTokens,
   planResponsesOverflowRecovery,
+  recentDependencySafeWindow,
   ResponsesOverflowRecoverySession,
   runProgressiveOverflowRecovery,
 } from '../src/oauth/responses-overflow-recovery.js';
@@ -29,6 +30,25 @@ const output = (id: string, value = 'ok') => ({
 });
 
 describe('Responses oversized-context recovery planner', () => {
+  it('selects a recent dependency-safe window within the stored input size', () => {
+    const fullInput = [
+      user('old'.repeat(400)),
+      assistant('old answer'.repeat(200)),
+      user('recent'.repeat(120)),
+      call('recent'),
+      output('recent', 'result'.repeat(120)),
+      user('latest'.repeat(120)),
+    ];
+    const window = recentDependencySafeWindow(fullInput, 1_000, 10_000);
+
+    expect(window).toBeDefined();
+    expect(window!.estimatedInputTokens).toBeLessThanOrEqual(1_000);
+    expect(window!.input[0]).toEqual(fullInput[2]);
+    expect(window!.input).toContainEqual(call('recent'));
+    expect(window!.input).toContainEqual(output('recent', 'result'.repeat(120)));
+    expect(window!.droppedItems).toBe(2);
+  });
+
   it('prefers an exact live boundary and keeps the latest call/output tail intact', () => {
     const prefix = [user('start'), assistant('inspect'), call('old'), output('old')];
     const tail = [

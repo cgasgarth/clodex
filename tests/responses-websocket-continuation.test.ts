@@ -110,6 +110,36 @@ describe('prepared conversation continuation matching', () => {
     )).toBeUndefined();
   });
 
+  it('retains Claude tool-rejection state when its next replay omits the interruption record', () => {
+    const initial = { role: 'user', content: [{ type: 'input_text', text: 'start' }] };
+    const rejected = {
+      type: 'function_call_output',
+      call_id: 'call_rejected',
+      output: 'The user doesn\'t want to proceed with this tool use. '
+        + 'The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file). '
+        + 'STOP what you are doing and wait for the user to tell you how to proceed.',
+    };
+    const interruptedUser = {
+      role: 'user', content: [{ type: 'input_text', text: 'change direction' }],
+    };
+    const assistant = {
+      role: 'assistant', content: [{ type: 'output_text', text: 'changed' }],
+    };
+    const next = { role: 'user', content: [{ type: 'input_text', text: 'continue' }] };
+    const payload = { input: [initial, interruptedUser, assistant, next] };
+
+    expect(queuedEventItemHashes([rejected])).toHaveLength(1);
+    expect(historyContinuationMatch(
+      cachedSource(
+        [initial, rejected, interruptedUser],
+        [assistant],
+        queuedEventItemHashes([rejected]),
+      ),
+      payload,
+      prepareConversationItems(payload),
+    )).toEqual({ delta: [next], mode: 'omitted_queued_event' });
+  });
+
   it('reuses a compact checkpoint when Claude reshapes reasoning throughout old history', () => {
     const firstUser = { role: 'user', content: [{ type: 'input_text', text: 'start' }] };
     const firstReasoning = {

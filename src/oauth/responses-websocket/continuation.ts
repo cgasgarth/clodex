@@ -372,6 +372,9 @@ export function conversationItemHash(value: JsonValue): string {
 
 const CLAUDE_MID_TURN_MESSAGE_PREFIX = 'The user sent a new message while you were working:\n';
 const CLAUDE_MID_TURN_MESSAGE_SUFFIX = 'Address the message above as you continue this turn.';
+const CLAUDE_REJECTED_TOOL_RESULT = 'The user doesn\'t want to proceed with this tool use. '
+  + 'The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file). '
+  + 'STOP what you are doing and wait for the user to tell you how to proceed.';
 
 function conversationItemTexts(value: JsonValue): string[] {
   if (!isJsonObject(value)) return [];
@@ -383,7 +386,12 @@ function conversationItemTexts(value: JsonValue): string[] {
 }
 
 function isQueuedEventItem(value: JsonValue): boolean {
-  if (!isJsonObject(value) || !isString(value.role)) return false;
+  if (!isJsonObject(value)) return false;
+  if (
+    value.type === 'function_call_output'
+    && value.output === CLAUDE_REJECTED_TOOL_RESULT
+  ) return true;
+  if (!isString(value.role)) return false;
   const texts = conversationItemTexts(value);
   const taskNotification = texts.some(text => {
     const trimmed = text.trim();

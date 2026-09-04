@@ -77,6 +77,7 @@ import {
 } from './responses-websocket/transport.js';
 import { createOverflowRecoveryHandler } from './responses-websocket/overflow/recovery-handler.js';
 import { runCompactionTrigger } from './responses-websocket/compaction/trigger.js';
+import { recoverCheckpointMiss } from './responses-websocket/compaction/miss-recovery.js';
 import {
   prepareResponsesRequest,
   resolveWebSocketOptions,
@@ -491,6 +492,33 @@ export function createResponsesWebSocketFetch(
         terminalRecoveryFailure = error;
       }
     };
+    if (
+      !selected
+      && !selectedCheckpoint
+      && estimatedInputTokens !== undefined
+      && contextWindow !== undefined
+      && estimatedInputTokens >= contextWindow
+      && overflowRecovery
+    ) {
+      const missRecovery = await recoverCheckpointMiss({
+        requestUrl,
+        headers,
+        payload,
+        states: [...candidates, ...checkpoints],
+        estimatedInputTokens,
+        contextWindow,
+        overflowRecovery,
+        fetch: options.compactFetch,
+        signal: init?.signal ?? undefined,
+        now: resolvedOptions.now,
+        diagnostic: event => emitDiagnostic(options, event, diagnosticCorrelation),
+      });
+      if (missRecovery) {
+        if (missRecovery.endpointNotFound) standaloneCompactionNotFound = true;
+        compactionUsage = overflowRecovery.usage;
+        commitOverflowRebase(missRecovery.input, missRecovery.estimatedInputTokens);
+      }
+    }
     if (rawPortableSummaryFitsContext) {
       // The exact Claude summary is independently usable context. If restoring
       // the older opaque checkpoint plus Claude's retained tail would exceed
