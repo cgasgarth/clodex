@@ -18,6 +18,7 @@ import {
 } from './responses-overflow-recovery.js';
 import {
   RESPONSES_COMPACTION_CHECKPOINT_TTL_MS,
+  RESPONSES_WS_STREAM_HIGH_WATER_MARK_BYTES,
   diagnosticContext,
 } from './responses-websocket/types.js';
 import type {
@@ -1157,6 +1158,12 @@ export function createResponsesWebSocketFetch(
         if (ctx.entry) deleteEntry(ctx.entry);
         closeContext(ctx);
       },
+      pull() {
+        activeContext?.entry?.socket.resume();
+      },
+    }, {
+      highWaterMark: RESPONSES_WS_STREAM_HIGH_WATER_MARK_BYTES,
+      size: chunk => chunk?.byteLength ?? 0,
     });
 
     return new Response(stream, {

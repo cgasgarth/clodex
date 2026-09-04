@@ -13,6 +13,8 @@ class FakeWebSocket extends EventEmitter {
   options: { headers?: Record<string, string> };
   send = vi.fn();
   close = vi.fn();
+  pause = vi.fn(() => true);
+  resume = vi.fn(() => true);
   constructor(url: string, options: { headers?: Record<string, string> }) {
     super();
     this.url = url;
@@ -388,6 +390,30 @@ beforeEach(() => {
     expect(lines[0]).toBe('data: {"type":"response.output_text.delta","delta":"hi"}');
     expect(lines[1]).toBe('data: {"type":"response.completed"}');
     expect(socket.close).toHaveBeenCalled();
+  });
+
+  it('pauses WebSocket reads while the downstream response stream is backpressured', async () => {
+    const wsFetch = createResponsesWebSocketFetch(WS_URL);
+    const res = await wsFetch('https://x', {
+      method: 'POST',
+      headers: {},
+      body: '{}',
+    });
+    const socket = lastSocket();
+    socket.emit('open');
+    await Promise.resolve();
+    socket.resume.mockClear();
+
+    socket.emit('message', Buffer.from(JSON.stringify({
+      type: 'response.output_text.delta',
+      delta: 'x'.repeat(300 * 1024),
+    })));
+    expect(socket.pause).toHaveBeenCalledOnce();
+
+    const reader = res.body!.getReader();
+    await reader.read();
+    await waitForCondition(() => expect(socket.resume).toHaveBeenCalledOnce());
+    await reader.cancel();
   });
 
   it('logs privacy-safe raw cache usage from the terminal response event', async () => {

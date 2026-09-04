@@ -13,7 +13,7 @@ or pin a Claude Code version.
 
 ## Install
 
-Clodex targets Bun 1.4.0.
+Clodex targets Bun 1.4.1.
 
 ```bash
 bun add --global @cgasgarth/clodex
