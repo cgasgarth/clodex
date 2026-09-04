@@ -515,6 +515,28 @@ describe('createLanguageModel', () => {
     expect(responses).toHaveBeenCalledWith('gpt-5.5');
   });
 
+  it('identifies Responses-Lite requests as the current Codex client', async () => {
+    const responses = vi.fn((modelId: string) => ({ modelId, provider: 'openai-responses' }));
+    const createOpenAI = vi.fn(() => ({ responses, chat: vi.fn() }));
+
+    await createLanguageModel({
+      npm: '@ai-sdk/openai',
+      modelId: 'gpt-6-astra',
+      apiKey: 'oauth-token',
+      authType: 'oauth',
+      useResponsesLite: true,
+    }, { createOpenAI: /* SAFETY: The mock implements the required provider factory. */ createOpenAI as never });
+
+    expect(createOpenAI).toHaveBeenCalledWith(expect.objectContaining({
+      headers: {
+        originator: 'clodex',
+        version: '0.153.3',
+        'x-openai-internal-codex-responses-lite': 'true',
+      },
+    }));
+    expect(responses).toHaveBeenCalledWith('gpt-6-astra');
+  });
+
   it('falls back to the stored OpenAI account id when the current token has no account claim', async () => {
     const responses = vi.fn((modelId: string) => ({
       modelId,
