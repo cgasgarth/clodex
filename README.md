@@ -163,9 +163,9 @@ compacts the OpenAI response chain with an in-band `compaction_trigger` or
 `POST /responses/compact`. It stores the latest checkpoint for each session in
 a local SQLite database so sessions can continue after a daemon restart.
 
-The default trigger is 350,000 input tokens, capped at 90% of the model's
-advertised context window. There is no Clodex compaction environment flag or
-threshold override.
+The default trigger is 350,000 input tokens. GPT-6 Astra uses a 900,000-token
+trigger. Both are capped at 90% of the model's advertised context window. There
+is no Clodex compaction environment flag or threshold override.
 
 Open bare `clodex`, switch to the Secondwind view, and press `c` to toggle
 native compaction. A confirmed change persists in `~/.clodex/config.json` and

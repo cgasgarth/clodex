@@ -939,7 +939,7 @@ export async function startProxyCatalog(
             headers: route.headers,
             useResponsesLite: route.useResponsesLite,
             openAiCompactThreshold: openAiOAuth
-              ? resolveOpenAiCompactionThreshold(route.contextWindow)
+              ? resolveOpenAiCompactionThreshold(route.realModelId, route.contextWindow)
               : undefined,
             openAiContextWindow: openAiOAuth ? resolveContextWindow(route.realModelId, route.contextWindow) : undefined,
             onDebug: (msg: string) => plog(() => msg),

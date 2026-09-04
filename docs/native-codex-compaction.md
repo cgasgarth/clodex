@@ -16,9 +16,9 @@ compaction. The setting persists in `~/.clodex/config.json`. A changed value
 restarts the daemon so every transport and checkpoint uses one policy. An
 unchanged value is a no-op.
 
-The default trigger is 350,000 input tokens, capped at 90% of a smaller model's
-advertised context window. Clodex has no native-compaction environment flag or
-threshold override.
+The default trigger is 350,000 input tokens. GPT-6 Astra uses a 900,000-token
+trigger. Both are capped at 90% of a smaller model's advertised context window.
+Clodex has no native-compaction environment flag or threshold override.
 
 After compaction, Clodex records the first real model-input count as the opaque
 compaction floor. It rearms automatic compaction only after the context grows by
