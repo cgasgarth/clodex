@@ -25,7 +25,11 @@ import { getTemplateById } from '../providers/templates.js';
 import { loadRegistry, loadRegistryStrict, saveRegistry } from '../registry/io.js';
 import { withRegistryWriteLockSync } from '../registry/lock.js';
 import type { RegistryProvider } from '../registry/types.js';
-import type { DaemonAccountController, DaemonAccountView } from './control-api.js';
+import type {
+  DaemonAccountController,
+  DaemonAccountSettings,
+  DaemonAccountView,
+} from './control-api.js';
 import type { ApiProcessingMode } from './api-pricing.js';
 import {
   DaemonAccountStore,
@@ -97,6 +101,23 @@ export function providerDisplayName(providerId: ManagedOAuthProviderId): string 
 
 function accountIdentity(account: DaemonAccountRecord): string {
   return account.email ?? account.label;
+}
+
+function openAiUsageAvailable(snapshot: OpenAiUsageSnapshot): boolean {
+  const hasUnspentCredits = snapshot.credits?.unlimited === true
+    || (snapshot.credits?.hasCredits === true && (snapshot.credits.balance ?? 0) > 0);
+  if (hasUnspentCredits) return true;
+  return [snapshot.primary, snapshot.weekly]
+    .every(window => window === undefined || window.usedPercent < 100);
+}
+
+function xaiUsageAvailable(snapshot: XaiUsageSnapshot): boolean {
+  if (snapshot.prepaidBalanceCents !== undefined && snapshot.prepaidBalanceCents > 0) return true;
+  if (
+    snapshot.onDemandLimitCents !== undefined
+    && (snapshot.onDemandUsedCents ?? 0) < snapshot.onDemandLimitCents
+  ) return true;
+  return snapshot.usedPercent === undefined || snapshot.usedPercent < 100;
 }
 
 function registryTemplateId(providerId: ManagedOAuthProviderId): string {
@@ -229,6 +250,14 @@ export class DaemonAccountService implements DaemonAccountController {
     }));
   }
 
+  settings(): DaemonAccountSettings {
+    return { autoSwitchOnUsageLimit: this.store.load().autoSwitchOnUsageLimit };
+  }
+
+  setAutoSwitchOnUsageLimit(enabled: boolean): void {
+    this.store.setAutoSwitchOnUsageLimit(enabled);
+  }
+
   select(id: string): void {
     const account = this.store.select(id);
     syncManagedProviderCredential(account.providerId, account.authRef);
@@ -348,10 +377,19 @@ export class DaemonAccountService implements DaemonAccountController {
         `The ${providerDisplayName(providerId)} launch ticket is invalid or no account is selected`,
       );
     }
+    return this.routeForAccount(launchRoute, account, !launch?.pinnedAccountIds[providerId]);
+  }
+
+  private async routeForAccount(
+    route: ProxyRoute,
+    account: DaemonAccountRecord,
+    allowFailover: boolean,
+  ): Promise<ProxyRoute> {
+    const providerId = account.providerId;
     const apiKey = await this.dependencies.resolveCredential(providerId, account.authRef);
     if (!apiKey) throw new Error(`OAuth credential is unavailable for ${accountIdentity(account)}`);
-    const common = {
-      ...launchRoute,
+    const common: ProxyRoute = {
+      ...route,
       apiKey,
       metricsAccountId: account.id,
       refreshToken: (rejectedAccessToken?: string) => this.dependencies.resolveCredential(
@@ -361,11 +399,54 @@ export class DaemonAccountService implements DaemonAccountController {
         rejectedAccessToken ? { rejectedAccessToken } : {},
       ),
     };
+    if (allowFailover) {
+      common.usageLimitFailover = () => this.failoverRoute(route, account);
+    }
     if (providerId === 'xai-oauth') return common;
     const oauthAccountId = account.accountId
       ?? await this.dependencies.resolveAccountId(account.authRef)
       ?? extractOpenAiAccountId({ access_token: apiKey });
     return { ...common, oauthAccountId };
+  }
+
+  private async failoverRoute(
+    route: ProxyRoute,
+    exhaustedAccount: DaemonAccountRecord,
+  ): Promise<ProxyRoute | null> {
+    if (!this.store.load().autoSwitchOnUsageLimit) return null;
+    const candidates = this.store.list(exhaustedAccount.providerId)
+      .filter(account => account.id !== exhaustedAccount.id);
+    for (const candidate of candidates) {
+      try {
+        const candidateRoute = await this.routeForAccount(route, candidate, true);
+        if (!await this.accountHasUsage(candidate, candidateRoute.apiKey)) continue;
+        this.select(candidate.id);
+        return candidateRoute;
+      } catch {
+        // A candidate must have both a valid credential and a fresh, healthy usage response.
+      }
+    }
+    return null;
+  }
+
+  private async accountHasUsage(account: DaemonAccountRecord, accessToken: string): Promise<boolean> {
+    if (account.providerId === 'xai-oauth') {
+      const snapshot = await this.dependencies.fetchXaiUsage(accessToken);
+      if (snapshot.email || snapshot.accountId) {
+        this.store.updateIdentity(account.id, {
+          email: snapshot.email,
+          accountId: snapshot.accountId,
+        });
+      }
+      this.xaiUsage.set(account.id, { snapshot, fetchedAt: this.dependencies.now() });
+      return xaiUsageAvailable(snapshot);
+    }
+    const accountId = account.accountId
+      ?? await this.dependencies.resolveAccountId(account.authRef)
+      ?? extractOpenAiAccountId({ access_token: accessToken });
+    const snapshot = await this.dependencies.fetchUsage(accessToken, accountId);
+    this.openAiUsage.set(account.id, { snapshot, fetchedAt: this.dependencies.now() });
+    return openAiUsageAvailable(snapshot);
   }
 
   async refreshUsage(): Promise<void> {

@@ -186,9 +186,9 @@ clodex daemon uninstall
 
 The Usage view reports input, cache reads, cache writes, output, cache share,
 request status, and API-equivalent cost. The Accounts view shows subscription
-limits and manual account selection. The Diagnostics view selects error-only or
-full lifecycle logs. The Secondwind view controls tool-output optimization and
-native Codex compaction.
+limits, manual account selection, and an optional usage-limit auto-switch. The
+Diagnostics view selects error-only or full lifecycle logs. The Secondwind view
+controls tool-output optimization and native Codex compaction.
 
 The daemon listens on loopback port `17647` by default and uses an owner-only
 Unix control socket. Metrics are retained for 400 days in owner-only SQLite and
@@ -213,8 +213,12 @@ clodex accounts usage
 OAuth credentials remain in the OS credential store. On macOS, all accounts
 share one Clodex Keychain item so the runtime needs one Keychain access
 decision. Up to five accounts per subscription provider can be stored.
-Selection is manual; Clodex does not fail over after quota, capacity, or
-authentication errors.
+Usage-limit auto-switch is off by default. Enable it with `f` in the Accounts
+view. When the selected account reports a plan usage limit, Clodex checks the
+other signed-in accounts for that provider, selects one with a healthy usage
+response and remaining quota, and retries the inference once. The replacement
+stays selected. Explicit account launches remain pinned. Capacity and
+authentication errors do not switch accounts.
 
 ## Models
 

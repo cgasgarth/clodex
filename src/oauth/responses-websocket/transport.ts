@@ -1,6 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import { isFunction, isObject, isString } from '../../runtime/type-guards.js';
-import { anthropicErrorType, clampRetryAfterSeconds } from '../../transport/upstream-error.js';
+import {
+  anthropicErrorType,
+  clampRetryAfterSeconds,
+  isUsageLimitIdentifier,
+} from '../../transport/upstream-error.js';
 import { resolveOpenAiCompactionRearmThreshold } from '../responses-compaction.js';
 import {
   TERMINAL_EVENT_TYPES,
@@ -124,9 +128,20 @@ export function failContext(
     ...diagnosticTextFingerprint('errorMessage', message),
   });
   flushPending(ctx);
+  const diagnosticErrorCode = isString(diagnosticDetails.errorCode)
+    ? diagnosticDetails.errorCode
+    : undefined;
+  const diagnosticErrorType = isString(diagnosticDetails.errorType)
+    ? diagnosticDetails.errorType
+    : undefined;
+  const usageLimitIdentifier = isUsageLimitIdentifier(diagnosticErrorCode, diagnosticErrorType)
+    ? diagnosticErrorCode ?? diagnosticErrorType
+    : undefined;
   const error: JsonObject = {
     type: statusCode === undefined ? 'transport_error' : anthropicErrorType(statusCode),
-    code: statusCode === undefined ? 'websocket_transport_error' : String(statusCode),
+    code: statusCode === undefined
+      ? 'websocket_transport_error'
+      : usageLimitIdentifier ?? String(statusCode),
     message,
     param: null,
   };

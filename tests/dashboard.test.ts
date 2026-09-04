@@ -284,13 +284,14 @@ describe('dashboard refresh resilience', () => {
     const calls: Array<{ path: string; timeoutMs?: number }> = [];
     const snapshot = await loadDashboardPanels(dashboardRequestFrom({
       '/v1/status': new Error('status timed out'),
-      '/v1/accounts': { accounts: [] },
+      '/v1/accounts': { accounts: [], autoSwitchOnUsageLimit: true },
       '/v1/diagnostics?limit=20': new Error('diagnostics timed out'),
       '/v1/secondwind': new Error('Secondwind timed out'),
       '/v1/native-compaction': new Error('native compaction timed out'),
     }, calls));
 
     expect(snapshot.reachable).toBe(true);
+    expect(snapshot.autoSwitchOnUsageLimit).toBe(true);
     expect(calls.some(call => call.path === '/v1/health')).toBe(false);
   });
 

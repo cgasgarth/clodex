@@ -1,4 +1,4 @@
-import { isObject, isString } from '../runtime/type-guards.js';
+import { isBoolean, isObject, isString } from '../runtime/type-guards.js';
 import { randomUUID } from 'node:crypto';
 import {
   chmodSync,
@@ -31,6 +31,7 @@ export interface DaemonAccountRecord {
 
 export interface DaemonAccountState {
   version: number;
+  autoSwitchOnUsageLimit: boolean;
   selectedAccountIds: Partial<Record<ManagedOAuthProviderId, string>>;
   accounts: DaemonAccountRecord[];
 }
@@ -69,6 +70,7 @@ interface UntrustedDaemonAccountState {
   accounts?: DiagnosticValue;
   selectedAccountIds?: DiagnosticValue;
   selectedAccountId?: DiagnosticValue;
+  autoSwitchOnUsageLimit?: DiagnosticValue;
 }
 
 function parseProviderId(value: DiagnosticValue): ManagedOAuthProviderId | null {
@@ -149,6 +151,9 @@ function parseState(raw: string): ParsedDaemonAccountState {
   }
   return { state: {
     version: ACCOUNT_STORE_VERSION,
+    autoSwitchOnUsageLimit: isBoolean(parsed.autoSwitchOnUsageLimit)
+      ? parsed.autoSwitchOnUsageLimit
+      : false,
     selectedAccountIds,
     accounts,
   }, migrated };
@@ -171,7 +176,12 @@ export class DaemonAccountStore {
         ? error.code
         : undefined;
       if (code === 'ENOENT') {
-        return { version: ACCOUNT_STORE_VERSION, selectedAccountIds: {}, accounts: [] };
+        return {
+          version: ACCOUNT_STORE_VERSION,
+          autoSwitchOnUsageLimit: false,
+          selectedAccountIds: {},
+          accounts: [],
+        };
       }
       throw error;
     }
@@ -190,6 +200,12 @@ export class DaemonAccountStore {
     ))
       ?? state.accounts.find(account => account.providerId === providerId)
       ?? null;
+  }
+
+  setAutoSwitchOnUsageLimit(enabled: boolean): void {
+    const state = this.load();
+    state.autoSwitchOnUsageLimit = enabled;
+    this.save(state);
   }
 
   add(

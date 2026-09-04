@@ -46,11 +46,11 @@ ${pc.bold('Usage:')}
   clodex accounts remove <email-or-id>
   clodex accounts usage [email-or-id]
 
-Up to ${MAX_DAEMON_ACCOUNTS} accounts per provider can be stored. Selection is
-manual and sets that provider's account for the next request from new and
-existing default-account launches. Explicit account launches remain pinned.
-Clodex never switches accounts automatically after quota, capacity, or
-authentication errors.`;
+Up to ${MAX_DAEMON_ACCOUNTS} accounts per provider can be stored. Selection sets
+that provider's account for the next request from new and existing default-account
+launches. The Accounts dashboard can enable usage-limit auto-switch. Explicit
+account launches remain pinned. Capacity and authentication failures never switch
+accounts.`;
 }
 
 function storeWithMigration(): DaemonAccountStore {

@@ -97,6 +97,92 @@ describe('DaemonAccountService launch tickets', () => {
       }));
   });
 
+  it('switches a default launch to a healthy account with remaining usage', async () => {
+    const store = new DaemonAccountStore(
+      { CLODEX_HOME: root },
+      join(root, 'accounts.json'),
+    );
+    const exhausted = store.add({ label: 'Exhausted', authRef: 'keyring:exhausted' });
+    store.add({ label: 'Also exhausted', authRef: 'keyring:also-exhausted' });
+    const healthy = store.add({ label: 'Healthy', authRef: 'keyring:healthy' });
+    const checkedTokens: string[] = [];
+    const service = new DaemonAccountService(store, {
+      resolveCredential: async (_providerId, authRef) => `${authRef}-token`,
+      resolveAccountId: async () => undefined,
+      fetchUsage: async token => {
+        checkedTokens.push(token);
+        return {
+          fetchedAt: '2026-09-03T00:00:00.000Z',
+          primary: {
+            usedPercent: token.includes('also-exhausted') ? 100 : 25,
+            resetAt: 2_000_000_000,
+            limitWindowSeconds: 18_000,
+          },
+          additional: [],
+        };
+      },
+    });
+    withRegistryWriteLockSync(() => saveRegistry({ schemaVersion: 1, providers: [] }));
+    service.setAutoSwitchOnUsageLimit(true);
+    const route = {
+      aliasId: 'claude-sol',
+      realModelId: 'gpt-5.6-sol',
+      displayName: 'Sol',
+      upstreamUrl: 'https://example.test',
+      apiKey: 'boot-token',
+      modelFormat: 'openai' as const,
+      providerId: 'openai-oauth',
+      authType: 'oauth' as const,
+    };
+    const launch = service.createLaunchTicket()!;
+    const resolved = await service.routeForTicket(route, launch.ticket);
+
+    const replacement = await resolved.usageLimitFailover?.();
+
+    expect(resolved.metricsAccountId).toBe(exhausted.id);
+    expect(checkedTokens).toEqual([
+      'keyring:also-exhausted-token',
+      'keyring:healthy-token',
+    ]);
+    expect(replacement).toMatchObject({
+      apiKey: 'keyring:healthy-token',
+      metricsAccountId: healthy.id,
+    });
+    expect(store.selected()?.id).toBe(healthy.id);
+    expect(service.settings()).toEqual({ autoSwitchOnUsageLimit: true });
+  });
+
+  it('keeps auto-switch off by default and does not attach it to a pinned launch', async () => {
+    const store = new DaemonAccountStore(
+      { CLODEX_HOME: root },
+      join(root, 'accounts.json'),
+    );
+    const selected = store.add({ label: 'Selected', authRef: 'keyring:selected' });
+    store.add({ label: 'Other', authRef: 'keyring:other' });
+    const service = new DaemonAccountService(store, {
+      resolveCredential: async (_providerId, authRef) => `${authRef}-token`,
+    });
+    const route = {
+      aliasId: 'claude-sol',
+      realModelId: 'gpt-5.6-sol',
+      displayName: 'Sol',
+      upstreamUrl: 'https://example.test',
+      apiKey: 'boot-token',
+      modelFormat: 'openai' as const,
+      providerId: 'openai-oauth',
+      authType: 'oauth' as const,
+    };
+    const defaultRoute = await service.routeForTicket(route, service.createLaunchTicket()!.ticket);
+    const pinnedRoute = await service.routeForTicket(
+      route,
+      service.createLaunchTicket(selected.id)!.ticket,
+    );
+
+    expect(service.settings()).toEqual({ autoSwitchOnUsageLimit: false });
+    await expect(defaultRoute.usageLimitFailover?.()).resolves.toBeNull();
+    expect(pinnedRoute.usageLimitFailover).toBeUndefined();
+  });
+
   it('validates durable tickets after a daemon restart and rejects tampering', () => {
     const store = new DaemonAccountStore(
       { CLODEX_HOME: root },

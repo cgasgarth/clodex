@@ -30,8 +30,10 @@ flowchart LR
   children inherit that ticket, so a workflow shares the same account-selection
   policy as its parent without generating a new custom-key approval prompt.
 - Manual account selection affects the next request from new and existing
-  default-account launches. An explicit `--clodex-account` launch remains
-  pinned. There is no quota/auth/capacity failover.
+  default-account launches. The Accounts dashboard can enable usage-limit
+  failover to another healthy account for the same provider. An explicit
+  `--clodex-account` launch remains pinned. Auth and capacity failures do not
+  switch accounts.
 
 ## Setup on macOS
 

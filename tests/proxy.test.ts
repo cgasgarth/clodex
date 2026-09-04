@@ -1172,6 +1172,91 @@ it('returns an HTTP error when request translation throws instead of leaving the
     }
   }, 20_000);
 
+  it('switches accounts and retries a replay-safe inference after plan usage is exhausted', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'clodex-account-failover-'));
+    const inferenceLogPath = join(dir, 'inference.jsonl');
+    const authorizations: string[] = [];
+    const upstream = http.createServer((req, res) => {
+      authorizations.push(req.headers.authorization ?? '');
+      req.resume();
+      if (req.headers.authorization === 'Bearer exhausted-key') {
+        res.writeHead(429, {
+          'Content-Type': 'application/json',
+          'retry-after-ms': '1',
+          'Connection': 'close',
+        });
+        res.end(JSON.stringify({
+          error: {
+            type: 'usage_limit_reached',
+            code: 'insufficient_quota',
+            message: 'Plan usage limit reached',
+          },
+        }));
+        return;
+      }
+      res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Connection': 'close' });
+      res.write(openAiSseChunk({ role: 'assistant', content: 'recovered on healthy account' }, null));
+      res.write(openAiSseChunk({}, 'stop'));
+      res.end('data: [DONE]\n\n');
+    });
+    await new Promise<void>((resolve, reject) => {
+      upstream.once('error', reject);
+      upstream.listen(0, '127.0.0.1', () => resolve());
+    });
+    const address = requireTcpAddress(upstream.address(), 'test upstream did not bind');
+    const route: ProxyRoute = {
+      aliasId: 'clodex:test:usage-limited-model',
+      realModelId: 'usage-limited-model',
+      displayName: 'Usage Limited Model',
+      upstreamUrl: '',
+      apiKey: 'exhausted-key',
+      modelFormat: 'openai',
+      npm: '@ai-sdk/openai-compatible',
+      baseURL: `http://127.0.0.1:${address.port}/v1`,
+      providerId: 'openai-oauth',
+      authType: 'oauth',
+      metricsAccountId: 'exhausted-account',
+    };
+    const failover = vi.fn(async () => ({
+      ...route,
+      apiKey: 'healthy-key',
+      metricsAccountId: 'healthy-account',
+    }));
+    route.usageLimitFailover = failover;
+    const handle = await startProxyCatalog([route], route.aliasId, false, inferenceLogPath);
+
+    try {
+      const response = await postToProxy(handle.port, {
+        model: route.aliasId,
+        max_tokens: 100,
+        messages: [{ role: 'user', content: 'recover this inference' }],
+        stream: true,
+      }, 'req-account-failover');
+
+      expect(response.status).toBe(200);
+      expect(response.body).toContain('recovered on healthy account');
+      expect(failover).toHaveBeenCalledOnce();
+      expect(authorizations.at(-1)).toBe('Bearer healthy-key');
+      const entries = (await readFlushedLog(inferenceLogPath)).trim().split('\n').map(line => JSON.parse(line));
+      expect(entries).toContainEqual(expect.objectContaining({
+        event: 'translation_retrying',
+        requestId: 'req-account-failover',
+        accountId: 'healthy-account',
+        errorCode: 'usage_limit_failover',
+      }));
+      expect(entries).toContainEqual(expect.objectContaining({
+        event: 'translation_completed',
+        requestId: 'req-account-failover',
+        accountId: 'healthy-account',
+      }));
+      expect(entries.some(entry => entry.event === 'translation_failed')).toBe(false);
+    } finally {
+      await handle.close();
+      await new Promise<void>(resolve => upstream.close(() => resolve()));
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 20_000);
+
   it('records the bounded WebSocket transport code in the translation lifecycle', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'clodex-sdk-transport-error-'));
     const inferenceLogPath = join(dir, 'inference.jsonl');

@@ -39,6 +39,26 @@ function rateLimitFrame(message: string) {
 }
 
 describe('sdkUpstreamErrorDetails retry-after extraction', () => {
+  it('separates plan usage exhaustion from a transient rate limit', () => {
+    expect(sdkUpstreamErrorDetails({
+      type: 'error',
+      error: { type: 'usage_limit_reached', message: 'Usage limit reached' },
+    })).toMatchObject({
+      statusCode: 429,
+      usageLimitReached: true,
+      isRetryable: false,
+    });
+    expect(sdkUpstreamErrorDetails(rateLimitFrame('slow down'))).toMatchObject({
+      statusCode: 429,
+      usageLimitReached: false,
+      isRetryable: true,
+    });
+    expect(sdkUpstreamErrorDetails(apiCallError({
+      statusCode: 429,
+      data: { error: { code: 'insufficient_quota', message: 'No quota' } },
+    }))).toMatchObject({ usageLimitReached: true, isRetryable: false });
+  });
+
   it('uses Anthropic transient error types for overloads and timeouts', () => {
     expect(anthropicErrorType(500)).toBe('api_error');
     expect(anthropicErrorType(504)).toBe('timeout_error');

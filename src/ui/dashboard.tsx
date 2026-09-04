@@ -201,6 +201,7 @@ function Dashboard(): React.ReactNode {
   const [daemonReachable, setDaemonReachable] = useState<boolean | null>(null);
   const [metrics, setMetrics] = useState<MetricBucket[]>([]);
   const [accounts, setAccounts] = useState<Account[]>([]);
+  const [autoSwitchOnUsageLimit, setAutoSwitchOnUsageLimit] = useState(false);
   const [diagnostics, setDiagnostics] = useState<Diagnostic[]>([]);
   const [diagnosticLogMode, setDiagnosticLogMode] = useState<DiagnosticLogMode>('error');
   const [secondwind, setSecondwind] = useState<SecondwindSnapshot | null>(null);
@@ -230,6 +231,9 @@ function Dashboard(): React.ReactNode {
       if (snapshot.accounts) {
         setAccounts(snapshot.accounts);
         setSelectedIndex(index => Math.min(index, Math.max(0, snapshot.accounts!.length - 1)));
+      }
+      if (snapshot.autoSwitchOnUsageLimit !== undefined) {
+        setAutoSwitchOnUsageLimit(snapshot.autoSwitchOnUsageLimit);
       }
       if (snapshot.diagnostics) setDiagnostics(snapshot.diagnostics);
       if (snapshot.diagnosticLogMode) setDiagnosticLogMode(snapshot.diagnosticLogMode);
@@ -266,12 +270,16 @@ function Dashboard(): React.ReactNode {
     usageRefreshInFlight.current = true;
     const sequence = ++usageRefreshSequence.current;
     try {
-      const nextAccounts = await daemonControlRequest<{ accounts: Account[] }>(
+      const nextAccounts = await daemonControlRequest<{
+        accounts: Account[];
+        autoSwitchOnUsageLimit: boolean;
+      }>(
         '/v1/accounts?refresh=1',
         { timeoutMs: DASHBOARD_USAGE_REQUEST_TIMEOUT_MS },
       );
       if (sequence !== usageRefreshSequence.current) return;
       setAccounts(nextAccounts.accounts);
+      setAutoSwitchOnUsageLimit(nextAccounts.autoSwitchOnUsageLimit);
       setSelectedIndex(index => Math.min(index, Math.max(0, nextAccounts.accounts.length - 1)));
     } catch (error) {
       if (sequence !== usageRefreshSequence.current) return;
@@ -280,6 +288,22 @@ function Dashboard(): React.ReactNode {
       usageRefreshInFlight.current = false;
     }
   }, []);
+
+  const toggleAccountAutoSwitch = useCallback(() => {
+    if (accountAction) return;
+    const enabled = !autoSwitchOnUsageLimit;
+    setAccountAction(true);
+    daemonControlRequest<{ autoSwitchOnUsageLimit: boolean }>('/v1/accounts/auto-switch', {
+      method: 'POST',
+      body: { enabled },
+    }).then(
+      snapshot => {
+        setAutoSwitchOnUsageLimit(snapshot.autoSwitchOnUsageLimit);
+        setMessage(`Account usage failover is ${snapshot.autoSwitchOnUsageLimit ? 'on' : 'off'}.`);
+      },
+      error => setMessage(error instanceof Error ? error.message : String(error)),
+    ).finally(() => setAccountAction(false));
+  }, [accountAction, autoSwitchOnUsageLimit]);
 
   const login = useCallback((providerId: ManagedOAuthProviderId) => {
     if (accountAction) return;
@@ -496,6 +520,10 @@ function Dashboard(): React.ReactNode {
       }
     }
     if (view === 'accounts') {
+      if (input === 'f') {
+        toggleAccountAutoSwitch();
+        return;
+      }
       if (input === 'o') {
         login('openai-oauth');
         return;
@@ -770,12 +798,18 @@ function Dashboard(): React.ReactNode {
       </>
     );
   } else if (view === 'accounts') {
-    controls = `↑/↓ account · Enter select · o login OpenAI · g login xAI · x x logout · ${VIEW_SWITCH_HINT} · r refresh · q quit`;
+    controls = `↑/↓ account · Enter select · f auto-switch · o login OpenAI · g login xAI · x x logout · ${VIEW_SWITCH_HINT} · r refresh · q quit`;
     content = (
       <>
         <Box borderStyle="round" paddingX={1} flexDirection="column">
           <Text bold>Accounts and subscription limits</Text>
           <Text dimColor>Each provider has one selected account; existing default-account sessions switch on their next request.</Text>
+          <Text>
+            Usage-limit auto-switch: <Text bold color={autoSwitchOnUsageLimit ? 'green' : undefined}>
+              {autoSwitchOnUsageLimit ? 'on' : 'off'}
+            </Text>
+            <Text dimColor> · press f to toggle · default-account launches only</Text>
+          </Text>
           {accounts.length === 0
             ? <Text dimColor>No managed accounts. Press o for OpenAI or g for xAI.</Text>
             : accountGroups.map(group => (

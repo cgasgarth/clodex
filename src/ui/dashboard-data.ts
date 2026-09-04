@@ -132,6 +132,7 @@ export interface DashboardPanelSnapshot {
   reachable: boolean;
   status?: DaemonStatus;
   accounts?: Account[];
+  autoSwitchOnUsageLimit?: boolean;
   diagnostics?: Diagnostic[];
   diagnosticLogMode?: DiagnosticLogMode;
   secondwind?: SecondwindSnapshot;
@@ -154,7 +155,7 @@ export async function loadDashboardPanels(
   const options = { timeoutMs: DASHBOARD_CONTROL_REQUEST_TIMEOUT_MS };
   const [status, accounts, diagnostics, secondwind, nativeCompaction] = await Promise.allSettled([
     request<DaemonStatus>('/v1/status', options),
-    request<{ accounts: Account[] }>('/v1/accounts', options),
+    request<{ accounts: Account[]; autoSwitchOnUsageLimit: boolean }>('/v1/accounts', options),
     request<{ diagnostics: Diagnostic[]; mode: DiagnosticLogMode }>(
       '/v1/diagnostics?limit=20',
       options,
@@ -189,6 +190,9 @@ export async function loadDashboardPanels(
     reachable,
     status: status.status === 'fulfilled' ? status.value : undefined,
     accounts: accounts.status === 'fulfilled' ? accounts.value.accounts : undefined,
+    autoSwitchOnUsageLimit: accounts.status === 'fulfilled'
+      ? accounts.value.autoSwitchOnUsageLimit
+      : undefined,
     diagnostics: diagnostics.status === 'fulfilled'
       ? diagnostics.value.diagnostics
       : undefined,
