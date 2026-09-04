@@ -1,6 +1,9 @@
 import { it, expect, vi, beforeEach } from 'bun:test';
 import { createHash, randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { createOpenAI } from '@ai-sdk/openai';
 import { streamText } from 'ai';
 
@@ -38,6 +41,7 @@ import {
   RESPONSES_INSTRUCTIONS_MAX_CHARACTERS,
 } from '../src/oauth/responses-websocket/request/instructions.js';
 import { compactionSummaryHash } from '../src/oauth/responses-websocket/continuation.js';
+import { SqliteResponsesCheckpointStore } from '../src/oauth/responses-checkpoint-store.js';
 import {
   registerCompactionCheckpoint,
   syntheticAssistantMessage,
@@ -2083,7 +2087,7 @@ beforeEach(() => {
     const syntheticText = compactFrames
       .find(event => event.type === 'response.output_text.delta')?.delta as string;
     expect(syntheticText).toMatch(
-      /^<summary>Context compacted natively by OpenAI and retained in Clodex process checkpoint /,
+      /^<summary>Context compacted natively by OpenAI and retained by Clodex in checkpoint /,
     );
     expect(compactFrames.find(event => event.type === 'response.completed').response.usage)
       .toMatchObject({
@@ -3195,12 +3199,16 @@ beforeEach(() => {
     await readAll(recovered);
   });
 
-  it('restores a compact checkpoint after every matching live head has closed', async () => {
+  it('restores a compact checkpoint from SQLite after process state is cleared', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'clodex-restart-checkpoint-'));
+    const storePath = join(root, 'checkpoints.sqlite');
+    const store = new SqliteResponsesCheckpointStore(storePath);
     const canonical = [{ type: 'compaction', encrypted_content: 'checkpoint-summary' }];
     const compactFetch = vi.fn();
     const wsFetch = createResponsesWebSocketFetch(WS_URL, undefined, {
       accountId: 'acct-compact-checkpoint',
       compactThreshold: 100,
+      checkpointStore: store,
       // SAFETY: The test fixture defines the asserted runtime shape.
       compactFetch: compactFetch as typeof fetch,
     });
@@ -3238,12 +3246,23 @@ beforeEach(() => {
 
     originalSocket.emit('close', 1000, Buffer.from(''));
     compactedSocket.emit('close', 1000, Buffer.from(''));
+    expect(store.size()).toBe(1);
+    resetResponsesWebSocketConnectionsForTests();
+    store.close();
+    const restartedStore = new SqliteResponsesCheckpointStore(storePath);
+    const restartedFetch = createResponsesWebSocketFetch(WS_URL, undefined, {
+      accountId: 'acct-compact-checkpoint',
+      compactThreshold: 100,
+      checkpointStore: restartedStore,
+      // SAFETY: The test fixture defines the asserted runtime shape.
+      compactFetch: compactFetch as typeof fetch,
+    });
     const secondAssistant = {
       role: 'assistant',
       content: [{ type: 'output_text', text: 'second answer' }],
     };
     const thirdUser = { role: 'user', content: [{ type: 'input_text', text: 'third' }] };
-    await wsFetch('https://example.test/responses', {
+    const third = await restartedFetch('https://example.test/responses', {
       method: 'POST', headers: {},
       body: JSON.stringify(sessionPayload([...secondInput, secondAssistant, thirdUser])),
     });
@@ -3261,6 +3280,14 @@ beforeEach(() => {
       thirdUser,
     ]);
     expect(compactFetch).not.toHaveBeenCalled();
+    emitTextResponse(restoredSocket, 'resp_restarted_checkpoint', 'continued', {
+      input_tokens: 60,
+      output_tokens: 10,
+    });
+    await readAll(third);
+    expect(restartedStore.size()).toBe(1);
+    restartedStore.close();
+    rmSync(root, { recursive: true, force: true });
   });
 
   it('keeps hidden native-compaction work out of visible context usage', async () => {

@@ -18,6 +18,7 @@ import type {
   ResponsesWebSocket,
   RequestContext,
   ConnectionEntry,
+  ResponsesCheckpointStore,
 } from './types.js';
 import type { HeaderRecord, PromptFieldHashes } from './fingerprint.js';
 import {
@@ -665,6 +666,7 @@ export function createConnection(
   debug: ConnectionEntry['debug'],
   /** Optional HTTP(S)_PROXY URL consumed by Bun's native WebSocket client. */
   proxy?: string,
+  checkpointStore?: ResponsesCheckpointStore,
 ): ConnectionEntry {
   const now = options.now();
   const socket = new WebSocket(wsUrl, proxy ? { headers, proxy } : { headers });
@@ -674,6 +676,7 @@ export function createConnection(
     lineageKey: randomUUID(),
     key: persistent ? key : undefined,
     checkpointKey: persistent ? checkpointKey : undefined,
+    checkpointStore: persistent ? checkpointStore : undefined,
     socket,
     persistent,
     generation: persistent ? 'nursery' : 'isolated',

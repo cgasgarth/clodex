@@ -57,6 +57,10 @@ export function getDaemonMetricsDbPath(env: HomeEnv = process.env): string {
   return join(getAppHome(env), 'daemon-metrics.sqlite');
 }
 
+export function getResponsesCheckpointDbPath(env: HomeEnv = process.env): string {
+  return join(getAppHome(env), 'responses-checkpoints.sqlite');
+}
+
 export function getDaemonAccountsPath(env: HomeEnv = process.env): string {
   return join(getAppHome(env), 'accounts.json');
 }
