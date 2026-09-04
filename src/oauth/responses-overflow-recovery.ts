@@ -77,6 +77,13 @@ export interface ResponsesOverflowRecoveryPlan {
   rejectedCount: number;
 }
 
+export interface RecentDependencySafeWindow {
+  input: JsonValue[];
+  estimatedInputTokens: number;
+  targetInputTokens: number;
+  droppedItems: number;
+}
+
 interface ProgressiveOverflowRecoveryStep {
   input: JsonValue[];
   estimatedInputTokens: number;
@@ -275,6 +282,61 @@ function isToolCall(value: JsonValue): boolean {
 function isToolOutput(value: JsonValue): boolean {
   const kind = responsesItemKind(value);
   return TOOL_OUTPUT_KINDS.has(kind) || kind.endsWith('_call_output');
+}
+
+function isUserMessage(value: JsonValue): boolean {
+  return isObject(value) && !Array.isArray(value) && value.role === 'user';
+}
+
+/**
+ * Select the largest recent conversation window that fits the requested model
+ * input size and does not separate a tool output from its producer.
+ */
+export function recentDependencySafeWindow(
+  fullInput: JsonValue[],
+  targetInputTokens: number,
+  contextWindow: number,
+  estimatedInputTokens?: number,
+): RecentDependencySafeWindow | undefined {
+  if (fullInput.length === 0 || targetInputTokens <= 0 || contextWindow <= 0) return undefined;
+  const { itemTokens, total } = sumItemTokens(fullInput);
+  const fixedTokens = fixedPromptTokensFromTotal(total, estimatedInputTokens);
+  const boundedTarget = Math.min(targetInputTokens, contextWindow - 1);
+  if (fixedTokens >= boundedTarget) return undefined;
+
+  const dependencyCounts = new Map<string, { calls: number; outputs: number }>();
+  const missingProducers = new Set<string>();
+  let suffixTokens = 0;
+  let selectedStart: number | undefined;
+  let selectedEstimate: number | undefined;
+
+  for (let index = fullInput.length - 1; index >= 0; index -= 1) {
+    const item = fullInput[index]!;
+    suffixTokens += itemTokens[index] ?? 0;
+    const id = callId(item);
+    if (id) {
+      const counts = dependencyCounts.get(id) ?? { calls: 0, outputs: 0 };
+      if (isToolCall(item)) counts.calls += 1;
+      if (isToolOutput(item)) counts.outputs += 1;
+      dependencyCounts.set(id, counts);
+      if (counts.outputs > 0 && counts.calls === 0) missingProducers.add(id);
+      else missingProducers.delete(id);
+    }
+    if (!isUserMessage(item)) continue;
+    const estimate = fixedTokens + suffixTokens;
+    if (estimate > boundedTarget) break;
+    if (missingProducers.size > 0) continue;
+    selectedStart = index;
+    selectedEstimate = estimate;
+  }
+
+  if (selectedStart === undefined || selectedEstimate === undefined) return undefined;
+  return {
+    input: fullInput.slice(selectedStart),
+    estimatedInputTokens: selectedEstimate,
+    targetInputTokens: boundedTarget,
+    droppedItems: selectedStart,
+  };
 }
 
 /**

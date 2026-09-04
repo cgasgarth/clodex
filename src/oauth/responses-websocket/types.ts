@@ -19,6 +19,7 @@ export const RESPONSES_WS_WARM_NURSERY_CONNECTIONS_PER_PARTITION = 2;
 // Bound decoded SSE waiting for a downstream reader before applying TCP backpressure.
 export const RESPONSES_WS_STREAM_HIGH_WATER_MARK_BYTES = 256 * 1024;
 export const RESPONSES_COMPACTION_RETAINED_USER_TOKENS = 64_000;
+export const RESPONSES_CHECKPOINT_MISS_FALLBACK_TOKENS = 400_000;
 export const RESPONSES_COMPACTION_CHECKPOINT_TTL_MS = 30 * 60_000;
 
 export interface ResponsesWebSocketFetchOptions {
