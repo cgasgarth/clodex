@@ -372,6 +372,7 @@ export function expectedAssistantItems(ctx: RequestContext): JsonValue[] {
 export function encodeSse(ctx: RequestContext, event: JsonValue): void {
   if (ctx.closed) return;
   ctx.controller.enqueue(ctx.encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
+  if ((ctx.controller.desiredSize ?? 1) <= 0) ctx.entry?.socket.pause();
 }
 
 export function flushPending(ctx: RequestContext): void {
@@ -382,6 +383,7 @@ export function flushPending(ctx: RequestContext): void {
 export function closeContext(ctx: RequestContext): void {
   if (ctx.closed) return;
   ctx.closed = true;
+  ctx.entry?.socket.resume();
   ctx.abortCleanup?.();
   ctx.resolveSettled?.();
   ctx.resolveSettled = undefined;

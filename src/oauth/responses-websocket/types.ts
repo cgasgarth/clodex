@@ -16,6 +16,8 @@ export const RESPONSES_WS_MAX_CONNECTIONS = 32;
 // full-width workflow fall back to disposable sockets.
 export const RESPONSES_WS_MAX_NURSERY_CONNECTIONS = 16;
 export const RESPONSES_WS_WARM_NURSERY_CONNECTIONS_PER_PARTITION = 2;
+// Bound decoded SSE waiting for a downstream reader before applying TCP backpressure.
+export const RESPONSES_WS_STREAM_HIGH_WATER_MARK_BYTES = 256 * 1024;
 export const RESPONSES_COMPACTION_RETAINED_USER_TOKENS = 64_000;
 export const RESPONSES_COMPACTION_CHECKPOINT_TTL_MS = 30 * 60_000;
 
@@ -85,6 +87,8 @@ export type RawData = Buffer | ArrayBuffer | Buffer[];
 export interface ResponsesWebSocket {
   send(data: string, callback?: (error?: Error) => void): void;
   close(code?: number, reason?: string): void;
+  pause(): boolean;
+  resume(): boolean;
   on(event: 'open', listener: () => void): this;
   on(event: 'unexpected-response', listener: (request: import('node:http').ClientRequest, response: import('node:http').IncomingMessage) => void): this;
   on(event: 'message', listener: (data: RawData) => void): this;

@@ -21,7 +21,7 @@
     "proxy"
   ],
   "type": "module",
-  "packageManager": "bun@1.4.0",
+  "packageManager": "bun@1.4.1",
   "bin": {
     "clodex": "dist/cli.js",
     "clodex-claude": "dist/claude-wrapper.js"
@@ -32,7 +32,7 @@
     "README.md"
   ],
   "engines": {
-    "bun": ">=1.4.0"
+    "bun": ">=1.4.1"
   },
   "scripts": {
     "build": "bun run scripts/build.ts",
@@ -69,7 +69,7 @@
     "undici": "8.10.0"
   },
   "devDependencies": {
-    "@types/bun": "npm:bun-types@1.4.0",
+    "@types/bun": "npm:bun-types@1.4.1",
     "@types/node-forge": "1.3.14",
     "@types/react": "19.2.18",
     "@typescript/native": "npm:typescript@7.0.2",

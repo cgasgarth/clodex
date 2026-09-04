@@ -384,6 +384,7 @@ function sendContext(entry: ConnectionEntry, ctx: RequestContext): void {
 
 export function dispatchContext(entry: ConnectionEntry, ctx: RequestContext): void {
   const now = entry.options.now();
+  entry.socket.resume();
   entry.inFlight = true;
   entry.inFlightStartedAt = now;
   entry.current = ctx;

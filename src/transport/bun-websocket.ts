@@ -13,7 +13,7 @@ export interface BunWebSocketOptions {
 }
 
 interface BunWebSocketConstructor {
-  new (target: string, config: Bun.WebSocketOptions): WebSocket;
+  new (target: string, config: Bun.WebSocketOptions): WebSocket & Bun.WebSocket;
 }
 
 /**
@@ -25,7 +25,7 @@ interface BunWebSocketConstructor {
  * without coupling the larger Responses pool to DOM-style events.
  */
 export class BunNativeWebSocket extends EventEmitter {
-  private readonly socket: WebSocket;
+  private readonly socket: WebSocket & Bun.WebSocket;
   private failurePending = false;
   private deferredClose: { code: number; reason: string } | undefined;
 
@@ -105,6 +105,14 @@ export class BunNativeWebSocket extends EventEmitter {
 
   close(code?: number, reason?: string): void {
     this.socket.close(code, reason);
+  }
+
+  pause(): boolean {
+    return this.socket.pause();
+  }
+
+  resume(): boolean {
+    return this.socket.resume();
   }
 
   private emitDeferredClose(): void {

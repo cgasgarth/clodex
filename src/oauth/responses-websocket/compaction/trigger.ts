@@ -1,5 +1,11 @@
 import { ResponsesCompactionError } from '../../responses-compaction.js';
-import type { JsonObject, JsonValue, RequestContext, ConnectionEntry } from '../types.js';
+import {
+  RESPONSES_WS_STREAM_HIGH_WATER_MARK_BYTES,
+  type JsonObject,
+  type JsonValue,
+  type RequestContext,
+  type ConnectionEntry,
+} from '../types.js';
 import type { PromptFieldHashes } from '../fingerprint.js';
 import { connectionEntries } from '../state.js';
 import { inputArray } from '../fingerprint.js';
@@ -98,6 +104,12 @@ export async function runCompactionTrigger({
           if (ctx.entry) deleteEntry(ctx.entry);
           closeContext(ctx);
         },
+        pull() {
+          ctx?.entry?.socket.resume();
+        },
+      }, {
+        highWaterMark: RESPONSES_WS_STREAM_HIGH_WATER_MARK_BYTES,
+        size: chunk => chunk?.byteLength ?? 0,
       });
       let timedOut = false;
       const didTimeOut = () => timedOut;

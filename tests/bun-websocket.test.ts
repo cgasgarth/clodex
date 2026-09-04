@@ -26,6 +26,8 @@ describe('Bun native WebSocket adapter', () => {
     servers.push(server);
     const WebSocket = loadBunNativeWebSocket();
     const socket = new WebSocket(`ws://127.0.0.1:${server.port}`, { headers: {} });
+    expect(socket.pause()).toBe(true);
+    expect(socket.resume()).toBe(true);
 
     const result = await new Promise<string>((resolve, reject) => {
       socket.once('message', data => resolve(data.toString('utf8')));
