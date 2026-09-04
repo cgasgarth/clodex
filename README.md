@@ -213,11 +213,11 @@ clodex accounts usage
 OAuth credentials remain in the OS credential store. On macOS, all accounts
 share one Clodex Keychain item so the runtime needs one Keychain access
 decision. Up to five accounts per subscription provider can be stored.
-Usage-limit auto-switch is off by default. Enable it with `f` in the Accounts
-view. When the selected account reports a plan usage limit, Clodex checks the
-other signed-in accounts for that provider, selects one with a healthy usage
-response and remaining quota, and retries the inference once. The replacement
-stays selected. Explicit account launches remain pinned. Capacity and
+Usage-limit auto-switch is on by default. Disable or enable it with `f` in the
+Accounts view. When the selected account reports a plan usage limit, Clodex
+checks the other signed-in accounts for that provider. It selects one with a
+healthy usage response and remaining quota, and it retries the inference once.
+The replacement stays selected. Explicit account launches remain pinned. Capacity and
 authentication errors do not switch accounts.
 
 ## Models

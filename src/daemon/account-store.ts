@@ -153,7 +153,7 @@ function parseState(raw: string): ParsedDaemonAccountState {
     version: ACCOUNT_STORE_VERSION,
     autoSwitchOnUsageLimit: isBoolean(parsed.autoSwitchOnUsageLimit)
       ? parsed.autoSwitchOnUsageLimit
-      : false,
+      : true,
     selectedAccountIds,
     accounts,
   }, migrated };
@@ -178,7 +178,7 @@ export class DaemonAccountStore {
       if (code === 'ENOENT') {
         return {
           version: ACCOUNT_STORE_VERSION,
-          autoSwitchOnUsageLimit: false,
+          autoSwitchOnUsageLimit: true,
           selectedAccountIds: {},
           accounts: [],
         };

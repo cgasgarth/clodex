@@ -152,7 +152,7 @@ describe('DaemonAccountService launch tickets', () => {
     expect(service.settings()).toEqual({ autoSwitchOnUsageLimit: true });
   });
 
-  it('keeps auto-switch off by default and does not attach it to a pinned launch', async () => {
+  it('keeps auto-switch on by default and does not attach it to a pinned launch', async () => {
     const store = new DaemonAccountStore(
       { CLODEX_HOME: root },
       join(root, 'accounts.json'),
@@ -178,8 +178,8 @@ describe('DaemonAccountService launch tickets', () => {
       service.createLaunchTicket(selected.id)!.ticket,
     );
 
-    expect(service.settings()).toEqual({ autoSwitchOnUsageLimit: false });
-    await expect(defaultRoute.usageLimitFailover?.()).resolves.toBeNull();
+    expect(service.settings()).toEqual({ autoSwitchOnUsageLimit: true });
+    expect(defaultRoute.usageLimitFailover).toBeFunction();
     expect(pinnedRoute.usageLimitFailover).toBeUndefined();
   });
 

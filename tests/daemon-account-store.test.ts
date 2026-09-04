@@ -48,15 +48,15 @@ describe('DaemonAccountStore', () => {
     expect(store.list().map(account => account.id)).toEqual([first.id, second.id]);
   });
 
-  it('stores the usage-limit auto-switch setting off by default', () => {
-    expect(store.load().autoSwitchOnUsageLimit).toBe(false);
+  it('stores the usage-limit auto-switch setting on by default', () => {
+    expect(store.load().autoSwitchOnUsageLimit).toBe(true);
 
-    store.setAutoSwitchOnUsageLimit(true);
+    store.setAutoSwitchOnUsageLimit(false);
 
     expect(new DaemonAccountStore(
       { CLODEX_HOME: root },
       join(root, 'accounts.json'),
-    ).load().autoSwitchOnUsageLimit).toBe(true);
+    ).load().autoSwitchOnUsageLimit).toBe(false);
   });
 
   it('replaces legacy labels with OAuth email identity', () => {

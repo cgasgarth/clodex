@@ -201,7 +201,7 @@ function Dashboard(): React.ReactNode {
   const [daemonReachable, setDaemonReachable] = useState<boolean | null>(null);
   const [metrics, setMetrics] = useState<MetricBucket[]>([]);
   const [accounts, setAccounts] = useState<Account[]>([]);
-  const [autoSwitchOnUsageLimit, setAutoSwitchOnUsageLimit] = useState(false);
+  const [autoSwitchOnUsageLimit, setAutoSwitchOnUsageLimit] = useState(true);
   const [diagnostics, setDiagnostics] = useState<Diagnostic[]>([]);
   const [diagnosticLogMode, setDiagnosticLogMode] = useState<DiagnosticLogMode>('error');
   const [secondwind, setSecondwind] = useState<SecondwindSnapshot | null>(null);
