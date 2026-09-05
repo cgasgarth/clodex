@@ -2,7 +2,7 @@ import { isNumber } from '../runtime/type-guards.js';
 import { performance } from 'node:perf_hooks';
 import { estimateAnthropicInputTokens } from '../providers/anthropic-endpoints.js';
 import { loadPreferences, savePreferences } from '../config/config.js';
-import { diagnosticRecord, type InferenceTraceEvent } from '../observability/trace-log.js';
+import type { InferenceTraceEvent } from '../observability/trace-log.js';
 import type { ApiProcessingMode } from './api-pricing.js';
 import { estimateApiCost } from './api-pricing.js';
 import {
@@ -14,36 +14,14 @@ import type { SecondwindMode } from '../types.js';
 import {
   SecondwindWorkerPool,
   type SecondwindWorkerPoolSnapshot,
+  type WorkerRewriteResult,
 } from './secondwind-worker-pool.js';
 import type { JsonObject } from '../oauth/responses-websocket/types.js';
 
 const MAX_PENDING_SAVINGS = 2_048;
 const MAX_LATENCY_SAMPLES = 10_000;
 
-interface SecondwindRewriteStats {
-  blocks_rewritten?: number;
-  blocks_first_seen?: number;
-  input_tokens?: number;
-  output_tokens?: number;
-  tokens_saved?: number;
-}
-
-interface SecondwindSession {
-  rewrite(request: JsonObject, body?: Uint8Array): {
-    request?: JsonObject;
-    body?: Uint8Array;
-    stats?: SecondwindRewriteStats;
-  } | Promise<{
-    request?: JsonObject;
-    body?: Uint8Array;
-    stats?: SecondwindRewriteStats;
-  }>;
-  close(): void;
-}
-
-type SecondwindSessionFactory = (
-  key?: string,
-) => SecondwindSession | Promise<SecondwindSession>;
+type SecondwindRewriteStats = NonNullable<WorkerRewriteResult['stats']>;
 
 export interface SecondwindRewriteRequest {
   requestId?: string;
@@ -138,16 +116,10 @@ interface TokenAccounting {
   estimated: boolean;
 }
 
-interface SecondwindRewriteResult {
-  request?: JsonObject;
-  body?: Uint8Array;
-  stats?: SecondwindRewriteStats;
-}
-
 interface SecondwindServiceOptions {
   initialMode?: SecondwindMode;
   persistMode?: (mode: SecondwindMode) => void;
-  createSession?: SecondwindSessionFactory;
+  rewrite: (sessionKey: string | undefined, body: Uint8Array) => WorkerRewriteResult | Promise<WorkerRewriteResult>;
   metrics?: SecondwindMetricsPersistence;
   now?: () => number;
   closeBackend?: () => void;
@@ -369,28 +341,10 @@ function observedRequestSavings(
   };
 }
 
-async function defaultCreateSession(): Promise<SecondwindSession> {
-  const { Session } = await import('secondwind');
-  const session = new Session();
-  return {
-    rewrite(request) {
-      const nativeRequest: Parameters<typeof session.rewrite>[0] = JSON.parse(JSON.stringify(request));
-      const result = session.rewrite(nativeRequest);
-      return {
-        request: diagnosticRecord(result.request),
-        stats: result.stats,
-      };
-    },
-    close() {
-      session.close();
-    },
-  };
-}
-
 export class SecondwindService {
   readonly #since = new Date().toISOString();
   readonly #persistMode: (mode: SecondwindMode) => void;
-  readonly #createSession: SecondwindSessionFactory;
+  readonly #rewrite: SecondwindServiceOptions['rewrite'];
   readonly #now: () => number;
   readonly #closeBackend: () => void;
   readonly #backendSnapshot?: () => SecondwindWorkerPoolSnapshot;
@@ -414,10 +368,10 @@ export class SecondwindService {
     this.#pendingSavings.set(requestId, pending);
   }
 
-  constructor(options: SecondwindServiceOptions = {}) {
+  constructor(options: SecondwindServiceOptions) {
     this.#mode = normalizeSecondwindMode(options.initialMode);
     this.#persistMode = options.persistMode ?? (() => {});
-    this.#createSession = options.createSession ?? defaultCreateSession;
+    this.#rewrite = options.rewrite;
     this.#metrics = options.metrics;
     this.#lifetime = loadLifetimeMetrics(options.metrics);
     this.#now = options.now ?? performance.now.bind(performance);
@@ -512,12 +466,10 @@ export class SecondwindService {
     const sessionKey = input.sessionId
       ? `${input.modelId}:${input.sessionId}`
       : undefined;
-    let session: SecondwindSession | undefined;
     try {
       if (sessionKey) this.#markSessionActive(sessionKey);
-      session = await this.#createSession(sessionKey);
       this.#loaded = true;
-      const result: SecondwindRewriteResult = await session.rewrite(input.request, input.body);
+      const result = await this.#rewrite(sessionKey, input.body);
 
       const blocksRewritten = Math.max(
         0,
@@ -528,22 +480,12 @@ export class SecondwindService {
       let rewrittenRequest: JsonObject | undefined;
       const readRewrittenRequest = (): JsonObject => {
         if (rewrittenRequest) return rewrittenRequest;
-        if (result.request) {
-          const request = result.request;
-          rewrittenRequest = request;
-          return request;
-        }
-        if (result.body instanceof Uint8Array) {
-          const request: JsonObject = JSON.parse(new TextDecoder().decode(result.body));
-          rewrittenRequest = request;
-          return request;
-        }
-        throw new Error('Secondwind returned an invalid rewritten request');
+        const request: JsonObject = JSON.parse(new TextDecoder().decode(result.body));
+        rewrittenRequest = request;
+        return request;
       };
       const optimizedBody = blocksRewritten > 0
-        ? result.body instanceof Uint8Array
-          ? Buffer.from(result.body.buffer, result.body.byteOffset, result.body.byteLength)
-          : Buffer.from(JSON.stringify(readRewrittenRequest()))
+        ? Buffer.from(result.body.buffer, result.body.byteOffset, result.body.byteLength)
         : input.body;
       if (input.recordMetrics !== false) {
         const accounting = tokenAccounting(
@@ -606,7 +548,6 @@ export class SecondwindService {
       this.#lastError = error instanceof Error ? error.message : String(error);
       return input.body;
     } finally {
-      session?.close();
       if (sessionKey) this.#markSessionFinished(sessionKey);
       const latencyMs = Math.max(0, this.#now() - startedAt);
       this.#latencySamples.push(latencyMs);
@@ -723,19 +664,7 @@ export function createDaemonSecondwindService(
     initialMode: loadPreferences().secondwindMode,
     metrics,
     persistMode: mode => savePreferences({ secondwindMode: mode }),
-    createSession: key => {
-      return {
-        rewrite: async (_request, body) => {
-          if (!body) throw new Error('Secondwind worker rewrite requires serialized request bytes');
-          const result = await workers.rewrite(key, body);
-          return {
-            body: result.body,
-            stats: result.stats,
-          };
-        },
-        close: () => {},
-      };
-    },
+    rewrite: (key, body) => workers.rewrite(key, body),
     closeBackend: () => workers.close(),
     backendSnapshot: () => workers.snapshot(),
   });

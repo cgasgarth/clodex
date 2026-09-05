@@ -90,7 +90,7 @@ describe('single-endpoint daemon Secondwind integration', () => {
       },
     });
     const rewrite = vi.fn(() => ({
-      request: toolRequest('compacted by Secondwind'),
+      body: Buffer.from(JSON.stringify(toolRequest('compacted by Secondwind'))),
       stats: {
         blocks_rewritten: 1,
         input_tokens: 1_503,
@@ -102,7 +102,7 @@ describe('single-endpoint daemon Secondwind integration', () => {
     const secondwind = new SecondwindService({
       initialMode: 'on',
       metrics,
-      createSession: async () => ({ rewrite, close: () => {} }),
+      rewrite,
     });
     const route: ProxyRoute = {
       aliasId: 'sol',

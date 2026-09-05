@@ -20,11 +20,8 @@ function toolRequest(content: string): JsonObject {
 
 describe('Secondwind daemon service', () => {
   it('defaults to on and loads the optimizer', async () => {
-    const createSession = vi.fn(async () => ({
-      rewrite: (request: JsonObject) => ({ request }),
-      close: () => {},
-    }));
-    const service = new SecondwindService({ createSession });
+    const rewrite = vi.fn((_key: string | undefined, body: Uint8Array) => ({ body }));
+    const service = new SecondwindService({ rewrite });
     const body = Buffer.from(JSON.stringify(toolRequest('unchanged')));
 
     expect(await service.rewrite({
@@ -33,7 +30,7 @@ describe('Secondwind daemon service', () => {
       sessionId: 'session-1',
       modelId: 'gpt-5.6-sol',
     })).toBe(body);
-    expect(createSession).toHaveBeenCalledTimes(1);
+    expect(rewrite).toHaveBeenCalledTimes(1);
     expect(service.snapshot()).toMatchObject({
       mode: 'on',
       loaded: true,
@@ -42,9 +39,9 @@ describe('Secondwind daemon service', () => {
   });
 
   it('applies on requests, bypasses off requests, and persists mode changes', async () => {
-    const close = vi.fn();
-    const rewrite = vi.fn((_request: JsonObject) => ({
-      request: toolRequest('short'),
+    const closeBackend = vi.fn();
+    const rewrite = vi.fn(() => ({
+      body: Buffer.from(JSON.stringify(toolRequest('short'))),
       stats: {
         blocks_rewritten: 1,
         input_tokens: 4_000,
@@ -57,7 +54,8 @@ describe('Secondwind daemon service', () => {
     const service = new SecondwindService({
       initialMode: 'on',
       persistMode,
-      createSession: async () => ({ rewrite, close }),
+      rewrite,
+      closeBackend,
       now: () => {
         clock += 5;
         return clock;
@@ -113,18 +111,15 @@ describe('Secondwind daemon service', () => {
     expect(rewrite).toHaveBeenCalledTimes(2);
 
     service.close();
-    expect(close).toHaveBeenCalledTimes(2);
+    expect(closeBackend).toHaveBeenCalledTimes(1);
   });
 
   it('rewrites count requests without booking savings metrics', async () => {
     const service = new SecondwindService({
       initialMode: 'on',
-      createSession: async () => ({
-        rewrite: () => ({
-          request: toolRequest('short'),
-          stats: { blocks_rewritten: 1 },
-        }),
-        close: () => {},
+      rewrite: () => ({
+        body: Buffer.from(JSON.stringify(toolRequest('short'))),
+        stats: { blocks_rewritten: 1 },
       }),
     });
     const original = toolRequest('long '.repeat(1_000));
@@ -143,12 +138,9 @@ describe('Secondwind daemon service', () => {
   it('marks the compatibility estimate when optimizer token stats are absent', async () => {
     const service = new SecondwindService({
       initialMode: 'on',
-      createSession: async () => ({
-        rewrite: () => ({
-          request: toolRequest('short'),
-          stats: { blocks_rewritten: 1 },
-        }),
-        close: () => {},
+      rewrite: () => ({
+        body: Buffer.from(JSON.stringify(toolRequest('short'))),
+        stats: { blocks_rewritten: 1 },
       }),
     });
     const original = toolRequest('long output '.repeat(1_000));
@@ -171,18 +163,15 @@ describe('Secondwind daemon service', () => {
   it('estimates recurring savings when a persistent session reuses frozen blocks', async () => {
     const service = new SecondwindService({
       initialMode: 'on',
-      createSession: async () => ({
-        rewrite: () => ({
-          request: toolRequest('short'),
-          stats: {
-            blocks_rewritten: 1,
-            blocks_first_seen: 0,
-            input_tokens: 0,
-            output_tokens: 0,
-            tokens_saved: 0,
-          },
-        }),
-        close: () => {},
+      rewrite: () => ({
+        body: Buffer.from(JSON.stringify(toolRequest('short'))),
+        stats: {
+          blocks_rewritten: 1,
+          blocks_first_seen: 0,
+          input_tokens: 0,
+          output_tokens: 0,
+          tokens_saved: 0,
+        },
       }),
     });
     const original = toolRequest('long recurring output '.repeat(1_000));
@@ -207,12 +196,9 @@ describe('Secondwind daemon service', () => {
     const body = Buffer.from('{\n  "model": "sol", "messages": []\n}\n');
     const service = new SecondwindService({
       initialMode: 'on',
-      createSession: async () => ({
-        rewrite: () => ({
-          request,
-          stats: { blocks_rewritten: 0 },
-        }),
-        close: () => {},
+      rewrite: () => ({
+        body,
+        stats: { blocks_rewritten: 0 },
       }),
     });
 
@@ -230,21 +216,18 @@ describe('Secondwind daemon service', () => {
     const optimizedBody = new TextEncoder().encode('worker-owned-wire-bytes');
     const service = new SecondwindService({
       initialMode: 'on',
-      createSession: async () => ({
-        rewrite: (_request, body) => {
-          expect(body).toBe(originalBody);
-          return {
-            body: optimizedBody,
-            stats: {
-              blocks_rewritten: 1,
-              input_tokens: 100,
-              output_tokens: 40,
-              tokens_saved: 60,
-            },
-          };
-        },
-        close: () => {},
-      }),
+      rewrite: (_key, body) => {
+        expect(body).toBe(originalBody);
+        return {
+          body: optimizedBody,
+          stats: {
+            blocks_rewritten: 1,
+            input_tokens: 100,
+            output_tokens: 40,
+            tokens_saved: 60,
+          },
+        };
+      },
     });
 
     const rewritten = await service.rewrite({
@@ -265,7 +248,7 @@ describe('Secondwind daemon service', () => {
   it('fails open and reports optimizer errors', async () => {
     const service = new SecondwindService({
       initialMode: 'on',
-      createSession: async () => {
+      rewrite: async () => {
         throw new Error('native load failed');
       },
     });
@@ -287,12 +270,9 @@ describe('Secondwind daemon service', () => {
   it('reports unsupported models as unpriced instead of zero-dollar savings', async () => {
     const service = new SecondwindService({
       initialMode: 'on',
-      createSession: async () => ({
-        rewrite: () => ({
-          request: toolRequest('short'),
-          stats: { blocks_rewritten: 1 },
-        }),
-        close: () => {},
+      rewrite: () => ({
+        body: Buffer.from(JSON.stringify(toolRequest('short'))),
+        stats: { blocks_rewritten: 1 },
       }),
     });
     const request = toolRequest('long output '.repeat(1_000));
@@ -314,17 +294,14 @@ describe('Secondwind daemon service', () => {
   it('prices savings from observed cache reads and cache writes', async () => {
     const service = new SecondwindService({
       initialMode: 'on',
-      createSession: async () => ({
-        rewrite: () => ({
-          request: toolRequest('short'),
-          stats: {
-            blocks_rewritten: 1,
-            input_tokens: 2_000,
-            output_tokens: 1_000,
-            tokens_saved: 1_000,
-          },
-        }),
-        close: () => {},
+      rewrite: () => ({
+        body: Buffer.from(JSON.stringify(toolRequest('short'))),
+        stats: {
+          blocks_rewritten: 1,
+          input_tokens: 2_000,
+          output_tokens: 1_000,
+          tokens_saved: 1_000,
+        },
       }),
     });
     const request = toolRequest('long output');
@@ -388,21 +365,18 @@ describe('Secondwind daemon service', () => {
     let index = 0;
     const service = new SecondwindService({
       initialMode: 'on',
-      createSession: async () => ({
-        rewrite: () => {
-          const tokensSaved = saved[index++]!;
-          return {
-            request: toolRequest('short'),
-            stats: {
-              blocks_rewritten: 1,
-              input_tokens: 1_000 + tokensSaved,
-              output_tokens: 1_000,
-              tokens_saved: tokensSaved,
-            },
-          };
-        },
-        close: () => {},
-      }),
+      rewrite: () => {
+        const tokensSaved = saved[index++]!;
+        return {
+          body: Buffer.from(JSON.stringify(toolRequest('short'))),
+          stats: {
+            blocks_rewritten: 1,
+            input_tokens: 1_000 + tokensSaved,
+            output_tokens: 1_000,
+            tokens_saved: tokensSaved,
+          },
+        };
+      },
     });
     const parentIds = ['parent-a', 'parent-a', 'parent-b', 'parent-c', 'parent-d'];
     for (const [requestIndex, reportingSessionId] of parentIds.entries()) {
@@ -434,17 +408,14 @@ describe('Secondwind daemon service', () => {
   it('keeps fast-mode savings within one uniform context tier', async () => {
     const service = new SecondwindService({
       initialMode: 'on',
-      createSession: async () => ({
-        rewrite: () => ({
-          request: toolRequest('short'),
-          stats: {
-            blocks_rewritten: 1,
-            input_tokens: 275_000,
-            output_tokens: 265_000,
-            tokens_saved: 10_000,
-          },
-        }),
-        close: () => {},
+      rewrite: () => ({
+        body: Buffer.from(JSON.stringify(toolRequest('short'))),
+        stats: {
+          blocks_rewritten: 1,
+          input_tokens: 275_000,
+          output_tokens: 265_000,
+          tokens_saved: 10_000,
+        },
       }),
     });
     const request = toolRequest('long output');
@@ -500,24 +471,18 @@ describe('Secondwind daemon service', () => {
       .toBeCloseTo(original.total - optimized.total);
   });
 
-  it('uses request-local optimizer sessions while tracking active conversations', async () => {
+  it('tracks concurrent rewrites for the same conversation', async () => {
     let release!: () => void;
     const gate = new Promise<void>(resolve => {
       release = resolve;
     });
-    const createSession = vi.fn(async () => {
+    const rewrite = vi.fn(async (_key: string | undefined, body: Uint8Array) => {
       await gate;
-      return {
-        rewrite: (request: JsonObject) => ({
-          request,
-          stats: { blocks_rewritten: 0 },
-        }),
-        close: () => {},
-      };
+      return { body, stats: { blocks_rewritten: 0 } };
     });
     const service = new SecondwindService({
       initialMode: 'on',
-      createSession,
+      rewrite,
     });
     const request = toolRequest('concurrent');
     const body = Buffer.from(JSON.stringify(request));
@@ -537,22 +502,17 @@ describe('Secondwind daemon service', () => {
     release();
     await Promise.all([first, second]);
 
-    expect(createSession).toHaveBeenCalledTimes(2);
+    expect(rewrite).toHaveBeenCalledTimes(2);
     expect(service.snapshot().sessions).toBe(0);
   });
 
   it('keeps missing-session requests ephemeral and isolates conversation keys', async () => {
-    const close = vi.fn();
-    const createSession = vi.fn(async () => ({
-      rewrite: (request: JsonObject) => ({
-        request,
-        stats: { blocks_rewritten: 0 },
-      }),
-      close,
+    const rewrite = vi.fn((_key: string | undefined, body: Uint8Array) => ({
+      body, stats: { blocks_rewritten: 0 },
     }));
     const service = new SecondwindService({
       initialMode: 'on',
-      createSession,
+      rewrite,
     });
     const request = toolRequest('isolated');
     const body = Buffer.from(JSON.stringify(request));
@@ -572,8 +532,10 @@ describe('Secondwind daemon service', () => {
       modelId: 'gpt-5.6-sol',
     });
 
-    expect(createSession).toHaveBeenCalledTimes(4);
-    expect(close).toHaveBeenCalledTimes(4);
+    expect(rewrite).toHaveBeenCalledTimes(4);
+    expect(rewrite.mock.calls.map(([key]) => key)).toEqual([
+      undefined, undefined, 'gpt-5.6-sol:parent:agent-a', 'gpt-5.6-sol:parent:agent-b',
+    ]);
     expect(service.snapshot().sessions).toBe(0);
   });
 
@@ -604,7 +566,7 @@ describe('Secondwind daemon service', () => {
     expect(result.snapshot.applied).toMatchObject({
       requests: 2,
       blocksRewritten: 2,
-      estimatedTokenRequests: 0,
+      estimatedTokenRequests: 1,
     });
     expect(result.snapshot.applied.tokensReduced).toBeGreaterThan(0);
   });

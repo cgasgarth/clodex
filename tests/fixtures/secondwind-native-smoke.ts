@@ -1,4 +1,5 @@
 import { SecondwindService } from '../../src/daemon/secondwind.js';
+import { SecondwindWorkerPool } from '../../src/daemon/secondwind-worker-pool.js';
 
 const records = Array.from({ length: 400 }, (_, index) => ({
   id: index,
@@ -18,7 +19,12 @@ const request = {
   }],
 };
 const body = Buffer.from(JSON.stringify(request));
-const service = new SecondwindService({ initialMode: 'on' });
+const workers = new SecondwindWorkerPool();
+const service = new SecondwindService({
+  initialMode: 'on',
+  rewrite: (key, bytes) => workers.rewrite(key, bytes),
+  closeBackend: () => workers.close(),
+});
 const rewritten = await service.rewrite({
   body,
   request,
