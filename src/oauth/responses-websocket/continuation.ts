@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { claudeQueuedEventKind } from '../../claude-queued-events.js';
 import { IMAGE_INPUT_TOKEN_ESTIMATE } from '../../providers/anthropic-endpoints.js';
 import { isBoolean, isNumber, isObject, isString } from '../../runtime/type-guards.js';
 import { RESPONSES_COMPACTION_RETAINED_USER_TOKENS } from './types.js';
@@ -370,8 +371,6 @@ export function conversationItemHash(value: JsonValue): string {
   return createHash('sha256').update(canonicalJson(normalizeToolCallJson(value))).digest('hex').slice(0, 16);
 }
 
-const CLAUDE_MID_TURN_MESSAGE_PREFIX = 'The user sent a new message while you were working:\n';
-const CLAUDE_MID_TURN_MESSAGE_SUFFIX = 'Address the message above as you continue this turn.';
 const CLAUDE_REJECTED_TOOL_RESULT = 'The user doesn\'t want to proceed with this tool use. '
   + 'The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file). '
   + 'STOP what you are doing and wait for the user to tell you how to proceed.';
@@ -393,19 +392,8 @@ function isQueuedEventItem(value: JsonValue): boolean {
   ) return true;
   if (!isString(value.role)) return false;
   const texts = conversationItemTexts(value);
-  const taskNotification = texts.some(text => {
-    const trimmed = text.trim();
-    return trimmed.startsWith('<task-notification>')
-      && trimmed.endsWith('</task-notification>');
-  });
-  if (value.role === 'developer') return taskNotification;
-  return value.role === 'user' && (
-    taskNotification
-    || texts.some(text => (
-      text.startsWith(CLAUDE_MID_TURN_MESSAGE_PREFIX)
-        && text.endsWith(CLAUDE_MID_TURN_MESSAGE_SUFFIX)
-    ))
-  );
+  if (value.role === 'developer') return texts.some(text => claudeQueuedEventKind(text) === 'task');
+  return value.role === 'user' && texts.some(text => claudeQueuedEventKind(text) !== undefined);
 }
 
 /** Hash only Claude-owned queued inputs that may be absent from its next replay. */
