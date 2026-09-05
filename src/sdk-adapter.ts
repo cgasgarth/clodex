@@ -795,6 +795,7 @@ export function translateRequest(
   }
 
   const upstreamModelId = options?.reasoningMetadata?.upstreamModelId ?? body.model;
+  const supportsTemperature = upstreamModelId.toLowerCase() !== 'gpt-6-astra';
   const supportsExplicitOpenAiCaching = !options?.openAiOAuth
     && supportsOpenAiPromptCacheBreakpoints(upstreamModelId);
 
@@ -837,7 +838,7 @@ export function translateRequest(
     tools: translateTools(upstreamTools.length ? upstreamTools : undefined, npm),
     toolChoice: compactRequest ? 'none' : translateToolChoice(body.tool_choice),
     maxOutputTokens: options?.openAiOAuth ? undefined : body.max_tokens,
-    temperature: body.temperature,
+    temperature: supportsTemperature ? body.temperature : undefined,
     providerOptions,
   };
 }

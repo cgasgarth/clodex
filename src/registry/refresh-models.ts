@@ -25,7 +25,8 @@ import type { CachedModel, ProviderRegistry, RegistryProvider } from './types.js
 import {
   buildOpenAiOAuthModels,
   CHATGPT_CODEX_UNSUPPORTED_MODELS,
-  GPT_5_6_CONTEXT_WINDOW,
+  OPENAI_MILLION_CONTEXT_MODELS,
+  OPENAI_MILLION_CONTEXT_WINDOW,
 } from '../data/openai-oauth-models.js';
 import { buildXaiOAuthModels } from '../data/xai-oauth-models.js';
 import { modelPrefersResponsesApi } from '../provider-factory.js';
@@ -144,9 +145,9 @@ function buildDynamicOAuthModel(entry: OpenAiModelEntry, seedById: Map<string, C
   const seed = seedById.get(entry.id);
   if (seed) {
     // Older backend catalogs can still report the pre-1M 272K value. Do not let
-    // that stale metadata downgrade Sol, Terra, or Luna in Claude Code.
-    const contextWindow = /^gpt-5\.6-(?:sol|terra|luna)$/i.test(entry.id)
-      ? GPT_5_6_CONTEXT_WINDOW
+    // that stale metadata downgrade a confirmed million-token route in Claude Code.
+    const contextWindow = OPENAI_MILLION_CONTEXT_MODELS.has(entry.id.toLowerCase())
+      ? OPENAI_MILLION_CONTEXT_WINDOW
       : entry.context_window ?? seed.contextWindow;
     return {
       ...seed,

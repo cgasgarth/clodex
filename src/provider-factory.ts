@@ -72,9 +72,13 @@ export function modelPrefersResponsesApi(modelId: string): boolean {
   if (RESPONSES_ONLY_PREFIXES.some(prefix => lower === prefix || lower.startsWith(`${prefix}-`))) {
     return true;
   }
-  // gpt-5.4 and later minor versions require the Responses API (e.g. gpt-5.4, gpt-5.5, gpt-5.6, gpt-5.6-fast).
-  const gpt5Minor = lower.match(/^gpt-5\.(\d+)(?:-|$)/);
-  if (gpt5Minor && Number(gpt5Minor[1]) >= 4) return true;
+  // GPT-5.4 and later generations use Responses for agentic tool calls.
+  const gptVersion = lower.match(/^gpt-(\d+)(?:\.(\d+))?(?:-|$)/);
+  if (gptVersion) {
+    const major = Number(gptVersion[1]);
+    const minor = Number(gptVersion[2] ?? 0);
+    if (major > 5 || (major === 5 && minor >= 4)) return true;
+  }
   // Versioned Codex IDs (e.g. gpt-5.3-codex) don't match the gpt-5-codex prefix.
   if (lower.startsWith('gpt-') && lower.includes('-codex')) return true;
   return false;
@@ -387,6 +391,7 @@ export interface ReasoningCapabilities {
 const ANTHROPIC_EFFORT_LEVELS = ['low', 'medium', 'high'] as const;
 const OPENAI_EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh'] as const;
 const GPT_56_EFFORT_LEVELS = ['none', 'low', 'medium', 'high', 'xhigh', 'max'] as const;
+const GPT_6_ASTRA_EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
 const MISTRAL_EFFORT_LEVELS = ['high', 'off'] as const;
 const XAI_EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh'] as const;
 const OPENROUTER_EFFORT_LEVELS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'] as const;
@@ -573,11 +578,17 @@ function isGpt56Model(modelId: string): boolean {
   return /^gpt-5\.6(?:-|$)/i.test(modelId);
 }
 
+function isGpt6AstraModel(modelId: string): boolean {
+  return modelId.toLowerCase() === 'gpt-6-astra';
+}
+
 function mapCodexEffortToOpenAI(effort: string, modelId?: string): string | undefined {
   if (
     modelId
-    && isGpt56Model(modelId)
-    && includesString(GPT_56_EFFORT_LEVELS, effort)
+    && (
+      (isGpt6AstraModel(modelId) && includesString(GPT_6_ASTRA_EFFORT_LEVELS, effort))
+      || (isGpt56Model(modelId) && includesString(GPT_56_EFFORT_LEVELS, effort))
+    )
   ) {
     return effort;
   }
@@ -647,7 +658,9 @@ export function getReasoningCapabilities(
     const prefersResponses = modelPrefersResponsesApi(modelId);
     if (prefersResponses || metadata?.reasoning) {
       return {
-        levels: isGpt56Model(modelId) ? [...GPT_56_EFFORT_LEVELS] : [...OPENAI_EFFORT_LEVELS],
+        levels: isGpt6AstraModel(modelId)
+          ? [...GPT_6_ASTRA_EFFORT_LEVELS]
+          : isGpt56Model(modelId) ? [...GPT_56_EFFORT_LEVELS] : [...OPENAI_EFFORT_LEVELS],
         defaultLevel: 'medium',
         supportsSummaries: true,
         mode: 'controllable',

@@ -259,7 +259,7 @@ beforeEach(() => {
         Authorization: 'Bearer tok',
         'ChatGPT-Account-Id': 'acct-123',
         originator: 'clodex',
-        version: '0.144.1',
+        version: '0.153.3',
         'x-openai-internal-codex-responses-lite': 'true',
       },
       body: JSON.stringify({ model: 'gpt-5.6-luna', input: [] }),
@@ -269,7 +269,7 @@ beforeEach(() => {
     expect(lastSocket().url).toBe(WS_URL);
     expect(headers['Authorization']).toBe('Bearer tok');
     expect(headers['ChatGPT-Account-Id']).toBe('acct-123');
-    expect(headers['version']).toBe('0.144.1');
+    expect(headers['version']).toBe('0.153.3');
     expect(headers['x-openai-internal-codex-responses-lite']).toBe('true');
     expect(headers['OpenAI-Beta']).toContain('responses_websockets');
   });
@@ -321,7 +321,7 @@ beforeEach(() => {
     await wsFetch('https://x', {
       method: 'POST',
       headers: {
-        version: '0.144.1',
+        version: '0.153.3',
         'x-openai-internal-codex-responses-lite': 'true',
       },
       body: JSON.stringify({
@@ -350,7 +350,7 @@ beforeEach(() => {
     await wsFetch('https://x', {
       method: 'POST',
       headers: {
-        version: '0.144.1',
+        version: '0.153.3',
         'x-openai-internal-codex-responses-lite': 'true',
       },
       body: JSON.stringify({

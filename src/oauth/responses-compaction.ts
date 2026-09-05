@@ -20,6 +20,7 @@ const COMPACT_BODY_FIELDS = [
 ] as const;
 
 export const OPENAI_COMPACTION_DEFAULT_THRESHOLD = 350_000;
+export const GPT_6_ASTRA_COMPACTION_THRESHOLD = 900_000;
 export const OPENAI_COMPACTION_MAX_CONTEXT_RATIO = 0.9;
 const OPENAI_COMPACTION_REARM_CONTEXT_RATIO = 0.05;
 const OPENAI_COMPACTION_REARM_MIN_TOKENS = 16_000;
@@ -104,10 +105,12 @@ export class ResponsesCompactionError extends Error {
 }
 
 /**
- * Resolve the native-compaction threshold. Enabled GPT models compact at
- * 350K input tokens, capped at 90% of smaller advertised context windows.
+ * Resolve the native-compaction threshold. GPT-6 Astra compacts at 900K input
+ * tokens. Other enabled GPT models compact at 350K. Both are capped at 90% of
+ * smaller advertised context windows.
  */
 export function resolveOpenAiCompactionThreshold(
+  modelId: string,
   contextWindow: number | undefined,
   enabled = isNativeCompactionEnabled(),
 ): number | undefined {
@@ -121,9 +124,12 @@ export function resolveOpenAiCompactionThreshold(
   const modelSafeThreshold = usableContextWindow === undefined
     ? undefined
     : Math.floor(usableContextWindow * OPENAI_COMPACTION_MAX_CONTEXT_RATIO);
+  const configuredThreshold = modelId.toLowerCase() === 'gpt-6-astra'
+    ? GPT_6_ASTRA_COMPACTION_THRESHOLD
+    : OPENAI_COMPACTION_DEFAULT_THRESHOLD;
   return modelSafeThreshold === undefined
     ? undefined
-    : Math.min(OPENAI_COMPACTION_DEFAULT_THRESHOLD, modelSafeThreshold);
+    : Math.min(configuredThreshold, modelSafeThreshold);
 }
 
 /**

@@ -561,6 +561,39 @@ it('logs inference routing metadata without request content', async () => {
     }));
   });
 
+  it('injects the 900K GPT-6 Astra compaction threshold in endpoint mode', async () => {
+    asMocked(resolveProviderCredential).mockResolvedValue('oauth-token');
+    const catalog = createGatewayModelCatalog([{
+      id: 'gpt-6-astra',
+      name: 'GPT-6 Astra',
+      isFree: false,
+      brand: 'OpenAI',
+      providerId: 'oauth-provider',
+      sourceBackend: 'oauth-provider',
+      modelFormat: 'openai',
+      npm: '@ai-sdk/openai',
+      authType: 'oauth',
+      authRef: TEST_HELPER_REF,
+      apiKey: 'launch-token',
+      contextWindow: 1_000_000,
+    }]);
+    const server = await startTestServer({ catalog });
+
+    const response = await fetch(`${server.url}/anthropic/v1/messages`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'anthropic-oauth-provider__gpt-6-astra',
+        messages: [{ role: 'user', content: 'hi' }],
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(createLanguageModel).toHaveBeenCalledWith(expect.objectContaining({
+      openAiCompactThreshold: 900_000,
+    }));
+  });
+
   it('passes Claude compact requests through to the Responses transport context', async () => {
     asMocked(resolveProviderCredential).mockResolvedValue('oauth-token');
     const catalog = createGatewayModelCatalog([{

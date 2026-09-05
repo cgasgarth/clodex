@@ -121,4 +121,34 @@ describe('SDK proxy provider identity', () => {
       openAiCompactThreshold: 244_800,
     }));
   });
+
+  it('injects the 900K GPT-6 Astra compaction threshold in proxy mode', async () => {
+    const route: ProxyRoute = {
+      aliasId: 'anthropic-openai-oauth__gpt-6-astra',
+      realModelId: 'gpt-6-astra',
+      displayName: 'GPT-6 Astra',
+      upstreamUrl: '',
+      apiKey: 'oauth-token',
+      modelFormat: 'openai',
+      npm: '@ai-sdk/openai',
+      providerId: 'openai-oauth',
+      authType: 'oauth',
+      oauthAccountId: 'acct-proxy-astra-compaction',
+      contextWindow: 1_000_000,
+    };
+
+    const handle = await startProxyCatalog([route], route.aliasId, false);
+    const res = await postToProxy(handle.port, {
+      model: route.aliasId,
+      max_tokens: 100,
+      messages: [{ role: 'user', content: 'hi' }],
+      stream: false,
+    });
+    await handle.close();
+
+    expect(res.status, res.body).toBe(200);
+    expect(createLanguageModel).toHaveBeenCalledWith(expect.objectContaining({
+      openAiCompactThreshold: 900_000,
+    }));
+  });
 });

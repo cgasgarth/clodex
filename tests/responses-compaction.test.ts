@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'bun:test';
 import {
   compactRequestPayload,
   compactResponsesWindow,
+  GPT_6_ASTRA_COMPACTION_THRESHOLD,
   OPENAI_COMPACTION_DEFAULT_THRESHOLD,
   OPENAI_COMPACTION_MAX_CONTEXT_RATIO,
   RESPONSES_COMPACT_TIMEOUT_MS,
@@ -17,15 +18,22 @@ describe('Responses standalone compaction', () => {
   });
 
   it('defaults on at 350K within the safe model window and accepts a daemon disable', () => {
-    expect(resolveOpenAiCompactionThreshold(272_000)).toBe(
+    expect(resolveOpenAiCompactionThreshold('gpt-5.6-sol', 272_000)).toBe(
       Math.floor(272_000 * OPENAI_COMPACTION_MAX_CONTEXT_RATIO),
     );
-    expect(resolveOpenAiCompactionThreshold(128_000)).toBe(115_200);
-    expect(resolveOpenAiCompactionThreshold(1_000_000)).toBe(
+    expect(resolveOpenAiCompactionThreshold('gpt-5.6-sol', 128_000)).toBe(115_200);
+    expect(resolveOpenAiCompactionThreshold('gpt-5.6-sol', 1_000_000)).toBe(
       OPENAI_COMPACTION_DEFAULT_THRESHOLD,
     );
-    expect(resolveOpenAiCompactionThreshold(undefined)).toBeUndefined();
-    expect(resolveOpenAiCompactionThreshold(272_000, false)).toBeUndefined();
+    expect(resolveOpenAiCompactionThreshold('gpt-5.6-sol', undefined)).toBeUndefined();
+    expect(resolveOpenAiCompactionThreshold('gpt-5.6-sol', 272_000, false)).toBeUndefined();
+  });
+
+  it('compacts GPT-6 Astra at 900K within the safe model window', () => {
+    expect(resolveOpenAiCompactionThreshold('gpt-6-astra', 1_000_000)).toBe(
+      GPT_6_ASTRA_COMPACTION_THRESHOLD,
+    );
+    expect(resolveOpenAiCompactionThreshold('GPT-6-ASTRA', 800_000)).toBe(720_000);
   });
 
   it('rearms above an opaque post-compaction floor without crossing the hard window', () => {
