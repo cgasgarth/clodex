@@ -1,5 +1,9 @@
 import { isNumber, isString } from '../runtime/type-guards.js';
 import type { DiagnosticRecord } from '../observability/trace-log.js';
+import type { DaemonDiagnostic as Diagnostic } from '../daemon/collector.js';
+import type { DaemonMetricBucket as MetricBucket } from '../daemon/metrics.js';
+import type { DaemonSessionSnapshot as SessionStatus } from '../daemon/session-registry.js';
+import type { ResponsesWebSocketPoolSnapshot as WebSocketStatus } from '../oauth/responses-websocket.js';
 import {
   daemonControlRequest,
   type DaemonControlRequestOptions,
@@ -13,27 +17,7 @@ import { DASHBOARD_CONTROL_REQUEST_TIMEOUT_MS } from '../config/timeouts.js';
 import type { DiagnosticLogMode } from '../types.js';
 import type { NativeCompactionSnapshot } from '../daemon/control-api.js';
 
-interface WebSocketStatus {
-  total: number;
-  open: number;
-  inFlight: number;
-  established: number;
-  nursery: number;
-  isolated: number;
-  partitions: number;
-  checkpoints: number;
-}
-
-interface SessionStatus {
-  sessionHash: string;
-  modelId: string;
-  provider: string;
-  lastActivityAt: string;
-  activeRequests: number;
-  completedRequests: number;
-  cancelledRequests: number;
-  failedRequests: number;
-}
+export type { Diagnostic, MetricBucket };
 
 export interface DaemonStatus {
   running: boolean;
@@ -45,28 +29,6 @@ export interface DaemonStatus {
   websocket: WebSocketStatus;
   activeSessions: number;
   sessions: SessionStatus[];
-}
-
-export interface MetricBucket {
-  timestamp: string;
-  inputTokens: number;
-  cachedInputTokens: number;
-  cacheWriteTokens: number;
-  outputTokens: number;
-  requests: number;
-  errors: number;
-  cancellations: number;
-  durationMs: number;
-  inputCost: number;
-  cacheCost: number;
-  outputCost: number;
-  totalCost: number;
-  pricedRequests: number;
-  unpricedRequests: number;
-  standardRequests: number;
-  fastRequests: number;
-  standardCost: number;
-  fastCost: number;
 }
 
 export interface Account {
@@ -92,18 +54,6 @@ export interface Account {
     stale?: boolean;
     error?: string;
   };
-}
-
-export interface Diagnostic {
-  timestamp: string;
-  kind: string;
-  requestId?: string;
-  sessionId?: string;
-  sessionHash?: string;
-  threadName?: string;
-  code?: string;
-  statusCode?: number;
-  detail?: DiagnosticRecord;
 }
 
 export interface DeviceCodePrompt {

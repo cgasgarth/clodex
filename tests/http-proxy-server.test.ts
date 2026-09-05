@@ -6,8 +6,7 @@ import * as https from 'node:https';
 import * as http from 'node:http';
 import * as net from 'node:net';
 import * as tls from 'node:tls';
-import { EventEmitter, once } from 'node:events';
-import { PassThrough } from 'node:stream';
+import { once } from 'node:events';
 import { gzipSync } from 'node:zlib';
 import { ensureHttpProxyCaBundle, ensureHttpProxyCertificates } from '../src/http-proxy/ca.js';
 import { shouldInterceptConnect, startHttpProxy } from '../src/http-proxy/server.js';
@@ -161,105 +160,6 @@ function activeProxySockets(proxyPort: number): net.Socket[] {
     handle instanceof net.Socket
     && handle.localPort === proxyPort
     && !handle.destroyed);
-}
-
-function adapterRequestWithResponseEvents(
-  emitEvents: (response: http.IncomingMessage) => void,
-): typeof http.request {
-  // SAFETY: The test fixture defines the asserted runtime shape.
-  return ((
-    _options: http.RequestOptions,
-    onResponse: (response: http.IncomingMessage) => void,
-  ) => {
-    // SAFETY: The test fixture defines the asserted runtime shape.
-    const request = new EventEmitter() as EventEmitter & {
-      end(body: Buffer): void;
-      destroy(error?: Error): void;
-    };
-    request.end = () => {
-      queueMicrotask(() => {
-        // SAFETY: The test fixture defines the asserted runtime shape.
-        const response = Object.assign(new PassThrough(), {
-          statusCode: 200,
-          statusMessage: 'OK',
-          headers: { 'content-type': 'text/event-stream' },
-          rawHeaders: ['Content-Type', 'text/event-stream'],
-          complete: false,
-        }) as http.IncomingMessage;
-        onResponse(response);
-        emitEvents(response);
-      });
-    };
-    request.destroy = () => {};
-    return request;
-  }) as typeof http.request;
-}
-
-function closedAdapterRequest() {
-  // SAFETY: The test fixture defines the asserted runtime shape.
-  const request = new EventEmitter() as EventEmitter & {
-    end(body: Buffer): void;
-    destroy(error?: Error): void;
-  };
-  request.end = () => queueMicrotask(() => request.emit('close'));
-  request.destroy = () => {};
-  return request;
-}
-
-async function adapterResponseFailureEntries(
-  logName: string,
-  emitEvents: (response: http.IncomingMessage) => void,
-): Promise<JsonObject[]> {
-  const certificates = ensureHttpProxyCertificates();
-  const inferenceLogPath = join(testHome, logName);
-  const route = {
-    aliasId: 'clodex:test:translated-model',
-    realModelId: 'translated-model',
-    displayName: 'Translated Model',
-    upstreamUrl: '',
-    apiKey: 'provider-key',
-    modelFormat: 'openai' as const,
-    npm: '@ai-sdk/openai-compatible',
-    providerId: 'test-provider',
-  };
-  const proxy = await startHttpProxy({
-    routes: [route],
-    adapterHandle: {
-      port: 1,
-      close: () => {},
-    },
-    inferenceLogPath,
-    adapterRequest: adapterRequestWithResponseEvents(emitEvents),
-  });
-
-  try {
-    const body = JSON.stringify({
-      model: route.aliasId,
-      messages: [{ role: 'user', content: 'test adapter response failure' }],
-      stream: true,
-    });
-    const secure = await connectMitm(proxy.port, certificates.caCert);
-    secure.resume();
-    secure.write([
-      'POST /v1/messages HTTP/1.1',
-      'Host: api.anthropic.com',
-      'Content-Type: application/json',
-      `Content-Length: ${Buffer.byteLength(body)}`,
-      'Connection: close',
-      '',
-      '',
-    ].join('\r\n') + body);
-    await waitForSocketResponseEnd(secure).catch(() => {});
-    await new Promise(resolve => setImmediate(resolve));
-
-    return (await readFlushedLog(inferenceLogPath))
-      .trim()
-      .split('\n')
-      // SAFETY: The test fixture defines the asserted runtime shape.
-      .map(line => /* SAFETY: Each trace line is a serialized JSON object. */ JSON.parse(line) as JsonObject);
-  } finally {
-    await proxy.close();
-  }
 }
 
 beforeAll(() => {
@@ -1472,7 +1372,7 @@ it('preserves an existing custom CA in the child trust bundle', () => {
     }
   }, 20_000);
 
-  it('keeps translated adapter connections out of the process-global pool', async () => {
+  it('reuses translated adapter connections', async () => {
     const certificates = ensureHttpProxyCertificates();
     let connectionCount = 0;
     const adapterServer = http.createServer((req, res) => {
@@ -1509,12 +1409,6 @@ it('preserves an existing custom CA in the child trust bundle', () => {
           adapterServer.close();
         },
       },
-      // SAFETY: The test fixture defines the asserted runtime shape.
-      adapterRequest: ((options: http.RequestOptions, onResponse: (response: http.IncomingMessage) => void) =>
-        http.request(
-          { ...options, agent: options.agent ?? false },
-          onResponse,
-        )) as typeof http.request,
     });
 
     try {
@@ -1556,9 +1450,14 @@ it('preserves an existing custom CA in the child trust bundle', () => {
     }
   }, 20_000);
 
-  it('logs a distinct source when the adapter request closes before headers', async () => {
+  it('logs a request failure when the adapter closes before headers', async () => {
     const certificates = ensureHttpProxyCertificates();
     const inferenceLogPath = join(testHome, 'adapter-request-close-inference.jsonl');
+    const adapterServer = http.createServer((req, res) => {
+      req.resume();
+      req.once('end', () => res.destroy());
+    });
+    const adapterPort = await listen(adapterServer);
     const route = {
       aliasId: 'clodex:test:translated-model',
       realModelId: 'translated-model',
@@ -1569,16 +1468,17 @@ it('preserves an existing custom CA in the child trust bundle', () => {
       npm: '@ai-sdk/openai-compatible',
       providerId: 'test-provider',
     };
-    // SAFETY: The test fixture defines the asserted runtime shape.
     const proxy = await startHttpProxy({
       routes: [route],
       adapterHandle: {
-        port: 1,
-        close: () => {},
+        port: adapterPort,
+        close: () => {
+          adapterServer.closeAllConnections();
+          adapterServer.close();
+        },
       },
       inferenceLogPath,
-      adapterRequest: closedAdapterRequest,
-    } as Parameters<typeof startHttpProxy>[0]);
+    });
 
     try {
       const response = await requestMitm(
@@ -1601,8 +1501,8 @@ it('preserves an existing custom CA in the child trust bundle', () => {
         route: 'translated',
         statusCode: 502,
         phase: 'waiting_for_headers',
-        errorType: 'Error',
-        failureSource: 'adapter_request_close',
+        errorType: expect.stringMatching(/^(?:Error|TypeError)$/),
+        failureSource: 'adapter_request_error',
         terminationSource: 'upstream_failure',
       }));
     } finally {
@@ -1686,68 +1586,4 @@ it('preserves an existing custom CA in the child trust bundle', () => {
     } finally {
       await proxy.close();
     }
-  }, 20_000);
-
-  it('logs adapter response errno and source when the response emits an error', async () => {
-    const entries = await adapterResponseFailureEntries(
-      'adapter-response-error-inference.jsonl',
-      response => {
-        const error = Object.assign(new Error('adapter response reset'), {
-          code: 'ECONNRESET',
-        });
-        response.emit('error', error);
-      },
-    );
-    const failures = entries.filter(entry => entry['event'] === 'response_failed');
-
-    expect(failures).toEqual([
-      expect.objectContaining({
-        event: 'response_failed',
-        statusCode: 200,
-        phase: 'waiting_for_first_byte',
-        errorType: 'Error',
-        errorCode: 'ECONNRESET',
-        failureSource: 'adapter_response_error',
-        terminationSource: 'upstream_failure',
-      }),
-    ]);
-  }, 20_000);
-
-  it('logs adapter response abort before a following close', async () => {
-    const entries = await adapterResponseFailureEntries(
-      'adapter-response-aborted-inference.jsonl',
-      response => {
-        response.emit('aborted');
-        response.emit('close');
-      },
-    );
-    const failures = entries.filter(entry => entry['event'] === 'response_failed');
-
-    expect(failures).toEqual([
-      expect.objectContaining({
-        event: 'response_failed',
-        statusCode: 200,
-        phase: 'waiting_for_first_byte',
-        failureSource: 'adapter_response_aborted',
-        terminationSource: 'upstream_failure',
-      }),
-    ]);
-  }, 20_000);
-
-  it('logs adapter response close when no more specific failure fires first', async () => {
-    const entries = await adapterResponseFailureEntries(
-      'adapter-response-close-inference.jsonl',
-      response => response.emit('close'),
-    );
-    const failures = entries.filter(entry => entry['event'] === 'response_failed');
-
-    expect(failures).toEqual([
-      expect.objectContaining({
-        event: 'response_failed',
-        statusCode: 200,
-        phase: 'waiting_for_first_byte',
-        failureSource: 'adapter_response_close',
-        terminationSource: 'upstream_failure',
-      }),
-    ]);
   }, 20_000);

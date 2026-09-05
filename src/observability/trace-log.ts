@@ -336,13 +336,6 @@ export type InferenceResponsePhase =
   | 'streaming'
   | 'delivering';
 
-export type InferenceFailureSource =
-  | 'adapter_request_error'
-  | 'adapter_request_close'
-  | 'adapter_response_error'
-  | 'adapter_response_aborted'
-  | 'adapter_response_close';
-
 type InferenceTerminationSource =
   | 'downstream_client'
   | 'local_shutdown'
@@ -382,7 +375,7 @@ export interface InferenceResponseLifecycleLogEntry {
   errorType?: string;
   errorCode?: string;
   errorSignature?: string;
-  failureSource?: InferenceFailureSource;
+  failureSource?: 'adapter_request_error' | 'adapter_response_error';
   terminationSource?: InferenceTerminationSource;
   partialResponse?: boolean;
   replaySafe?: boolean;

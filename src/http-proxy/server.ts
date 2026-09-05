@@ -32,7 +32,6 @@ import {
   writeInferenceResponseLifecycleLog,
   writeInferenceResponseErrorLog,
   writeWebSocketDiagnosticRequestLog,
-  type InferenceFailureSource,
   type InferenceResponsePhase,
 } from '../observability/trace-log.js';
 import type { JsonValue } from '../oauth/responses-websocket/types.js';
@@ -189,8 +188,6 @@ export interface HttpProxyOptions {
   anthropicRejectUnauthorized?: boolean;
   /** Test hook for observing relay-route isolation without calling an AI provider. */
   adapterHandle?: ProxyHandle;
-  /** Test hook for exercising adapter request transport failures. */
-  adapterRequest?: typeof http.request;
   /** Test hook for simulating a server-observed downstream disconnect. */
   onMitmResponse?: (response: http.ServerResponse) => void;
   /** Test hook; production emits a progress record every 30 seconds. */
@@ -219,23 +216,6 @@ interface SocketEndpoint {
 
 function socketIdentity(socket: SocketEndpoint): string {
   return `${socket.remoteAddress ?? ''}:${socket.remotePort ?? 0}`;
-}
-
-function adapterNodeHeaders(
-  req: http.IncomingMessage,
-  contentLength: number,
-  requestId: string | undefined,
-  launchTicket: string | undefined,
-): http.OutgoingHttpHeaders {
-  const headers: http.OutgoingHttpHeaders = {
-    'Content-Type': 'application/json',
-    'Content-Length': String(contentLength),
-  };
-  const sessionId = req.headers['x-claude-code-session-id'];
-  if (isString(sessionId)) headers['x-claude-code-session-id'] = sessionId;
-  if (requestId) headers['x-relay-request-id'] = requestId;
-  if (launchTicket) headers['x-clodex-launch-ticket'] = launchTicket;
-  return headers;
 }
 
 function adapterFetchHeaders(
@@ -556,247 +536,7 @@ function forwardRawAnthropicRequest(
   });
 }
 
-function forwardToAdapter(
-  req: http.IncomingMessage,
-  res: http.ServerResponse,
-  rawBody: Buffer,
-  adapter: ProxyHandle,
-  adapterRequest: typeof http.request = http.request,
-  adapterAgent?: http.Agent,
-  lifecycle?: {
-    logPath: string;
-    requestId: string;
-    claudeSessionId?: string;
-    modelId: string;
-    provider: string;
-    progressIntervalMs: number;
-  },
-  isLocalShutdown: () => boolean = () => false,
-  launchTicket?: string,
-  shutdownSignal?: AbortSignal,
-): Promise<void> {
-  if (adapterRequest === http.request) {
-    return forwardToAdapterWithFetch(
-      req,
-      res,
-      rawBody,
-      adapter,
-      lifecycle,
-      isLocalShutdown,
-      launchTicket,
-      shutdownSignal,
-    );
-  }
-  return new Promise(resolve => {
-    const startedAt = Date.now();
-    let lastActivityAt = startedAt;
-    let headersReceived = false;
-    let firstByteAt: number | undefined;
-    let statusCode: number | undefined;
-    let bytes = 0;
-    let chunks = 0;
-    let adapterEnded = false;
-    let failed = false;
-    let clientDisconnected = false;
-    let adapterResponse: http.IncomingMessage | undefined;
-    let upstream: http.ClientRequest | undefined;
-
-    const writeLifecycle = (
-      event: Parameters<typeof writeInferenceResponseLifecycleLog>[1]['event'],
-      extra: Partial<Parameters<typeof writeInferenceResponseLifecycleLog>[1]> = {},
-    ) => {
-      if (!lifecycle) return;
-      writeInferenceResponseLifecycleLog(lifecycle.logPath, {
-        event,
-        requestId: lifecycle.requestId,
-        claudeSessionId: lifecycle.claudeSessionId,
-        modelId: lifecycle.modelId,
-        provider: lifecycle.provider,
-        route: 'translated',
-        ...extra,
-      });
-    };
-    const responsePhase = (): InferenceResponsePhase => {
-      if (!headersReceived) return 'waiting_for_headers';
-      if (firstByteAt === undefined) return 'waiting_for_first_byte';
-      return adapterEnded ? 'delivering' : 'streaming';
-    };
-    const progressTimer = lifecycle
-      ? setInterval(() => {
-          const now = Date.now();
-          writeLifecycle('response_progress', {
-            statusCode,
-            phase: responsePhase(),
-            durationMs: now - startedAt,
-            timeToFirstByteMs: firstByteAt === undefined ? undefined : firstByteAt - startedAt,
-            idleMs: now - lastActivityAt,
-            bytes,
-            chunks,
-          });
-        }, lifecycle.progressIntervalMs)
-      : undefined;
-    progressTimer?.unref();
-    const stopProgress = () => {
-      if (progressTimer) clearInterval(progressTimer);
-    };
-
-    res.once('finish', () => {
-      stopProgress();
-      if (failed || clientDisconnected) return;
-      const now = Date.now();
-      writeLifecycle('response_completed', {
-        statusCode,
-        durationMs: now - startedAt,
-            timeToFirstByteMs: firstByteAt === undefined ? undefined : firstByteAt - startedAt,
-        bytes,
-        chunks,
-      });
-    });
-    res.once('close', () => {
-      stopProgress();
-      if (res.writableFinished || failed) return;
-      clientDisconnected = true;
-      const now = Date.now();
-      writeLifecycle('response_client_disconnected', {
-        statusCode,
-        phase: responsePhase(),
-        durationMs: now - startedAt,
-            timeToFirstByteMs: firstByteAt === undefined ? undefined : firstByteAt - startedAt,
-        idleMs: now - lastActivityAt,
-        bytes,
-        chunks,
-        terminationSource: isLocalShutdown() ? 'local_shutdown' : 'downstream_client',
-      });
-      adapterResponse?.destroy();
-      upstream?.destroy();
-      upstream?.socket?.destroy();
-      resolve();
-    });
-
-    const failAdapterRequest = (
-      err: Error,
-      failureSource: InferenceFailureSource,
-    ) => {
-      if (clientDisconnected) {
-        resolve();
-        return;
-      }
-      if (headersReceived || failed) return;
-      failed = true;
-      stopProgress();
-      const now = Date.now();
-      writeLifecycle('response_failed', {
-        statusCode: 502,
-        phase: responsePhase(),
-        durationMs: now - startedAt,
-        idleMs: now - lastActivityAt,
-        bytes,
-        chunks,
-        errorType: err.name,
-        errorCode: nodeErrorCode(err),
-        failureSource,
-        terminationSource: 'upstream_failure',
-      });
-      if (!res.headersSent) res.writeHead(502, { 'Content-Type': 'text/plain' });
-      res.end(`Relay adapter unreachable: ${err.message}`);
-      resolve();
-    };
-
-    upstream = adapterRequest({
-      hostname: '127.0.0.1',
-      port: adapter.port,
-      method: 'POST',
-      path: req.url,
-      agent: adapterAgent,
-      headers: adapterNodeHeaders(
-        req,
-        rawBody.length,
-        lifecycle?.requestId,
-        launchTicket,
-      ),
-    }, upstreamRes => {
-      adapterResponse = upstreamRes;
-      headersReceived = true;
-      statusCode = upstreamRes.statusCode ?? 502;
-      lastActivityAt = Date.now();
-      upstreamRes.on('data', (chunk: Buffer) => {
-        const now = Date.now();
-        if (firstByteAt === undefined) {
-          firstByteAt = now;
-          writeLifecycle('response_started', {
-            statusCode,
-            durationMs: now - startedAt,
-            timeToFirstByteMs: now - startedAt,
-          });
-        }
-        lastActivityAt = now;
-        bytes += chunk.length;
-        chunks += 1;
-      });
-      copyResponse(upstreamRes, res, undefined, lifecycle
-        ? usage => writeLifecycle('response_usage', usage)
-        : undefined);
-      const failAdapterResponse = (
-        err: Error,
-        failureSource: InferenceFailureSource,
-      ) => {
-        if (clientDisconnected) {
-          resolve();
-          return;
-        }
-        if (adapterEnded || failed) return;
-        failed = true;
-        stopProgress();
-        const now = Date.now();
-        writeLifecycle('response_failed', {
-          statusCode,
-          phase: responsePhase(),
-          durationMs: now - startedAt,
-            timeToFirstByteMs: firstByteAt === undefined ? undefined : firstByteAt - startedAt,
-          idleMs: now - lastActivityAt,
-          bytes,
-          chunks,
-          errorType: err.name,
-          errorCode: nodeErrorCode(err),
-          failureSource,
-          terminationSource: 'upstream_failure',
-        });
-        if (!res.writableEnded) res.destroy(err);
-        resolve();
-      };
-      upstreamRes.once('end', () => {
-        adapterEnded = true;
-        lastActivityAt = Date.now();
-        resolve();
-      });
-      upstreamRes.once('error', err => failAdapterResponse(err, 'adapter_response_error'));
-      upstreamRes.once('aborted', () => failAdapterResponse(
-        new Error('Relay adapter response aborted'),
-        'adapter_response_aborted',
-      ));
-      upstreamRes.once('close', () => {
-        if (!upstreamRes.complete) {
-          failAdapterResponse(
-            new Error('Relay adapter response closed before completion'),
-            'adapter_response_close',
-          );
-        }
-      });
-    });
-    upstream.once('error', err => failAdapterRequest(err, 'adapter_request_error'));
-    upstream.once('close', () => {
-      if (!headersReceived && !failed) {
-        failAdapterRequest(
-          new Error('Relay adapter connection closed before a response'),
-          'adapter_request_close',
-        );
-      }
-    });
-    upstream.end(rawBody);
-  });
-}
-
-async function forwardToAdapterWithFetch(
+async function forwardToAdapter(
   req: http.IncomingMessage,
   res: http.ServerResponse,
   rawBody: Buffer,
@@ -1027,7 +767,6 @@ export async function startHttpProxy(options: HttpProxyOptions): Promise<HttpPro
       options.resolveRouteForRequest,
     );
   }
-  const adapterAgent = adapter ? new http.Agent({ keepAlive: true }) : undefined;
   let shuttingDown = false;
   const shutdownController = new AbortController();
   const launchTicketsByClient = new Map<string, string>();
@@ -1173,8 +912,6 @@ export async function startHttpProxy(options: HttpProxyOptions): Promise<HttpPro
           res,
           adapterBody,
           adapter,
-          options.adapterRequest,
-          adapterAgent,
           messagesEndpoint === 'messages' && options.inferenceLogPath
             ? {
                 logPath: options.inferenceLogPath,
@@ -1366,7 +1103,6 @@ export async function startHttpProxy(options: HttpProxyOptions): Promise<HttpPro
       options.host ?? '127.0.0.1',
     );
   } catch (err) {
-    adapterAgent?.destroy();
     mitmServer.close();
     if (ownsAdapter) await adapter?.close();
     throw err;

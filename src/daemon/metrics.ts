@@ -91,21 +91,7 @@ export interface SecondwindLifetimeMetrics {
   estimatedOutputSavingsUsd: number;
 }
 
-export interface SecondwindSavingsEvent {
-  requests: number;
-  blocksRewritten: number;
-  inputTokensConsidered: number;
-  tokensReduced: number;
-  estimatedTokenRequests: number;
-  estimatedSavingsUsd: number;
-  observedInputTokens: number;
-  savedInputTokens: number;
-  savedCachedInputTokens: number;
-  savedCacheWriteTokens: number;
-  estimatedInputSavingsUsd: number;
-  estimatedCacheSavingsUsd: number;
-  estimatedOutputSavingsUsd: number;
-}
+export type SecondwindSavingsEvent = SecondwindLifetimeMetrics;
 
 type SecondwindSavingsInput = Pick<SecondwindSavingsEvent,
   'requests' | 'blocksRewritten' | 'inputTokensConsidered' | 'tokensReduced'
