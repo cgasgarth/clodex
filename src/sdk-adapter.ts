@@ -1,5 +1,6 @@
 // Anthropic /v1/messages ↔ Vercel AI SDK. One turn per request; Claude Code owns the tool loop.
 import { createHash } from 'node:crypto';
+import { claudeQueuedEventKind, splitClaudeQueuedToolText, type ClaudeQueuedEvent } from './claude-queued-events.js';
 import { streamText, generateText, tool, jsonSchema } from 'ai';
 import type {
   AssistantContent,
@@ -293,18 +294,12 @@ function systemToString(
   }).join('\n');
 }
 
-const CLAUDE_MID_TURN_MESSAGE_PREFIX = 'The user sent a new message while you were working:\n';
-const CLAUDE_MID_TURN_MESSAGE_SUFFIX = 'Address the message above as you continue this turn.';
-
 function isTaskNotificationText(text: string): boolean {
-  const trimmed = text.trim();
-  return trimmed.startsWith('<task-notification>')
-    && trimmed.endsWith('</task-notification>');
+  return claudeQueuedEventKind(text) === 'task';
 }
 
 function isClaudeMidTurnMessage(text: string): boolean {
-  return text.startsWith(CLAUDE_MID_TURN_MESSAGE_PREFIX)
-    && text.endsWith(CLAUDE_MID_TURN_MESSAGE_SUFFIX);
+  return claudeQueuedEventKind(text) === 'human';
 }
 
 export interface QueuedInputDiagnostics {
@@ -317,6 +312,14 @@ export function queuedInputDiagnostics(messages: AnthropicMsg[]): QueuedInputDia
   let humanSteeringMessages = 0;
   let trustedTaskNotifications = 0;
   for (const message of messages) {
+    if (message.role === 'user' && Array.isArray(message.content)) {
+      for (const block of message.content) {
+        if (block.type !== 'tool_result') continue;
+        const events = splitQueuedToolResult(block).events;
+        humanSteeringMessages += events.filter(event => event.kind === 'human').length;
+        trustedTaskNotifications += events.filter(event => event.kind === 'task').length;
+      }
+    }
     const texts = isString(message.content)
       ? [message.content]
       : message.content
@@ -520,9 +523,27 @@ function translateSystemBlocks(
   });
 }
 
+function splitQueuedToolResult(block: AnthropicBlock) {
+  const events: ClaudeQueuedEvent[] = [];
+  const splitText = (text: string) => {
+    const split = splitClaudeQueuedToolText(text);
+    events.push(...split.events);
+    return split.toolText;
+  };
+  const content = isString(block.content)
+    ? splitText(block.content)
+    : Array.isArray(block.content)
+      ? asAnthropicBlocks(block.content).map(part => part.type === 'text' && isString(part.text)
+        ? Object.assign({}, part, { text: splitText(part.text) })
+        : part)
+      : block.content;
+  return { result: events.length ? { ...block, content } : block, events };
+}
+
 function translateUserBlocks(
   blocks: AnthropicBlock[],
   openAiPromptCacheBreakpoints: boolean,
+  openAiOAuth: boolean,
 ): ModelMessage[] {
   const messages: ModelMessage[] = [];
   let toolResults: AnthropicBlock[] = [];
@@ -555,7 +576,17 @@ function translateUserBlocks(
   for (const block of blocks) {
     if (block.type === 'tool_result') {
       flushUser();
-      toolResults.push(block);
+      const split = openAiOAuth ? splitQueuedToolResult(block) : { result: block, events: [] };
+      toolResults.push(split.result);
+      if (split.events.length) {
+        flushTools();
+        flushUser();
+        for (const event of split.events) {
+          messages.push(event.kind === 'task'
+            ? { role: 'system', content: event.text }
+            : { role: 'user', content: [{ type: 'text', text: event.text }] });
+        }
+      }
       continue;
     }
     flushTools();
@@ -609,6 +640,7 @@ export function translateMessages(
   messages: AnthropicMsg[],
   npm: string,
   openAiPromptCacheBreakpoints = false,
+  openAiOAuth = false,
 ): ModelMessage[] {
   const out: ModelMessage[] = [];
 
@@ -625,6 +657,7 @@ export function translateMessages(
       out.push(...translateUserBlocks(
         blocks,
         openAiPromptCacheBreakpoints,
+        openAiOAuth,
       ));
       continue;
     }
@@ -832,6 +865,7 @@ export function translateRequest(
         conversationMessages,
         npm,
         supportsExplicitOpenAiCaching,
+        options?.openAiOAuth === true,
       ),
     ],
     allowSystemInMessages: true,

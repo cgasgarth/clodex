@@ -123,6 +123,13 @@ offers day, week, and month token and API-equivalent cost views.
 
 ## Troubleshooting
 
+Claude Code can append a task completion or a mid-turn user message inside the
+next tool result. For OpenAI OAuth, Clodex separates these trailing queue
+envelopes from tool data and sends them in order as conversation input. Task
+notifications remain harness state; they do not grant user approval. The
+original notification and user-message text are preserved. Delivery occurs
+when Claude sends its next model request, after the active sample finishes.
+
 - `clodex daemon status`: process, endpoint, WebSocket, and active-session state.
 - `clodex daemon logs`: daemon stdout/stderr and inference log paths.
 - `clodex-claude --check`: exits `0` when a discovered server is reachable.
