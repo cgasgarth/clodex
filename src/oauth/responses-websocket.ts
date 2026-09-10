@@ -1094,14 +1094,13 @@ export function createResponsesWebSocketFetch(
     });
 
     let activeContext: RequestContext | undefined;
-    const steering = payload.model === 'gpt-6-astra'
-      ? (selectedMatch ? selected?.steering : undefined) ?? new ResponseSteeringSession()
-      : undefined;
+    const steering = (selectedMatch ? selected?.steering : undefined)
+      ?? new ResponseSteeringSession(payload.model === 'gpt-6-astra' ? 'native' : 'boundary');
     if (continued && selected?.nativeHistory && selectedDelta && !compacted && !retryPayload) {
       retryPayload = { ...payload, input: [...selected.nativeHistory, ...selectedDelta] };
     }
     let queueSubscription: Awaited<ReturnType<typeof watchClaudeQueue>> | undefined;
-    if (steering && diagnosticCorrelation?.allowLocalClaudeQueue && diagnosticCorrelation.claudeSessionId && !diagnosticCorrelation.claudeAgentId
+    if (diagnosticCorrelation?.allowLocalClaudeQueue && diagnosticCorrelation.claudeSessionId && !diagnosticCorrelation.claudeAgentId
       && Array.isArray(payload.tools) && payload.tools.length > 0 && !forceCompaction) {
       try {
         queueSubscription = await (options.subscribeQueuedInput ?? watchClaudeQueue)(

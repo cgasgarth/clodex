@@ -12,7 +12,7 @@ export interface QueuedSessionInput {
 }
 
 interface Submission extends QueuedSessionInput {
-  state: 'waiting' | 'sent' | 'accepted' | 'committed' | 'failed';
+  state: 'waiting' | 'sent' | 'accepted' | 'committed' | 'echoed' | 'failed';
   responseId?: string;
   steerId?: string;
   committedResponseId?: string;
@@ -64,6 +64,10 @@ export class ResponseSteeringSession {
   private prefix: string[] = [];
   private diagnostic?: (event: { event: string } & JsonObject) => void;
 
+  private mode: 'native' | 'boundary';
+
+  constructor(mode: 'native' | 'boundary' = 'native') { this.mode = mode; }
+
   attach(input: JsonValue[], send: (event: ResponseSteerEvent) => void, diagnostic?: (event: { event: string } & JsonObject) => void): void {
     this.prefix = input.map(hash);
     this.send = send;
@@ -79,13 +83,13 @@ export class ResponseSteeringSession {
   }
 
   private report(item: Submission, outcome = item.state): void {
-    this.diagnostic?.({ event: 'ws_steering', outcome, inputId: item.id,
+    this.diagnostic?.({ event: 'ws_steering', mode: this.mode, outcome, inputId: item.id,
       source: item.kind, steerId: item.steerId, responseId: item.responseId,
       committedResponseId: item.committedResponseId, errorCode: item.errorCode });
   }
 
   private flush(): void {
-    if (!this.send || !this.responseId) return;
+    if (this.mode !== 'native' || !this.send || !this.responseId) return;
     for (const item of this.submissions) {
       if (item.state !== 'waiting') continue;
       item.responseId = this.responseId;
@@ -99,7 +103,7 @@ export class ResponseSteeringSession {
   created(responseId: string): JsonValue[] {
     const committed: JsonValue[] = [];
     for (const item of this.submissions) {
-      if (item.state !== 'accepted') continue;
+      if (item.state !== 'accepted' && !(this.mode === 'boundary' && item.state === 'sent')) continue;
       item.state = 'committed';
       item.committedResponseId = responseId;
       committed.push({ role: 'user', content: steeringText(item) });
@@ -108,6 +112,17 @@ export class ResponseSteeringSession {
     this.responseId = responseId;
     this.flush();
     return committed;
+  }
+
+  /** Models without native steering receive a normal continuation after client tool work settles. */
+  takeBoundaryInput(responseId: string): JsonValue[] {
+    if (this.mode !== 'boundary') return [];
+    return this.submissions.filter(item => item.state === 'waiting').map(item => {
+      item.state = 'sent';
+      item.responseId = responseId;
+      this.report(item);
+      return { role: 'user', content: steeringText(item) };
+    });
   }
 
   handle(event: JsonObject): boolean {
@@ -148,13 +163,20 @@ export class ResponseSteeringSession {
   reconcile(input: JsonValue[]): JsonValue[] {
     const hashes = input.map(hash);
     const removed = new Set<number>();
+    const matched = new Set<number>();
     for (const item of this.submissions) {
-      if (item.state !== 'accepted' && item.state !== 'committed') continue;
+      if (item.state !== 'waiting' && item.state !== 'accepted' && item.state !== 'committed') continue;
       if (!item.prefix.every((value, index) => hashes[index] === value)) continue;
       const identity = inputIdentity(item.text) ?? `${item.kind}:${item.text.trim()}`;
-      const index = input.findIndex((value, at) => at >= item.prefix.length && !removed.has(at)
+      const index = input.findIndex((value, at) => at >= item.prefix.length && !matched.has(at)
         && itemIdentity(value) === identity);
-      if (index >= 0) removed.add(index);
+      if (index < 0) continue;
+      matched.add(index);
+      if (item.state === 'waiting') {
+        // Claude can deliver a queued item with required tool results before a boundary continuation.
+        item.state = 'echoed';
+        this.report(item);
+      } else removed.add(index);
     }
     return input.filter((_, index) => !removed.has(index));
   }

@@ -432,6 +432,29 @@ export function resetContextForRetry(ctx: RequestContext): void {
   ctx.outputIndexByItemId.clear();
 }
 
+function continueQueuedInput(entry: ConnectionEntry, ctx: RequestContext, event: JsonObject): boolean {
+  if (!ctx.steering) return false;
+  const outputs = nativeAssistantItems(ctx, ctx.responseOutputStart);
+  const needsTool = outputs.some(item => isObject(item) && !Array.isArray(item) && isString(item.type)
+    && ['function_call', 'custom_tool_call', 'mcp_approval_request', 'computer_call'].includes(item.type));
+  if (needsTool) return false;
+  const input = event.type === 'response.completed' && ctx.responseId
+    ? ctx.steering.takeBoundaryInput(ctx.responseId) : [];
+  if (!ctx.steering.awaitingSuccessor) return false;
+  ctx.heldTerminal = event;
+  if (input.length) {
+    try {
+      entry.socket.send(JSON.stringify({ ...ctx.sendPayload, type: 'response.create',
+        previous_response_id: ctx.responseId, input }), error => {
+        if (error) failContext(entry, ctx, 'Could not send queued input continuation', { source: 'queued_input_send' });
+      });
+    } catch {
+      failContext(entry, ctx, 'Could not send queued input continuation', { source: 'queued_input_send' });
+    }
+  }
+  return true;
+}
+
 function handleSocketMessage(entry: ConnectionEntry, data: RawData): void {
   if (entry.drainingQueuedInput) {
     (entry.deferredFrames ??= []).push(data);
@@ -527,16 +550,8 @@ function handleSocketMessage(entry: ConnectionEntry, data: RawData): void {
     event.output_index += ctx.responseOutputStart;
   }
   captureOutput(ctx, event);
-  if ((type === 'response.completed' || (type === 'response.incomplete' && responseFailureDetails(event).incompleteReason === 'steered')) && ctx.steering?.awaitingSuccessor
-    && isObject(event) && !Array.isArray(event)) {
-    const outputs = nativeAssistantItems(ctx, ctx.responseOutputStart);
-    const needsTool = outputs.some(item => isObject(item) && !Array.isArray(item) && isString(item.type)
-      && ['function_call', 'custom_tool_call', 'mcp_approval_request', 'computer_call'].includes(item.type));
-    if (!needsTool) {
-      ctx.heldTerminal = event;
-      return;
-    }
-  }
+  if ((type === 'response.completed' || (type === 'response.incomplete' && responseFailureDetails(event).incompleteReason === 'steered'))
+    && isObject(event) && !Array.isArray(event) && continueQueuedInput(entry, ctx, event)) return;
   if (TERMINAL_EVENT_TYPES.has(type ?? '')) {
     ctx.modelResponseUsage = responseUsage(event);
     const usage = responseUsage(event);

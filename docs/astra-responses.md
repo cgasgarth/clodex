@@ -1,13 +1,16 @@
-# Astra sessions, steering, and hosted tools
+# Responses sessions, queued input, and hosted tools
 
 Clodex uses native Responses steering for queued text input in local Astra
-sessions. It keeps one delivery state per response lineage and preserves the
+sessions. Other local Responses models, including Sol, receive that input in a
+normal continuation before Clodex closes the turn. It keeps one delivery state
+per response lineage and preserves the
 provider's output separately from Claude's replay representation.
 
 ```mermaid
 flowchart LR
   Q[Claude queue journal] --> S[Session input state]
-  S -->|response.steer| W[Responses WebSocket]
+  S -->|Astra: response.steer| W[Responses WebSocket]
+  S -->|Other models: response.create after completion| W
   T[Claude tool results] -->|response.create| W
   W --> R[Original and successor responses]
   R --> C[One Claude response stream]
@@ -20,12 +23,20 @@ session's transcript. It does not modify Claude's queue. Normal prompt hooks
 run too late for this purpose: an isolated Claude 2.1.263 test showed the second
 prompt hook running after the first request ended.
 
-| Input | Delivery |
-| --- | --- |
-| User text sent during a turn | Native user steering input |
-| Background command completion | Automated task notification |
-| Workflow or subagent completion | Automated task notification, including its supplied result |
-| Required client tool output | Normal tool result on the same connection |
+| Input | Astra | Sol and other Responses models |
+| --- | --- | --- |
+| User text sent during a turn | Native user steering input | User input in the next response |
+| Background command completion | Automated task notification via steering | Automated task notification in the next response |
+| Workflow or subagent completion | Automated task notification via steering | Automated task notification in the next response |
+| Required client tool output | Normal tool result on the same connection | Normal tool result on the same connection |
+
+The API supports native mid-turn steering only for Astra. Sol cannot receive an
+update inside an active response. For models without native steering, Clodex
+waits for the response to complete, sends queued input with `response.create`,
+and reads the continuation before closing the Claude stream. If the response
+requires a client tool, Claude runs it first. An update included with its tool
+result is used there; otherwise, Clodex retains the update for the next response
+boundary. This does not interrupt or undo tools already in progress.
 
 Task notifications retain their source warning. They do not grant user
 approval. A notification that points to an output file does not replace reading
@@ -33,12 +44,14 @@ that file. Non-text queue entries continue through Claude's normal request path.
 The reader uses the daemon's `CLAUDE_CONFIG_DIR`, or `~/.claude` by default.
 Network/API requests cannot enable local transcript access through their metadata.
 
-Delivery is tracked as waiting, sent, accepted, committed, or failed. Acceptance
+Delivery is tracked as waiting, sent, accepted, committed, echoed, or failed. Acceptance
 means the server has queued the input; the successor's `response.created` commits
 it. The stream remains open through automatic successors. When client tools are
 required, Claude runs them normally and sends their results; accepted steering
 is not sent again. Later echoes in Claude's history remain in its matching
 representation but are removed from the new provider input.
+For models without native steering, `response.created` commits input sent in a
+continuation. Echoes that arrive first through Claude retain normal delivery.
 
 Before ending a response, the reader drains new journal records once more.
 Socket frames received during that drain are processed in order. Failures retain

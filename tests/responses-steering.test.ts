@@ -193,3 +193,133 @@ it.each(['background command','workflow','subagent'])('keeps a %s completion mar
   session.submit({id:source,kind:'task',text:`<task-notification>\n<status>completed</status>\n<summary>${source} completed</summary>\n</task-notification>`});
   expect(sent[0]).toMatchObject({type:'response.steer',input:[{role:'user',content:expect.stringContaining('[SYSTEM NOTIFICATION - NOT USER INPUT]')}]});
 });
+
+it.each(['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.3-codex'])(
+'delivers queued input before closing a local %s turn', async model => {
+  let receive: ((input: QueuedSessionInput) => void) | undefined;
+  let closed = false;
+  const fetch = createResponsesWebSocketFetch('wss://test.invalid', undefined, {
+    webSocketConstructor: Socket,
+    subscribeQueuedInput: async (_id, callback) => {
+      receive = callback;
+      return { flush: async () => {}, close: () => { closed = true; } };
+    },
+  });
+  const response = await withResponsesWebSocketDiagnosticContext({allowLocalClaudeQueue:true,claudeSessionId:'00000000-0000-4000-8000-000000000001'},
+    () => fetch('https://test.invalid', {method:'POST',body:JSON.stringify({...payload,model})}));
+  const socket = sockets[0]!;
+  socket.emit('open');
+  socket.event({type:'response.created',response:{id:'resp_1'}});
+  receive?.({id:'human',kind:'human',text:'Use the new target.'});
+  for (const source of ['background command', 'workflow', 'subagent']) {
+    receive?.({id:source,kind:'task',text:`<task-notification>\n<status>completed</status>\n<summary>${source} completed</summary>\n</task-notification>`});
+  }
+  expect(socket.sent).toHaveLength(1);
+  complete(socket, 'resp_1', 'Original answer.');
+  await Bun.sleep(0);
+  expect(closed).toBe(false);
+  expect(socket.sent.at(-1)).toMatchObject({type:'response.create',model,previous_response_id:'resp_1',input:[
+    {role:'user',content:'Use the new target.'},
+    ...['background command','workflow','subagent'].map(source => ({role:'user',content:expect.stringContaining(`<summary>${source} completed</summary>`)})),
+  ]});
+  socket.event({type:'response.created',response:{id:'resp_2'}});
+  complete(socket, 'resp_2', 'Updated target and task results applied.');
+  const body = await response.text();
+  expect(body).toContain('Updated target and task results applied.');
+  expect(body.match(/"type":"response.completed"/g)).toHaveLength(1);
+  expect(closed).toBe(true);
+});
+
+const humanEcho = (text: string) => ({role:'user',content:`<system-reminder>\nThe user sent a new message while you were working:\n${text}\n\nThis is how Claude Code surfaces messages the user sends mid-turn. Address the message above as you continue this turn.\n</system-reminder>`});
+const solPayload = {...payload,model:'gpt-5.6-sol'};
+const localContext = {allowLocalClaudeQueue:true,claudeSessionId:'00000000-0000-4000-8000-000000000001'};
+const assistant = (text: string) => ({role:'assistant',content:[{type:'output_text',text}]});
+
+it.each([true, false])('waits for Sol client tool results, with Claude echo=%s', async withEcho => {
+  let receive: ((input: QueuedSessionInput) => void) | undefined;
+  const fetch = createResponsesWebSocketFetch('wss://test.invalid', undefined, {
+    webSocketConstructor: Socket,
+    subscribeQueuedInput: async (_id, callback) => {
+      receive = callback;
+      return {flush:async()=>{},close:()=>{}};
+    },
+  });
+  const run = (input: object[]) => withResponsesWebSocketDiagnosticContext(localContext,
+    () => fetch('https://test.invalid', {method:'POST',body:JSON.stringify({...solPayload,input})}));
+  const first = await run(payload.input);
+  const socket = sockets[0]!;
+  socket.emit('open');
+  socket.event({type:'response.created',response:{id:'resp_1'}});
+  receive?.({id:'human',kind:'human',text:'Use the new target.'});
+  const call = {type:'function_call',call_id:'call_1',name:'Read',arguments:'{"path":"example.txt"}'};
+  socket.event({type:'response.output_item.done',output_index:0,item:call});
+  socket.event({type:'response.completed',response:{id:'resp_1',output:[call]}});
+  await first.text();
+  expect(socket.sent).toHaveLength(1);
+  const output = {type:'function_call_output',call_id:'call_1',output:'file contents'};
+  const echo = humanEcho('Use the new target.');
+  const second = await run([...payload.input,call,output,...(withEcho ? [echo] : [])]);
+  expect(socket.sent.at(-1)).toMatchObject({type:'response.create',previous_response_id:'resp_1',input:[output,...(withEcho ? [echo] : [])]});
+  socket.event({type:'response.created',response:{id:'resp_2'}});
+  complete(socket,'resp_2','Tool result applied.');
+  await Bun.sleep(0);
+  if (withEcho) expect(socket.sent).toHaveLength(2);
+  else {
+    expect(socket.sent.at(-1)).toMatchObject({type:'response.create',previous_response_id:'resp_2',input:[{role:'user',content:'Use the new target.'}]});
+    socket.event({type:'response.created',response:{id:'resp_3'}});
+    complete(socket,'resp_3','New target applied.');
+  }
+  const body = await second.text();
+  expect(body.match(/"type":"response.completed"/g)).toHaveLength(1);
+});
+
+it('drains late Sol input, reconciles its echo, and keeps both native responses on replay', async () => {
+  let flushed = false;
+  const fetch = createResponsesWebSocketFetch('wss://test.invalid', undefined, {
+    webSocketConstructor: Socket,
+    subscribeQueuedInput: async (_id, receive) => ({close:()=>{},flush:async()=>{
+      if (flushed) return;
+      flushed = true;
+      receive({id:'late-human',kind:'human',text:'Use the new target.'});
+    }}),
+  });
+  const run = (input: object[]) => withResponsesWebSocketDiagnosticContext(localContext,
+    () => fetch('https://test.invalid', {method:'POST',body:JSON.stringify({...solPayload,input})}));
+  const first = await run(payload.input);
+  const socket = sockets[0]!;
+  socket.emit('open');
+  socket.event({type:'response.created',response:{id:'resp_1'}});
+  complete(socket,'resp_1','Original answer.','commentary');
+  await Bun.sleep(0);
+  expect(socket.sent.at(-1)).toMatchObject({previous_response_id:'resp_1',input:[{role:'user',content:'Use the new target.'}]});
+  socket.event({type:'response.created',response:{id:'resp_2'}});
+  complete(socket,'resp_2','New target applied.');
+  await first.text();
+  const input = [...payload.input,assistant('Original answer.'),assistant('New target applied.'),humanEcho('Use the new target.')];
+  const second = await run(input);
+  expect(sockets).toHaveLength(1);
+  expect(socket.sent.at(-1)).toMatchObject({type:'response.create',previous_response_id:'resp_2',input:[]});
+  socket.event({type:'error',error:{code:'previous_response_not_found'}});
+  const replacement = sockets.at(-1)!;
+  replacement.emit('open');
+  expect(replacement.sent[0]?.input).toEqual([
+    ...payload.input,
+    {type:'message',id:'msg_resp_1',role:'assistant',phase:'commentary',content:[{type:'output_text',text:'Original answer.'}]},
+    {role:'user',content:'Use the new target.'},
+    {type:'message',id:'msg_resp_2',role:'assistant',phase:'final_answer',content:[{type:'output_text',text:'New target applied.'}]},
+  ]);
+  replacement.event({type:'response.created',response:{id:'resp_3'}});
+  complete(replacement,'resp_3','Done.');
+  await second.text();
+});
+
+it('matches each Claude echo to only one queued occurrence', () => {
+  const session = new ResponseSteeringSession('boundary');
+  session.attach(payload.input,()=>{});
+  session.created('resp_1');
+  session.submit({id:'first',kind:'human',text:'Continue.'});
+  session.submit({id:'second',kind:'human',text:'Continue.'});
+  const input = [...payload.input,humanEcho('Continue.')];
+  expect(session.reconcile(input)).toEqual(input);
+  expect(session.takeBoundaryInput('resp_2')).toEqual([{role:'user',content:'Continue.'}]);
+});
