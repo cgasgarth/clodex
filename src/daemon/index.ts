@@ -388,6 +388,7 @@ async function runDaemonProcess(): Promise<number> {
         recordMetrics: context.endpoint === 'messages',
       }),
       event => shouldWriteWebSocketDiagnostic(activeDiagnosticLogMode, event),
+      true,
     );
     runtime = createDaemonRuntimeState({
       pid: process.pid,

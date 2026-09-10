@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto';
+import { ResponseSteeringSession } from './responses-websocket/steering.js';
+import { watchClaudeQueue } from '../runtime/claude-queue.js';
 import type { FetchFunction } from '@ai-sdk/provider-utils';
 import { outboundProxyUrlForTarget } from '../transport/outbound-proxy.js';
 import { loadBunNativeWebSocket } from '../transport/bun-websocket.js';
@@ -225,6 +227,13 @@ export function createResponsesWebSocketFetch(
       selectedCheckpoint,
       checkpointMatch,
     } = headPlan;
+    if (selected?.steering && selectedMatch && selectedDelta) {
+      const reconciled = new Set(selected.steering.reconcile(preparedConversation.items));
+      selectedDelta = selectedDelta.filter(item => reconciled.has(item));
+      selectedMatch = { ...selectedMatch, delta: selectedDelta };
+      headPlan.selectedDelta = selectedDelta;
+      headPlan.selectedMatch = selectedMatch;
+    }
     const hasCompacted = () => compacted;
     if (headPlan.missedCompactionAnchor) {
       emitDiagnostic(options, {
@@ -1085,11 +1094,32 @@ export function createResponsesWebSocketFetch(
     });
 
     let activeContext: RequestContext | undefined;
+    const steering = payload.model === 'gpt-6-astra'
+      ? (selectedMatch ? selected?.steering : undefined) ?? new ResponseSteeringSession()
+      : undefined;
+    if (continued && selected?.nativeHistory && selectedDelta && !compacted && !retryPayload) {
+      retryPayload = { ...payload, input: [...selected.nativeHistory, ...selectedDelta] };
+    }
+    let queueSubscription: Awaited<ReturnType<typeof watchClaudeQueue>> | undefined;
+    if (steering && diagnosticCorrelation?.allowLocalClaudeQueue && diagnosticCorrelation.claudeSessionId && !diagnosticCorrelation.claudeAgentId
+      && Array.isArray(payload.tools) && payload.tools.length > 0 && !forceCompaction) {
+      try {
+        queueSubscription = await (options.subscribeQueuedInput ?? watchClaudeQueue)(
+          diagnosticCorrelation.claudeSessionId, input => steering.submit(input),
+        );
+      } catch (error) {
+        debug(`Claude queue subscription unavailable: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
     const stream = new ReadableStream<Uint8Array>({
       start(controller) {
         let resolveSettled: (() => void) | undefined;
         const settled = new Promise<void>(resolve => { resolveSettled = resolve; });
         const ctx: RequestContext = {
+          steering,
+          queueSubscription,
+          nativeInput: inputArray(retryPayload ?? payload),
+          nativeDeltaCount: continued ? selectedDelta?.length : undefined,
           controller,
           encoder: new TextEncoder(),
           originalPayload: payload,

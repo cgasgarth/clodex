@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { isFunction, isObject, isString } from '../../runtime/type-guards.js';
+import { isFunction, isObject, isString, isNumber } from '../../runtime/type-guards.js';
 import {
   anthropicErrorType,
   clampRetryAfterSeconds,
@@ -57,6 +57,8 @@ import {
   responseUsageDebug,
   captureOutput,
   expectedAssistantItems,
+  nativeAssistantItems,
+  addSteeredUsage,
   encodeSse,
   flushPending,
   closeContext,
@@ -79,6 +81,8 @@ export function beginRecycledLineage(entry: ConnectionEntry): void {
   entry.responseId = undefined;
   entry.requestInput = undefined;
   entry.expectedAssistant = undefined;
+  entry.nativeHistory = undefined;
+  entry.steering = undefined;
   entry.requestInputHashes = undefined;
   entry.requestInputKinds = undefined;
   entry.expectedAssistantHashes = undefined;
@@ -390,6 +394,16 @@ export function dispatchContext(entry: ConnectionEntry, ctx: RequestContext): vo
   entry.inFlightStartedAt = now;
   entry.current = ctx;
   ctx.entry = entry;
+  entry.steering = ctx.steering;
+  ctx.steering?.attach(inputArray(ctx.originalPayload), event => {
+    try {
+      entry.socket.send(JSON.stringify(event), error => {
+        if (error) failContext(entry, ctx, 'Could not send queued steering input', { source: 'steering_send' });
+      });
+    } catch {
+      failContext(entry, ctx, 'Could not send queued steering input', { source: 'steering_send' });
+    }
+  }, ctx.emitDiagnostic);
   if (entry.open) sendContext(entry, ctx);
 }
 
@@ -401,8 +415,13 @@ function finishInFlightPeriod(entry: ConnectionEntry, now: number): void {
 }
 
 export function resetContextForRetry(ctx: RequestContext): void {
+  ctx.steering?.reconnect();
   ctx.continued = false;
   ctx.sendPayload = ctx.retryPayload ?? ctx.originalPayload;
+  ctx.nativeInput = inputArray(ctx.sendPayload);
+  ctx.nativeTranscript = [];
+  ctx.responseOutputStart = undefined;
+  ctx.heldTerminal = undefined;
   ctx.pendingEvents = [];
   ctx.emittedModelData = false;
   ctx.frameCount = 0;
@@ -414,14 +433,24 @@ export function resetContextForRetry(ctx: RequestContext): void {
 }
 
 function handleSocketMessage(entry: ConnectionEntry, data: RawData): void {
+  if (entry.drainingQueuedInput) {
+    (entry.deferredFrames ??= []).push(data);
+    return;
+  }
   const ctx = entry.current;
-  if (!ctx || ctx.closed) return;
-  if (ctx.overflowRecoveryPending) return;
   const text = Array.isArray(data)
     ? Buffer.concat(data).toString('utf8')
     : data instanceof ArrayBuffer
       ? Buffer.from(new Uint8Array(data)).toString('utf8')
       : data.toString('utf8');
+  if (!ctx || ctx.closed) {
+    try {
+      const event: JsonValue = JSON.parse(text);
+      if (isObject(event) && !Array.isArray(event)) entry.steering?.handle(event);
+    } catch { /* No active request owns malformed frames. */ }
+    return;
+  }
+  if (ctx.overflowRecoveryPending) return;
   ctx.frameCount += 1;
   if (ctx.transportRetryPending) {
     ctx.transportRetryPending = false;
@@ -441,7 +470,73 @@ function handleSocketMessage(entry: ConnectionEntry, data: RawData): void {
   }
 
   const type = eventType(event);
+  if ((type === 'response.completed' || type === 'response.incomplete') && ctx.queueSubscription
+    && isObject(event) && !Array.isArray(event) && isObject(event.response) && !Array.isArray(event.response)
+    && isString(event.response.id) && ctx.queueDrainedResponseId !== event.response.id) {
+    ctx.queueDrainedResponseId = event.response.id;
+    entry.drainingQueuedInput = true;
+    const isDraining = () => entry.drainingQueuedInput;
+    const resume = () => {
+      entry.drainingQueuedInput = false;
+      handleSocketMessage(entry, data);
+      while (!isDraining() && entry.deferredFrames?.length) {
+        handleSocketMessage(entry, entry.deferredFrames.shift()!);
+      }
+    };
+    void ctx.queueSubscription.flush().then(resume, resume);
+    return;
+  }
+  if (isObject(event) && !Array.isArray(event) && ctx.steering?.handle(event)) {
+    if (ctx.heldTerminal && !ctx.steering.awaitingSuccessor) {
+      const terminal = ctx.heldTerminal;
+      ctx.heldTerminal = undefined;
+      handleSocketMessage(entry, Buffer.from(JSON.stringify(terminal)));
+    }
+    return;
+  }
+  if (type === 'response.created' && isObject(event) && !Array.isArray(event)) {
+    const response = isObject(event.response) && !Array.isArray(event.response) ? event.response : undefined;
+    if (isString(response?.id) && ctx.steering) {
+      if (ctx.heldTerminal) {
+        const completedResponse = isObject(ctx.heldTerminal.response) && !Array.isArray(ctx.heldTerminal.response)
+          ? ctx.heldTerminal.response : undefined;
+        if (isObject(completedResponse?.usage) && !Array.isArray(completedResponse.usage)) {
+          ctx.steeredUsage = addSteeredUsage(completedResponse.usage, ctx.steeredUsage);
+        }
+        ctx.nativeTranscript ??= [];
+        ctx.nativeTranscript.push(...nativeAssistantItems(ctx, ctx.responseOutputStart));
+        ctx.responseOutputStart = ctx.outputByIndex.size;
+        ctx.heldTerminal = undefined;
+      }
+      const committed = ctx.steering.created(response.id);
+      if (!ctx.responseId && committed.length && ctx.nativeInput) {
+        const boundary = ctx.nativeInput.length - (ctx.nativeDeltaCount ?? 0);
+        ctx.nativeInput = [...ctx.nativeInput.slice(0, boundary), ...committed, ...ctx.nativeInput.slice(boundary)];
+        ctx.retryPayload = { ...(ctx.retryPayload ?? ctx.originalPayload), input: ctx.nativeInput };
+      } else {
+        ctx.nativeTranscript ??= [];
+        ctx.nativeTranscript.push(...committed);
+        if (committed.length) {
+          ctx.retryPayload = { ...ctx.originalPayload,
+            input: [...(ctx.nativeInput ?? inputArray(ctx.originalPayload)), ...ctx.nativeTranscript] };
+        }
+      }
+    }
+  }
+  if (isObject(event) && !Array.isArray(event) && isNumber(event.output_index) && ctx.responseOutputStart) {
+    event.output_index += ctx.responseOutputStart;
+  }
   captureOutput(ctx, event);
+  if ((type === 'response.completed' || (type === 'response.incomplete' && responseFailureDetails(event).incompleteReason === 'steered')) && ctx.steering?.awaitingSuccessor
+    && isObject(event) && !Array.isArray(event)) {
+    const outputs = nativeAssistantItems(ctx, ctx.responseOutputStart);
+    const needsTool = outputs.some(item => isObject(item) && !Array.isArray(item) && isString(item.type)
+      && ['function_call', 'custom_tool_call', 'mcp_approval_request', 'computer_call'].includes(item.type));
+    if (!needsTool) {
+      ctx.heldTerminal = event;
+      return;
+    }
+  }
   if (TERMINAL_EVENT_TYPES.has(type ?? '')) {
     ctx.modelResponseUsage = responseUsage(event);
     const usage = responseUsage(event);
@@ -570,6 +665,12 @@ function handleSocketMessage(entry: ConnectionEntry, data: RawData): void {
     return;
   }
 
+  if (TERMINAL_EVENT_TYPES.has(type ?? '') && ctx.steeredUsage
+    && isObject(event) && !Array.isArray(event) && isObject(event.response) && !Array.isArray(event.response)
+    && isObject(event.response.usage) && !Array.isArray(event.response.usage)) {
+    event.response.usage = addSteeredUsage(event.response.usage, ctx.steeredUsage);
+    ctx.responseUsage = responseUsage(event);
+  }
   ctx.pendingEvents.push(event);
   if (isModelDataEvent(type)) flushPending(ctx);
 
@@ -583,6 +684,12 @@ function handleSocketMessage(entry: ConnectionEntry, data: RawData): void {
       entry.responseId = ctx.responseId;
       entry.requestInput = inputArray(ctx.originalPayload);
       entry.expectedAssistant = assistantItems;
+      entry.nativeHistory = [
+        ...(ctx.nativeInput ?? inputArray(ctx.originalPayload)),
+        ...(ctx.nativeTranscript ?? []),
+        ...nativeAssistantItems(ctx, ctx.responseOutputStart),
+      ];
+      ctx.steering?.pause();
       entry.requestInputHashes = entry.requestInput.map(conversationItemHash);
       entry.requestInputKinds = entry.requestInput.map(conversationItemKind);
       entry.expectedAssistantHashes = assistantItems.map(conversationItemHash);
@@ -592,7 +699,7 @@ function handleSocketMessage(entry: ConnectionEntry, data: RawData): void {
         ...queuedEventItemHashes(entry.requestInput),
       ]));
       entry.compactedInput = ctx.compactedInputBase
-        ? [...ctx.compactedInputBase, ...assistantItems]
+        ? [...ctx.compactedInputBase, ...(ctx.nativeTranscript ?? []), ...nativeAssistantItems(ctx, ctx.responseOutputStart)]
         : undefined;
       entry.claudeCompactionSummaryHash = ctx.claudeCompactionRequest && entry.compactedInput
         ? compactionSummaryHash(assistantCompactionSummaryText(assistantItems))

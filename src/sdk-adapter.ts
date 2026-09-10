@@ -14,6 +14,7 @@ import type {
   ToolResultPart,
   ToolSet,
   TypedToolCall,
+  InferToolOutput,
   UserContent,
 } from 'ai';
 import type { ProviderOptions, ReasoningPart } from '@ai-sdk/provider-utils';
@@ -21,6 +22,7 @@ import {
   openai,
   type OpenAILanguageModelResponsesOptions,
   type OpenaiResponsesProviderMetadata,
+  type OpenaiResponsesTextProviderMetadata,
 } from '@ai-sdk/openai';
 import {
   sseChunk,
@@ -104,16 +106,7 @@ interface StreamErrorData {
   message?: string;
 }
 
-interface WebSearchOutput {
-  action?: {
-    type?: string;
-    query?: string;
-    queries?: string[];
-    url?: string | null;
-    pattern?: string | null;
-  };
-  sources?: Array<{ type?: string; url?: string; name?: string }>;
-}
+type WebSearchOutput = InferToolOutput<ReturnType<typeof openai.tools.webSearch>>;
 
 function asWebSearchOutput<Value>(value: Value): WebSearchOutput | undefined {
   // SAFETY: Provider-executed web search parts use the AI SDK web-search output contract.
@@ -592,6 +585,11 @@ function translateUserBlocks(
     flushTools();
     if (block.type === 'text') {
       const text = block.text ?? '';
+      if (openAiOAuth && claudeQueuedEventKind(text)) {
+        flushUser();
+        messages.push({ role: 'user', content: [{ type: 'text', text }] });
+        continue;
+      }
       userParts.push({
         type: 'text',
         text,
@@ -713,12 +711,13 @@ function translateOpenAiWebSearchTool(toolDefinition: AnthropicTool) {
 export function translateTools(
   anthropicTools?: AnthropicTool[],
   npm?: string,
+  openAiOAuth = false,
 ): ToolSet | undefined {
   if (!anthropicTools?.length) return undefined;
   const tools: ToolSet = {};
   for (const t of anthropicTools) {
-    if (npm === '@ai-sdk/openai' && isAnthropicWebSearchTool(t)) {
-      tools[t.name] = translateOpenAiWebSearchTool(t);
+    if (npm === '@ai-sdk/openai' && (isAnthropicWebSearchTool(t) || (openAiOAuth && t.name === 'WebSearch'))) {
+      tools.web_search = translateOpenAiWebSearchTool(t);
       continue;
     }
     tools[t.name] = tool({
@@ -831,6 +830,8 @@ export function translateRequest(
   const supportsTemperature = upstreamModelId.toLowerCase() !== 'gpt-6-astra';
   const supportsExplicitOpenAiCaching = !options?.openAiOAuth
     && supportsOpenAiPromptCacheBreakpoints(upstreamModelId);
+  const nativeWebSearch = npm === '@ai-sdk/openai' && upstreamTools.some(t =>
+    isAnthropicWebSearchTool(t) || (options?.openAiOAuth && t.name === 'WebSearch'));
 
   // Keep related requests in one cache partition. Prefer Claude Code's stable
   // session identity when available; the system/tools hash remains the fallback
@@ -869,8 +870,9 @@ export function translateRequest(
       ),
     ],
     allowSystemInMessages: true,
-    tools: translateTools(upstreamTools.length ? upstreamTools : undefined, npm),
-    toolChoice: compactRequest ? 'none' : translateToolChoice(body.tool_choice),
+    tools: translateTools(upstreamTools.length ? upstreamTools : undefined, npm, options?.openAiOAuth),
+    toolChoice: compactRequest ? 'none' : translateToolChoice(nativeWebSearch && body.tool_choice?.name === 'WebSearch'
+      ? { ...body.tool_choice, name: 'web_search' } : body.tool_choice),
     maxOutputTokens: options?.openAiOAuth ? undefined : body.max_tokens,
     temperature: supportsTemperature ? body.temperature : undefined,
     providerOptions,
@@ -890,6 +892,24 @@ interface AnthropicUsage {
 interface AnthropicResponseTextBlock {
   type: 'text';
   text: string;
+  citations?: AnthropicUrlCitation[];
+}
+
+interface AnthropicUrlCitation {
+  type: 'web_search_result_location';
+  url: string;
+  title: string;
+  cited_text: string;
+  encrypted_index: string;
+}
+
+function openAiCitations(text: string, metadata?: ProviderMetadata): AnthropicUrlCitation[] {
+  // SAFETY: This metadata is produced by the OpenAI SDK provider, which owns its contract.
+  const textMetadata = (metadata as OpenaiResponsesTextProviderMetadata | undefined)?.openai;
+  return (textMetadata?.annotations ?? []).flatMap(annotation => annotation.type === 'url_citation'
+    ? [{ type: 'web_search_result_location' as const, url: annotation.url, title: annotation.title,
+        cited_text: text.slice(annotation.start_index, annotation.end_index), encrypted_index: '' }]
+    : []);
 }
 
 interface AnthropicResponseToolUseBlock {
@@ -1076,6 +1096,7 @@ export async function writeAnthropicStream(
   // iterations; TypeScript's local narrowing cannot model that mutation.
   const currentOpenType = () => openType;
   const providerWebSearchIds = new Set<string>();
+  let currentText = '';
   let finalProviderMetadata: ProviderMetadata | undefined;
   const handleWebSearchResult = (
     part: Extract<TextStreamPart<ToolSet>, { type: 'tool-result' }>,
@@ -1083,11 +1104,9 @@ export async function writeAnthropicStream(
     const toolCallId = part.toolCallId;
     const output = asWebSearchOutput(part.output);
     const action = output?.action;
-    const query = action?.query
-      ?? action?.queries?.join(' OR ')
-      ?? action?.url
-      ?? action?.pattern
-      ?? '';
+    const query = action?.type === 'search' ? action.queries?.join(' OR ') ?? action.query ?? ''
+      : action?.type === 'openPage' ? action.url ?? ''
+        : action?.type === 'findInPage' ? action.pattern ?? action.url ?? '' : '';
     const id = serverToolUseId(toolCallId);
     openBlock('server-tool', {
       type: 'server_tool_use', id, name: 'web_search', input: {},
@@ -1101,7 +1120,7 @@ export async function writeAnthropicStream(
       type: 'web_search_tool_result',
       tool_use_id: id,
       content: (output?.sources ?? [])
-        .filter(source => source.type === 'url' && isString(source.url))
+        .filter(source => source.type === 'url')
         .map(source => ({
           type: 'web_search_result',
           url: source.url,
@@ -1186,16 +1205,23 @@ export async function writeAnthropicStream(
       }
 
       case 'text-start':
+        currentText = '';
         openBlock('text', { type: 'text', text: '' });
         break;
       case 'text-delta':
+        currentText += part.text;
         ensureOpenBlock('text', { type: 'text', text: '' });
         emit('content_block_delta', {
           type: 'content_block_delta', index: blockIndex,
           delta: { type: 'text_delta', text: part.text },
         });
         break;
-      case 'text-end': break;
+      case 'text-end':
+        for (const citation of openAiCitations(currentText, part.providerMetadata)) {
+          emit('content_block_delta', { type: 'content_block_delta', index: blockIndex,
+            delta: { type: 'citations_delta', citation } });
+        }
+        break;
 
       case 'tool-input-start': {
         if (isProviderWebSearch(part)) {
@@ -1320,6 +1346,7 @@ export async function generateAnthropicResponse(
   let finishReason: string;
   let usage: LanguageModelUsage | undefined;
   let providerMetadata: ProviderMetadata | undefined;
+  const citations: AnthropicUrlCitation[] = [];
 
   if (options?.forceStream) {
     // Some upstreams (e.g. ChatGPT's Codex backend) reject non-streaming requests
@@ -1341,6 +1368,7 @@ export async function generateAnthropicResponse(
     const streamedToolCalls: TypedToolCall<ToolSet>[] = [];
     let streamedFinishReason = 'stop';
     let streamedUsage: LanguageModelUsage | undefined;
+    let currentText = '';
     for await (const part of r.stream) {
       options.onPart?.(part.type);
       if (options.abortSignal?.aborted || part.type === 'abort') {
@@ -1354,9 +1382,11 @@ export async function generateAnthropicResponse(
           ? part.error
           : new Error(isString(part.error) ? part.error : 'Upstream stream failed');
       }
-      if (part.type === 'text-delta') streamedText.push(part.text);
+      if (part.type === 'text-start') currentText = '';
+      if (part.type === 'text-delta') { streamedText.push(part.text); currentText += part.text; }
+      else if (part.type === 'text-end') citations.push(...openAiCitations(currentText, part.providerMetadata));
       else if (part.type === 'tool-call') {
-        streamedToolCalls.push(part);
+        if (!part.providerExecuted) streamedToolCalls.push(part);
       } else if (part.type === 'finish-step') {
         providerMetadata = part.providerMetadata;
       } else if (part.type === 'finish') {
@@ -1377,12 +1407,16 @@ export async function generateAnthropicResponse(
       timeout: { totalMs: SDK_TOTAL_TIMEOUT_MS },
     });
     ({ text, toolCalls, finishReason, usage } = r);
+    toolCalls = toolCalls.filter(call => !call.providerExecuted);
+    for (const part of r.content) {
+      if (part.type === 'text') citations.push(...openAiCitations(part.text, part.providerMetadata));
+    }
     providerMetadata = r.finalStep.providerMetadata;
   }
 
   const requiredProps = toolRequiredProps(params.tools);
   const content: AnthropicResponse['content'] = [];
-  if (text) content.push({ type: 'text', text });
+  if (text) content.push({ type: 'text', text, ...(citations.length && { citations }) });
   for (const toolCall of toolCalls) {
     content.push({
       type: 'tool_use',
