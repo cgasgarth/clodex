@@ -54,6 +54,9 @@ For models without native steering, `response.created` commits input sent in a
 continuation. Echoes that arrive first through Claude retain normal delivery.
 
 Before ending a response, the reader drains new journal records once more.
+It checks enqueue timestamps as well as file position: Claude can flush an old
+queue record after the watcher starts, and replaying that record could repeat
+the initial task. New messages with identical text still retain their own events.
 Socket frames received during that drain are processed in order. Failures retain
 the original event for Claude's normal delivery path. Pending steering is
 connection-local, so an uncommitted update must be submitted again on recovery.

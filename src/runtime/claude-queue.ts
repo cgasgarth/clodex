@@ -12,13 +12,17 @@ export interface ClaudeQueueSubscription {
   close(): void;
 }
 
-function readQueuedInput(line: string, sessionId: string, position: string): QueuedSessionInput | undefined {
+function readQueuedInput(line: string, sessionId: string, position: string, startedAt: number): QueuedSessionInput | undefined {
   let row: unknown;
   try { row = JSON.parse(line); } catch { return undefined; }
   if (!isObject(row) || !('type' in row) || row.type !== 'queue-operation'
     || !('operation' in row) || row.operation !== 'enqueue'
     || !('sessionId' in row) || row.sessionId !== sessionId
-    || !('content' in row) || !isString(row.content)) return undefined;
+    || !('content' in row) || !isString(row.content)
+    || !('timestamp' in row) || !isString(row.timestamp)) return undefined;
+  // Claude buffers journal writes. A pre-request enqueue can reach disk after the watcher starts.
+  const enqueuedAt = Date.parse(row.timestamp);
+  if (!Number.isFinite(enqueuedAt) || enqueuedAt < startedAt) return undefined;
   return { id: createHash('sha256').update(`${position}:${line}`).digest('hex'),
     kind: claudeQueuedEventKind(row.content) === 'task' ? 'task' : 'human', text: row.content };
 }
@@ -29,6 +33,7 @@ export async function watchClaudeQueue(
   onInput: (input: QueuedSessionInput) => void,
   projectsPath = join(process.env['CLAUDE_CONFIG_DIR'] ?? join(homedir(), '.claude'), 'projects'),
 ): Promise<ClaudeQueueSubscription> {
+  const startedAt = Date.now();
   if (!/^[a-f0-9-]{36}$/i.test(sessionId)) throw new Error('Invalid Claude session id');
   const matches = await Array.fromAsync(new Bun.Glob(`*/${sessionId}.jsonl`).scan({ cwd: projectsPath, absolute: true }));
   if (matches.length !== 1) throw new Error('No unique Claude transcript for this local session');
@@ -42,7 +47,7 @@ export async function watchClaudeQueue(
   let reading: Promise<void> | undefined;
   let dirty = false;
   const deliverLine = (line: string): void => {
-    const input = readQueuedInput(line, sessionId, `${path}:${offset - Buffer.byteLength(pending)}`);
+    const input = readQueuedInput(line, sessionId, `${path}:${offset - Buffer.byteLength(pending)}`, startedAt);
     if (input) onInput(input);
   };
   const readAvailable = async (): Promise<void> => {

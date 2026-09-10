@@ -12,7 +12,7 @@ it('reads newly enqueued text and task events once, including split UTF-8 record
   const project = join(root,'project');
   await mkdir(project);
   const path = join(project,`${sessionId}.jsonl`);
-  const row = (content: string) => JSON.stringify({type:'queue-operation',operation:'enqueue',sessionId,content})+'\n';
+  const row = (content: string) => JSON.stringify({type:'queue-operation',operation:'enqueue',sessionId,content,timestamp:new Date().toISOString()})+'\n';
   await Bun.write(path,row('Earlier input'));
   const received: QueuedSessionInput[] = [];
   const stop = await watchClaudeQueue(sessionId,input => received.push(input),root);
@@ -29,5 +29,27 @@ it('reads newly enqueued text and task events once, including split UTF-8 record
       {kind:'human',text:'Use café and 日本語.'},{kind:'task',text:task},
     ]);
     expect(received[0]?.id).not.toBe(received[1]?.id);
+  } finally { stop.close(); await rm(root,{recursive:true,force:true}); }
+});
+
+it('ignores older enqueues written late but delivers a new identical message', async () => {
+  const root = await mkdtemp(join(tmpdir(),'clodex-queue-test-'));
+  const sessionId = '00000000-0000-4000-8000-000000000001';
+  const project = join(root,'project');
+  await mkdir(project);
+  const path = join(project,`${sessionId}.jsonl`);
+  await Bun.write(path,'');
+  const received: QueuedSessionInput[] = [];
+  const old = new Date(Date.now()-1000).toISOString();
+  const row = (timestamp: string) => JSON.stringify({type:'queue-operation',operation:'enqueue',sessionId,
+    content:'Continue the task.',timestamp})+'\n';
+  const stop = await watchClaudeQueue(sessionId,input=>received.push(input),root);
+  try {
+    await appendFile(path,row(old));
+    await stop.flush();
+    expect(received).toHaveLength(0);
+    await appendFile(path,row(new Date().toISOString()));
+    await stop.flush();
+    expect(received.map(input=>input.text)).toEqual(['Continue the task.']);
   } finally { stop.close(); await rm(root,{recursive:true,force:true}); }
 });
