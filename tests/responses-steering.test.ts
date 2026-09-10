@@ -111,6 +111,43 @@ it('preserves a failed steer for normal Claude delivery', () => {
   expect(session.awaitingSuccessor).toBe(false);
 });
 
+it.each(['response.completed', 'response.incomplete'])(
+'releases %s and delivers the queued task after successor creation fails', async terminal => {
+  let receive: ((input: QueuedSessionInput) => void) | undefined;
+  let cleaned = false;
+  const fetch = createResponsesWebSocketFetch('wss://test.invalid', undefined, {
+    webSocketConstructor: Socket,
+    subscribeQueuedInput: async (_id, callback) => {
+      receive = callback;
+      return {flush:async()=>{},close:()=>{cleaned=true;}};
+    },
+  });
+  const first = await withResponsesWebSocketDiagnosticContext(localContext,
+    () => fetch('https://test.invalid',{method:'POST',body:JSON.stringify(payload)}));
+  const socket = sockets[0]!;
+  socket.emit('open');
+  socket.event({type:'response.created',response:{id:'resp_1'}});
+  const task = '<task-notification>\n<status>failed</status>\n<summary>Background command failed with exit code 1</summary>\n</task-notification>';
+  receive?.({id:'task',kind:'task',text:task});
+  socket.event({type:'response.steer.accepted',steer:{id:'steer_1',previous_response_id:'resp_1'}});
+  socket.event({type:terminal,response:{id:'resp_1',output:[],
+    incomplete_details:terminal==='response.incomplete'?{reason:'steered'}:null}});
+  await Bun.sleep(0);
+  expect(cleaned).toBe(false);
+  socket.event({type:'response.steer.failed',steer:{id:'steer_1',previous_response_id:'resp_1'},
+    error:{code:'successor_creation_failed'}});
+  expect(await first.text()).toContain(`"type":"${terminal}"`);
+  expect(cleaned).toBe(true);
+  const echo = {role:'user',content:task};
+  const second = await fetch('https://test.invalid', {method:'POST',body:JSON.stringify({...payload,input:[...payload.input,echo]})});
+  const next = sockets.at(-1)!;
+  if (next !== socket) next.emit('open');
+  expect(next.sent.at(-1)?.input).toContainEqual(echo);
+  next.event({type:'response.created',response:{id:'resp_2'}});
+  complete(next,'resp_2','Background command failed with exit code 1.');
+  expect(await second.text()).toContain('Background command failed with exit code 1.');
+});
+
 it('removes only the committed echo after its original request prefix', () => {
   const envelope = '<system-reminder>\nThe user sent a new message while you were working:\nUse the revised target.\n\nThis is how Claude Code surfaces messages the user sends mid-turn. Address the message above as you continue this turn.\n</system-reminder>';
   const earlier = {role:'user',content:envelope};
