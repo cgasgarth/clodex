@@ -49,7 +49,7 @@ function itemIdentity(item: JsonValue): string | undefined {
   const text = isString(item.content) ? item.content : Array.isArray(item.content)
     ? item.content.flatMap(part => isObject(part) && !Array.isArray(part) && isString(part.text) ? [part.text] : []).join('\n')
     : '';
-  return inputIdentity(text);
+  return inputIdentity(text) ?? (item.role === 'user' ? `human:${text.trim()}` : undefined);
 }
 
 function hash(value: JsonValue): string {
@@ -165,7 +165,7 @@ export class ResponseSteeringSession {
     const removed = new Set<number>();
     const matched = new Set<number>();
     for (const item of this.submissions) {
-      if (item.state !== 'waiting' && item.state !== 'accepted' && item.state !== 'committed') continue;
+      if (item.state !== 'waiting' && item.state !== 'accepted' && item.state !== 'committed' && item.state !== 'echoed') continue;
       if (!item.prefix.every((value, index) => hashes[index] === value)) continue;
       const identity = inputIdentity(item.text) ?? `${item.kind}:${item.text.trim()}`;
       const index = input.findIndex((value, at) => at >= item.prefix.length && !matched.has(at)
@@ -176,7 +176,7 @@ export class ResponseSteeringSession {
         // Claude can deliver a queued item with required tool results before a boundary continuation.
         item.state = 'echoed';
         this.report(item);
-      } else removed.add(index);
+      } else if (item.state !== 'echoed') removed.add(index);
     }
     return input.filter((_, index) => !removed.has(index));
   }

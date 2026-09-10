@@ -49,7 +49,9 @@ means the server has queued the input; the successor's `response.created` commit
 it. The stream remains open through automatic successors. When client tools are
 required, Claude runs them normally and sends their results; accepted steering
 is not sent again. Later echoes in Claude's history remain in its matching
-representation but are removed from the new provider input.
+representation but are removed from the new provider input. This covers both
+Claude's reminder envelopes and plain user messages from its SDK, and matches
+each repeated message to one queue occurrence.
 For models without native steering, `response.created` commits input sent in a
 continuation. Echoes that arrive first through Claude retain normal delivery.
 

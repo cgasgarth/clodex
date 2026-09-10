@@ -235,7 +235,8 @@ const solPayload = {...payload,model:'gpt-5.6-sol'};
 const localContext = {allowLocalClaudeQueue:true,claudeSessionId:'00000000-0000-4000-8000-000000000001'};
 const assistant = (text: string) => ({role:'assistant',content:[{type:'output_text',text}]});
 
-it.each([true, false])('waits for Sol client tool results, with Claude echo=%s', async withEcho => {
+it.each(['wrapped', 'plain', 'missing'])('waits for Sol client tool results, with Claude echo=%s', async echoKind => {
+  const withEcho = echoKind !== 'missing';
   let receive: ((input: QueuedSessionInput) => void) | undefined;
   const fetch = createResponsesWebSocketFetch('wss://test.invalid', undefined, {
     webSocketConstructor: Socket,
@@ -257,7 +258,7 @@ it.each([true, false])('waits for Sol client tool results, with Claude echo=%s',
   await first.text();
   expect(socket.sent).toHaveLength(1);
   const output = {type:'function_call_output',call_id:'call_1',output:'file contents'};
-  const echo = humanEcho('Use the new target.');
+  const echo = echoKind === 'plain' ? {role:'user',content:'Use the new target.'} : humanEcho('Use the new target.');
   const second = await run([...payload.input,call,output,...(withEcho ? [echo] : [])]);
   expect(socket.sent.at(-1)).toMatchObject({type:'response.create',previous_response_id:'resp_1',input:[output,...(withEcho ? [echo] : [])]});
   socket.event({type:'response.created',response:{id:'resp_2'}});
@@ -273,7 +274,7 @@ it.each([true, false])('waits for Sol client tool results, with Claude echo=%s',
   expect(body.match(/"type":"response.completed"/g)).toHaveLength(1);
 });
 
-it('drains late Sol input, reconciles its echo, and keeps both native responses on replay', async () => {
+it.each(['wrapped', 'plain'])('drains late Sol input, reconciles its %s echo, and keeps native replay', async echoKind => {
   let flushed = false;
   const fetch = createResponsesWebSocketFetch('wss://test.invalid', undefined, {
     webSocketConstructor: Socket,
@@ -295,7 +296,8 @@ it('drains late Sol input, reconciles its echo, and keeps both native responses 
   socket.event({type:'response.created',response:{id:'resp_2'}});
   complete(socket,'resp_2','New target applied.');
   await first.text();
-  const input = [...payload.input,assistant('Original answer.'),assistant('New target applied.'),humanEcho('Use the new target.')];
+  const echo = echoKind === 'plain' ? {role:'user',content:'Use the new target.'} : humanEcho('Use the new target.');
+  const input = [...payload.input,assistant('Original answer.'),assistant('New target applied.'),echo];
   const second = await run(input);
   expect(sockets).toHaveLength(1);
   expect(socket.sent.at(-1)).toMatchObject({type:'response.create',previous_response_id:'resp_2',input:[]});
@@ -322,4 +324,7 @@ it('matches each Claude echo to only one queued occurrence', () => {
   const input = [...payload.input,humanEcho('Continue.')];
   expect(session.reconcile(input)).toEqual(input);
   expect(session.takeBoundaryInput('resp_2')).toEqual([{role:'user',content:'Continue.'}]);
+  session.created('resp_3');
+  const later = [...input,humanEcho('Continue.')];
+  expect(session.reconcile(later)).toEqual(input);
 });
