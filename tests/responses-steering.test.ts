@@ -9,9 +9,10 @@ import { addSteeredUsage } from '../src/oauth/responses-websocket/protocol.js';
 const sockets: Socket[] = [];
 class Socket extends EventEmitter {
   sent: JsonObject[] = [];
+  closeCount = 0;
   constructor() { super(); sockets.push(this); }
   send(data: string, callback?: (error?: Error) => void) { this.sent.push(JSON.parse(data)); callback?.(); }
-  close() {}
+  close() { this.closeCount += 1; }
   pause() { return true; }
   resume() { return true; }
   event(value: JsonObject) { this.emit('message', Buffer.from(JSON.stringify(value))); }
@@ -67,6 +68,7 @@ it.each(['response.completed', 'response.incomplete'])('keeps the response open 
   socket.event({type:'response.steer.accepted',steer:{id:'steer_1',previous_response_id:'resp_1'}});
   socket.event({type:terminal,response:{id:'resp_1',output:[],incomplete_details: terminal==='response.incomplete'?{reason:'steered'}:null}});
   expect(cleaned).toBe(false);
+  expect(socket.closeCount).toBe(0);
   socket.event({type:'response.created',response:{id:'resp_2'}});
   complete(socket,'resp_2','Revised target applied.');
   const body = await response.text();
@@ -74,6 +76,7 @@ it.each(['response.completed', 'response.incomplete'])('keeps the response open 
   expect(body.match(/"type":"response.completed"/g)).toHaveLength(1);
   expect(body).not.toContain('"reason":"steered"');
   expect(cleaned).toBe(true);
+  expect(socket.closeCount).toBe(0);
   const echo = {role:'user',content:'<system-reminder>\nThe user sent a new message while you were working:\nUse the revised target.\n\nThis is how Claude Code surfaces messages the user sends mid-turn. Address the message above as you continue this turn.\n</system-reminder>'};
   const echoed = await fetch('https://test.invalid',{method:'POST',body:JSON.stringify({...payload,input:[...payload.input,
     {role:'assistant',content:[{type:'output_text',text:'Revised target applied.'}]},echo]})});
@@ -200,6 +203,7 @@ it('continues accepted steering through a client tool boundary without resending
   socket.event({type:'response.completed',response:{id:'resp_1',output:[call]}});
   await first.text();
   socket.event({type:'response.steer.pending',steer:{id:'steer_1',previous_response_id:'resp_1'},required_input:[{type:'function_call_output',call_id:'call_1'}]});
+  expect(socket.closeCount).toBe(0);
   const output = {type:'function_call_output',call_id:'call_1',output:'file contents'};
   const echo = {role:'user',content:'<system-reminder>\nThe user sent a new message while you were working:\nUse the new target.\n\nThis is how Claude Code surfaces messages the user sends mid-turn. Address the message above as you continue this turn.\n</system-reminder>'};
   const second = await run([...payload.input,call,output,echo]);
@@ -255,6 +259,7 @@ it.each(['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.3-cod
   complete(socket, 'resp_1', 'Original answer.');
   await Bun.sleep(0);
   expect(closed).toBe(false);
+  expect(socket.closeCount).toBe(0);
   expect(socket.sent.at(-1)).toMatchObject({type:'response.create',model,previous_response_id:'resp_1',input:[
     {role:'user',content:'Use the new target.'},
     ...['background command','workflow','subagent'].map(source => ({role:'user',content:expect.stringContaining(`<summary>${source} completed</summary>`)})),
@@ -265,6 +270,7 @@ it.each(['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.3-cod
   expect(body).toContain('Updated target and task results applied.');
   expect(body.match(/"type":"response.completed"/g)).toHaveLength(1);
   expect(closed).toBe(true);
+  expect(socket.closeCount).toBe(0);
 });
 
 const humanEcho = (text: string) => ({role:'user',content:`<system-reminder>\nThe user sent a new message while you were working:\n${text}\n\nThis is how Claude Code surfaces messages the user sends mid-turn. Address the message above as you continue this turn.\n</system-reminder>`});
@@ -295,6 +301,7 @@ it.each(['wrapped', 'plain', 'missing'])('waits for Sol client tool results, wit
   await first.text();
   expect(socket.sent).toHaveLength(1);
   const output = {type:'function_call_output',call_id:'call_1',output:'file contents'};
+  expect(socket.closeCount).toBe(0);
   const echo = echoKind === 'plain' ? {role:'user',content:'Use the new target.'} : humanEcho('Use the new target.');
   const second = await run([...payload.input,call,output,...(withEcho ? [echo] : [])]);
   expect(socket.sent.at(-1)).toMatchObject({type:'response.create',previous_response_id:'resp_1',input:[output,...(withEcho ? [echo] : [])]});
@@ -309,6 +316,7 @@ it.each(['wrapped', 'plain', 'missing'])('waits for Sol client tool results, wit
   }
   const body = await second.text();
   expect(body.match(/"type":"response.completed"/g)).toHaveLength(1);
+  expect(socket.closeCount).toBe(0);
 });
 
 it.each(['wrapped', 'plain'])('drains late Sol input, reconciles its %s echo, and keeps native replay', async echoKind => {
