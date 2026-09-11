@@ -792,7 +792,7 @@ beforeEach(() => {
     // SAFETY: The test fixture defines the asserted runtime shape.
     const replay = JSON.parse(replacement.send.mock.calls[0]![0] as string);
     expect(replay.previous_response_id).toBeUndefined();
-    expect(replay.input).toEqual(fullInput);
+    expect(replay.input).toMatchObject(fullInput);
     emitTextResponse(replacement, 'resp_transport_recovered', 'second answer');
     await readAll(continued);
   });
@@ -1925,7 +1925,7 @@ beforeEach(() => {
     // SAFETY: The test fixture defines the asserted runtime shape.
     const restored = JSON.parse(restoredSocket.send.mock.calls[0]![0] as string);
     expect(restored.previous_response_id).toBeUndefined();
-    expect(restored.input).toEqual([
+    expect(restored.input).toMatchObject([
       firstUser,
       secondUser,
       ...canonical,
@@ -2968,7 +2968,7 @@ beforeEach(() => {
     const secondCanonical = [{ type: 'compaction', encrypted_content: 'second-opaque-state' }];
     const compactFetch = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
       const body = JSON.parse(String(init?.body));
-      expect(body.input).toEqual([
+      expect(body.input).toMatchObject([
         firstUser,
         secondUser,
         ...firstCanonical,
@@ -3272,7 +3272,7 @@ beforeEach(() => {
     // SAFETY: The test fixture defines the asserted runtime shape.
     const restored = JSON.parse(restoredSocket.send.mock.calls[0]![0] as string);
     expect(restored.previous_response_id).toBeUndefined();
-    expect(restored.input).toEqual([
+    expect(restored.input).toMatchObject([
       firstUser,
       secondUser,
       ...canonical,
@@ -3637,7 +3637,7 @@ beforeEach(() => {
     // SAFETY: The test fixture defines the asserted runtime shape.
     const restoredAgentA = JSON.parse(restoredAgentASocket.send.mock.calls[0]![0] as string);
     expect(restoredAgentA.previous_response_id).toBeUndefined();
-    expect(restoredAgentA.input).toEqual([
+    expect(restoredAgentA.input).toMatchObject([
       ...agentACanonical,
       agentAAssistant,
       agentANext,
@@ -5025,7 +5025,7 @@ beforeEach(() => {
     // SAFETY: The test fixture defines the asserted runtime shape.
     const retried = JSON.parse(replacement.send.mock.calls[0]![0] as string);
     expect(retried.previous_response_id).toBeUndefined();
-    expect(retried.input).toEqual(fullNextInput);
+    expect(retried.input).toMatchObject(fullNextInput);
     emitTextResponse(replacement, 'resp_recovered', 'recovered');
     const body = await readAll(second);
     expect(body).not.toContain('previous_response_not_found');

@@ -595,6 +595,7 @@ export async function startProxyCatalog(
   port = 0,
   optimizeRequest?: ProxyRequestOptimizer,
   shouldLogWebSocketDiagnostic?: (event: ResponsesWebSocketDiagnosticEvent) => boolean,
+  allowLocalClaudeQueue = false,
 ): Promise<ProxyHandle> {
   silenceSdkWarnings();
   let catalog = createProxyCatalogState(routes, defaultAliasId, modelAliases);
@@ -952,6 +953,14 @@ export async function startProxyCatalog(
             claudeSessionId,
           });
           translationLifecycle?.dispatched();
+          const websocketContext = {
+            requestId: relayRequestId,
+            allowLocalClaudeQueue,
+            claudeSessionId,
+            claudeAgentId: claudeAgentIdHeader,
+            estimatedInputTokens,
+            forceCompaction,
+          };
           if (clientWantsStream) {
             const keepAliveMs =
               Number(process.env.CLODEX_STREAM_KEEPALIVE_INTERVAL_MS) || STREAM_KEEPALIVE_INTERVAL_MS;
@@ -980,13 +989,7 @@ export async function startProxyCatalog(
             } | undefined;
             try {
               await withResponsesWebSocketDiagnosticContext(
-                {
-                  requestId: relayRequestId,
-                  claudeSessionId,
-                  claudeAgentId: claudeAgentIdHeader,
-                  estimatedInputTokens,
-                  forceCompaction,
-                },
+                websocketContext,
                 () => streamAnthropicResponse(
                   model,
                   params,
@@ -1017,13 +1020,7 @@ export async function startProxyCatalog(
             // outright ("Stream must be set to true"), so always stream internally
             // for it and collect the result, regardless of what the client asked for.
             const anthropicResponse = await withResponsesWebSocketDiagnosticContext(
-              {
-                requestId: relayRequestId,
-                claudeSessionId,
-                claudeAgentId: claudeAgentIdHeader,
-                estimatedInputTokens,
-                forceCompaction,
-              },
+              websocketContext,
               () => generateAnthropicResponse(
                 model,
                 params,

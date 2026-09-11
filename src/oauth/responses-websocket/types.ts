@@ -1,4 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
+import type { ResponseSteeringSession, QueuedSessionInput } from './steering.js';
+import type { ClaudeQueueSubscription } from '../../runtime/claude-queue.js';
 import type { ResponseUsage } from './protocol.js';
 import type { WebSocketConstructor } from './transport.js';
 
@@ -23,6 +25,8 @@ export const RESPONSES_CHECKPOINT_MISS_FALLBACK_TOKENS = 400_000;
 export const RESPONSES_COMPACTION_CHECKPOINT_TTL_MS = 30 * 60_000;
 
 export interface ResponsesWebSocketFetchOptions {
+  /** Subscribe to fresh Claude queue entries while a model response is active. */
+  subscribeQueuedInput?: (sessionId: string, receive: (input: QueuedSessionInput) => void) => Promise<ClaudeQueueSubscription>;
   providerId?: string;
   accountId?: string;
   /** Test overrides; production callers should leave these unset. */
@@ -57,6 +61,8 @@ export interface ResponsesWebSocketDiagnosticEvent extends JsonObject {
 }
 
 export interface ResponsesWebSocketDiagnosticContext {
+  /** Set only by the local daemon; client-supplied metadata cannot grant filesystem access. */
+  allowLocalClaudeQueue?: boolean;
   requestId?: string;
   claudeSessionId?: string;
   claudeAgentId?: string;
@@ -109,6 +115,15 @@ export interface OutputAccumulator {
 }
 
 export interface RequestContext {
+  steering?: ResponseSteeringSession;
+  queueSubscription?: ClaudeQueueSubscription;
+  queueDrainedResponseId?: string;
+  nativeInput?: JsonValue[];
+  nativeDeltaCount?: number;
+  nativeTranscript?: JsonValue[];
+  responseOutputStart?: number;
+  heldTerminal?: JsonObject;
+  steeredUsage?: JsonObject;
   controller: ReadableStreamDefaultController<Uint8Array>;
   encoder: TextEncoder;
   originalPayload: JsonObject;
@@ -159,6 +174,10 @@ export interface RequestContext {
 }
 
 export interface ConnectionEntry {
+  drainingQueuedInput?: boolean;
+  deferredFrames?: RawData[];
+  steering?: ResponseSteeringSession;
+  nativeHistory?: JsonValue[];
   debugId: number;
   /** Logical conversation lineage; changes when a physical socket is recycled. */
   lineageId: number;

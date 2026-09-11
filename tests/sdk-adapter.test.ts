@@ -207,6 +207,14 @@ describe('annotateToolNames', () => {
 });
 
 describe('translateMessages', () => {
+  it('offers hosted search when Claude exposes its built-in WebSearch tool', () => {
+    const params = translateRequest({ model:'astra', messages:[{role:'user',content:'Search the web.'}],
+      tools:[{name:'WebSearch',description:'Search the web',input_schema:{type:'object',properties:{query:{type:'string'}},required:['query']}}],
+      tool_choice:{type:'tool',name:'WebSearch'},
+    },'@ai-sdk/openai',{openAiOAuth:true});
+    expect(params.tools?.web_search).toMatchObject({type:'provider',id:'openai.web_search'});
+    expect(params.toolChoice).toEqual({type:'tool',toolName:'web_search'});
+  });
   it('maps user text and assistant text', () => {
     const out = translateMessages([
       { role: 'user', content: 'hello' },
@@ -510,7 +518,7 @@ describe('translateMessages', () => {
     }, '@ai-sdk/openai', { openAiOAuth: true });
 
     // SAFETY: The test fixture defines the asserted runtime shape.
-    expect((params.messages[0] as any).content.map((part: any) => part.text)).toEqual([
+    expect((params.messages as any[]).flatMap(message => message.content.map((part: any) => part.text))).toEqual([
       queued,
       'tool context that arrived in the same boundary',
     ]);
@@ -1428,6 +1436,20 @@ async function collect(
 }
 
 describe('writeAnthropicStream', () => {
+  it('preserves native URL citations on streamed text', async () => {
+    const {events} = await collect([
+      {type:'text-start',id:'msg_1'},
+      {type:'text-delta',id:'msg_1',text:'The guide supports steering.'},
+      {type:'text-end',id:'msg_1',providerMetadata:{openai:{itemId:'msg_1',annotations:[{
+        type:'url_citation',url:'https://developers.openai.com/api/docs/guides/steering',title:'Steering',start_index:0,end_index:27,
+      }]}}},
+      {type:'finish',finishReason:'stop',totalUsage:sdkUsage(10,5)},
+    ]);
+    expect(events.find(event=>event.data.delta?.type==='citations_delta')?.data.delta.citation).toEqual({
+      type:'web_search_result_location',url:'https://developers.openai.com/api/docs/guides/steering',title:'Steering',
+      cited_text:'The guide supports steering',encrypted_index:'',
+    });
+  });
   it('emits a well-formed text turn', async () => {
     const { events } = await collect([
       { type: 'start' },

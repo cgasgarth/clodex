@@ -208,6 +208,27 @@ export function responseUsageDebug(usage: ResponseUsage): string {
     + (usage.serviceTier ? ` service_tier=${usage.serviceTier}` : '');
 }
 
+/** Sum billed usage across automatic successors without changing context-window measurements. */
+export function addSteeredUsage(current: JsonObject, previous?: JsonObject): JsonObject {
+  if (!previous) return current;
+  const result = { ...current };
+  for (const key of ['input_tokens', 'output_tokens', 'total_tokens']) {
+    if (isNumber(current[key]) && isNumber(previous[key])) result[key] = current[key] + previous[key];
+  }
+  for (const key of ['input_tokens_details', 'output_tokens_details']) {
+    const currentDetails = current[key];
+    const previousDetails = previous[key];
+    const next: JsonObject = isJsonObject(currentDetails) ? currentDetails : {};
+    const prior: JsonObject = isJsonObject(previousDetails) ? previousDetails : {};
+    const details = { ...next };
+    for (const field of Object.keys(prior)) {
+      if (isNumber(prior[field])) details[field] = (isNumber(next[field]) ? next[field] : 0) + prior[field];
+    }
+    result[key] = details;
+  }
+  return result;
+}
+
 function outputAccumulator(ctx: RequestContext, index: number): OutputAccumulator {
   let accumulator = ctx.outputByIndex.get(index);
   if (!accumulator) {
@@ -369,6 +390,20 @@ export function expectedAssistantItems(ctx: RequestContext): JsonValue[] {
   return output;
 }
 
+/** Keep provider-owned fields for replay; the Claude projection is only for matching. */
+export function nativeAssistantItems(ctx: RequestContext, start = 0): JsonValue[] {
+  return [...ctx.outputByIndex.entries()].toSorted(([a], [b]) => a - b)
+    .filter(([index]) => index >= start)
+    .flatMap(([, output]) => {
+      const done = output.done;
+      if (!done) return [];
+      if (done.type === 'message') return [{ ...done, role: 'assistant',
+        content: Array.isArray(done.content) ? done.content : [{ type: 'output_text', text: output.text }],
+      }];
+      return [done];
+    });
+}
+
 export function encodeSse(ctx: RequestContext, event: JsonValue): void {
   if (ctx.closed) return;
   ctx.controller.enqueue(ctx.encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
@@ -385,6 +420,7 @@ export function closeContext(ctx: RequestContext): void {
   ctx.closed = true;
   ctx.entry?.socket.resume();
   ctx.abortCleanup?.();
+  ctx.queueSubscription?.close();
   ctx.resolveSettled?.();
   ctx.resolveSettled = undefined;
   try { ctx.controller.close(); } catch { /* already closed */ }
