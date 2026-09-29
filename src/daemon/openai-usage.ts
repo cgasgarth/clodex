@@ -1,8 +1,5 @@
 import { isBoolean, isNumber, isObject, isString } from '../runtime/type-guards.js';
-import { PROVIDER_METADATA_TIMEOUT_MS } from '../config/timeouts.js';
 import type { JsonObject, JsonValue } from '../oauth/responses-websocket/types.js';
-
-const CODEX_USAGE_URL = 'https://chatgpt.com/backend-api/wham/usage';
 
 interface OpenAiUsageWindow {
   usedPercent: number;
@@ -162,37 +159,14 @@ export function parseOpenAiUsage(
   return snapshot;
 }
 
-export async function fetchOpenAiUsage(
-  accessToken: string,
-  accountId?: string,
-  options: {
+export function fetchOpenAiUsage(
+  _accessToken: string,
+  _accountId?: string,
+  _options: {
     fetch?: FetchLike;
     timeoutMs?: number;
     now?: () => Date;
   } = {},
 ): Promise<OpenAiUsageSnapshot> {
-  const controller = new AbortController();
-  const timer = setTimeout(
-    () => controller.abort(),
-    options.timeoutMs ?? PROVIDER_METADATA_TIMEOUT_MS,
-  );
-  timer.unref();
-  try {
-    const response = await (options.fetch ?? fetch)(CODEX_USAGE_URL, {
-      headers: (() => {
-        const headers = new Headers({
-          Authorization: `Bearer ${accessToken}`,
-          Accept: 'application/json',
-          'User-Agent': 'codex-cli',
-        });
-        if (accountId) headers.set('ChatGPT-Account-Id', accountId);
-        return headers;
-      })(),
-      signal: controller.signal,
-    });
-    if (!response.ok) throw new Error(`OpenAI usage request failed (${response.status})`);
-    return parseOpenAiUsage(await response.json(), options.now?.() ?? new Date());
-  } finally {
-    clearTimeout(timer);
-  }
+  return Promise.reject(new Error('Review Clodex plan limits and credits at https://chatgpt.com/settings/usage'));
 }

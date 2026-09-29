@@ -5,8 +5,7 @@ import {
 } from '@ai-sdk/openai';
 import { streamText } from 'ai';
 import {
-  CODEX_RESPONSES_LITE_VERSION,
-  CODEX_RESPONSES_LITE_WS_URL,
+  OPENAI_RESPONSES_WS_URL,
 } from '../src/constants.js';
 import { extractOpenAiAccountId } from '../src/oauth/openai.js';
 import { compactResponsesWindow } from '../src/oauth/responses-compaction.js';
@@ -209,7 +208,7 @@ function targetModels(provider: LocalProvider): LocalProviderModel[] {
   return models;
 }
 
-function probeHeaders(provider: LocalProvider, model: LocalProviderModel): ProbeHeaders {
+function probeHeaders(provider: LocalProvider): ProbeHeaders {
   const accountId = extractOpenAiAccountId({ access_token: provider.apiKey })?.trim()
     || provider.oauthAccountId?.trim();
   const headers: ProbeHeaders = {
@@ -217,10 +216,6 @@ function probeHeaders(provider: LocalProvider, model: LocalProviderModel): Probe
     originator: 'clodex-compaction-probe',
   };
   if (accountId) headers['ChatGPT-Account-Id'] = accountId;
-  if (model.useResponsesLite) {
-    headers.version = CODEX_RESPONSES_LITE_VERSION;
-    headers['x-openai-internal-codex-responses-lite'] = 'true';
-  }
   return headers;
 }
 
@@ -253,7 +248,7 @@ async function probeModel(
     instructions: 'Compact the synthetic conversation state. Do not execute tools.',
     tools: [],
     parallel_tool_calls: false,
-    reasoning: { effort: 'medium', context: model.useResponsesLite ? 'all_turns' : undefined },
+    reasoning: { effort: 'medium' },
     prompt_cache_key: promptCacheKey,
     text: { verbosity: 'low' },
   };
@@ -262,8 +257,8 @@ async function probeModel(
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
       const result = await compactResponsesWindow({
-        requestUrl: 'https://chatgpt.com/backend-api/codex/responses',
-        headers: probeHeaders(provider, model),
+        requestUrl: 'https://api.openai.com/v1/responses',
+        headers: probeHeaders(provider),
         payload,
       });
       const usage = result.usage;
@@ -301,7 +296,7 @@ async function probeContextManagement(
   model: LocalProviderModel,
 ): Promise<ProbeResult> {
   const wsFetch = createResponsesWebSocketFetch(
-    CODEX_RESPONSES_LITE_WS_URL,
+    OPENAI_RESPONSES_WS_URL,
     process.env.CLODEX_LIVE_COMPACTION_DEBUG === '1'
       ? message => process.stderr.write(`${message}\n`)
       : undefined,
@@ -314,10 +309,10 @@ async function probeContextManagement(
   // unrefs idle sockets, so this standalone probe needs its own bounded handle.
   const keepAlive = setInterval(() => {}, 1_000);
   try {
-    const { Authorization: _authorization, ...headers } = probeHeaders(provider, model);
+    const { Authorization: _authorization, ...headers } = probeHeaders(provider);
     const openai = createOpenAI({
       apiKey: provider.apiKey,
-      baseURL: 'https://chatgpt.com/backend-api/codex',
+      baseURL: 'https://api.openai.com/v1',
       headers,
       fetch: wsFetch,
     });
@@ -334,7 +329,6 @@ async function probeContextManagement(
           store: false,
           promptCacheKey: `clodex-context-management-probe-${randomUUID()}`,
           reasoningEffort: 'medium',
-          reasoningContext: model.useResponsesLite ? 'all_turns' : undefined,
           contextManagement: [{ type: 'compaction', compactThreshold: 1 }],
         } satisfies OpenAILanguageModelResponsesOptions,
       },
@@ -386,7 +380,7 @@ async function probeIntegratedCompaction(
 ): Promise<ProbeResult> {
   const diagnostics: ResponsesWebSocketDiagnosticEvent[] = [];
   const wsFetch = createResponsesWebSocketFetch(
-    CODEX_RESPONSES_LITE_WS_URL,
+    OPENAI_RESPONSES_WS_URL,
     process.env.CLODEX_LIVE_COMPACTION_DEBUG === '1'
       ? message => process.stderr.write(`${message}\n`)
       : undefined,
@@ -405,14 +399,14 @@ async function probeIntegratedCompaction(
     instructions: 'Reply with the word OK.',
     tools: [],
     parallel_tool_calls: false,
-    reasoning: { effort: 'medium', context: model.useResponsesLite ? 'all_turns' : undefined },
+    reasoning: { effort: 'medium' },
     prompt_cache_key: promptCacheKey,
     store: false,
   };
   try {
-    const first = await wsFetch('https://chatgpt.com/backend-api/codex/responses', {
+    const first = await wsFetch('https://api.openai.com/v1/responses', {
       method: 'POST',
-      headers: probeHeaders(provider, model),
+      headers: probeHeaders(provider),
       body: JSON.stringify({ ...basePayload, input }),
     });
     const firstSummary = summarizeWire(await first.text());
@@ -435,9 +429,9 @@ async function probeIntegratedCompaction(
       role: 'assistant',
       content: [{ type: 'output_text', text: firstSummary.assistantText }],
     };
-    const second = await wsFetch('https://chatgpt.com/backend-api/codex/responses', {
+    const second = await wsFetch('https://api.openai.com/v1/responses', {
       method: 'POST',
-      headers: probeHeaders(provider, model),
+      headers: probeHeaders(provider),
       body: JSON.stringify({
         ...basePayload,
         input: [

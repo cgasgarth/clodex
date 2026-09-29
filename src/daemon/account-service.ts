@@ -399,7 +399,7 @@ export class DaemonAccountService implements DaemonAccountController {
         rejectedAccessToken ? { rejectedAccessToken } : {},
       ),
     };
-    if (allowFailover) {
+    if (allowFailover && providerId !== 'openai-oauth') {
       common.usageLimitFailover = () => this.failoverRoute(route, account);
     }
     if (providerId === 'xai-oauth') return common;

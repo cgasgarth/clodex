@@ -1,18 +1,8 @@
 // src/data/openai-oauth-models.ts
 //
-// Static seed list of GPT models accessible via ChatGPT Plus / Pro OAuth.
-//
-// WHY STATIC: The ChatGPT OAuth backend (chatgpt.com/backend-api/codex) does not
-// expose a standard GET /v1/models endpoint. OAuth access tokens from auth.openai.com
-// are NOT the same as developer API keys (sk-...) and are rejected by api.openai.com/v1/models.
-// See provider-factory.ts: OpenAI OAuth routes inference to chatgpt.com/backend-api/codex,
-// not api.openai.com.
-//
-// These are models confirmed to work via the ChatGPT Codex backend. Models are available
-// depending on subscription tier (Plus vs Pro). We include the full set here and let the
-// user discover what their tier unlocks at inference time.
-//
-// Update this list when OpenAI adds new models to their ChatGPT OAuth offering.
+// Model metadata used to enrich the signed-in account's public /v1/models catalog.
+// Live discovery determines which models are available; this list supplies
+// confirmed context-window and reasoning metadata for known models.
 
 import type { CachedModel } from '../registry/types.js';
 import { resolveContextWindow } from '../models/context-window.js';
@@ -24,8 +14,6 @@ interface OAuthModelSeed {
   /** ChatGPT Codex client input window, which may differ from the public API model. */
   contextWindow?: number;
   reasoning?: boolean;
-  /** Backend capability seed — mirrors the live use_responses_lite flag. */
-  useResponsesLite?: boolean;
 }
 
 /** Claude-facing context policy for current OpenAI million-token routes. */
@@ -35,34 +23,24 @@ export const OPENAI_MILLION_CONTEXT_WINDOW = 1_000_000;
 export const OPENAI_MILLION_CONTEXT_MODELS = new Set<string>([
   'gpt-6.1-sol',
   'gpt-6-astra',
-  'gpt-5.6-terra',
-  'gpt-5.6-luna',
+  'gpt-6-luna',
 ]);
 
 /** Sol routes hidden from the OpenAI OAuth catalog. */
 export const OPENAI_OAUTH_RETIRED_MODELS = new Set<string>([
   'gpt-6-sol',
   'gpt-5.6-sol',
+  'gpt-5.6-terra',
+  'gpt-5.6-luna',
 ]);
 
-// Models that the ChatGPT Codex backend (chatgpt.com/backend-api/codex) explicitly rejects
-// for OAuth-authenticated ChatGPT accounts. The API returns HTTP 400 with:
-//   "The '<model>' model is not supported when using Codex with a ChatGPT account."
-// These models may be valid via OpenAI developer API keys (api.openai.com) — they are
-// only excluded from the OAuth path. Update this set when OpenAI changes availability.
-export const CHATGPT_CODEX_UNSUPPORTED_MODELS = new Set<string>([
-  'gpt-5.5-fast',   // confirmed: rejected by chatgpt.com/backend-api/codex
-]);
-
-// Models available via ChatGPT Plus/Pro OAuth (chatgpt.com/backend-api/codex).
+// Known model metadata for ChatGPT plan usage.
 // Ordered from newest to oldest within each tier.
 const OPENAI_OAUTH_MODEL_SEEDS: OAuthModelSeed[] = [
   // GPT-6 family
   { id: 'gpt-6.1-sol',          name: 'sol-6.1',           contextWindow: OPENAI_MILLION_CONTEXT_WINDOW, reasoning: true },
-  { id: 'gpt-6-astra',          name: 'GPT-6 Astra',       contextWindow: OPENAI_MILLION_CONTEXT_WINDOW, reasoning: true, useResponsesLite: true },
-  // GPT-5.6 family (Terra / Luna)
-  { id: 'gpt-5.6-terra',        name: 'GPT-5.6 Terra',     contextWindow: OPENAI_MILLION_CONTEXT_WINDOW, reasoning: true },
-  { id: 'gpt-5.6-luna',         name: 'GPT-5.6 Luna',      contextWindow: OPENAI_MILLION_CONTEXT_WINDOW, reasoning: true, useResponsesLite: true },
+  { id: 'gpt-6-astra',          name: 'GPT-6 Astra',       contextWindow: OPENAI_MILLION_CONTEXT_WINDOW, reasoning: true },
+  { id: 'gpt-6-luna',           name: 'GPT-6 Luna',        contextWindow: OPENAI_MILLION_CONTEXT_WINDOW, reasoning: true },
   // GPT-5.5 family (Pro)
   { id: 'gpt-5.5',              name: 'GPT-5.5',           contextWindow: 272_000, reasoning: true },
   // GPT-5.4 family
@@ -91,7 +69,6 @@ export function buildOpenAiOAuthModels(): CachedModel[] {
       modelFormat: 'openai' as const,
       npm: '@ai-sdk/openai',
       reasoning: seed.reasoning,
-      useResponsesLite: seed.useResponsesLite,
     };
   });
 }

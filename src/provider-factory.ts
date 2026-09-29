@@ -5,8 +5,8 @@ import type { LanguageModel } from 'ai';
 import { wrapLanguageModel, extractReasoningMiddleware } from 'ai';
 import type { FetchFunction, ProviderOptions } from '@ai-sdk/provider-utils';
 import type { ProviderDataValue } from './types.js';
-import { CODEX_RESPONSES_LITE_VERSION, CODEX_RESPONSES_LITE_WS_URL } from './constants.js';
-import { extractOpenAiAccountId } from './oauth/openai.js';
+import { OPENAI_RESPONSES_WS_URL } from './constants.js';
+import { extractOpenAiAccountId, requireChatGptPlanToken } from './oauth/openai.js';
 import {
   createResponsesWebSocketFetch,
   type ResponsesWebSocketDiagnosticEvent,
@@ -116,8 +116,6 @@ export interface ProviderModelSpec {
   providerData?: Record<string, ProviderDataValue>;
   /** Static headers sent on every upstream request (e.g. a plan/auth-tracking header a custom endpoint requires). */
   headers?: Record<string, string>;
-  /** Backend capability: model requires the Responses-Lite request shape (x-openai-internal-codex-responses-lite). */
-  useResponsesLite?: boolean;
   /** Native compaction token threshold for OAuth Responses models. */
   openAiCompactThreshold?: number;
   /** Hard model context window used to prevent known-oversized Responses sends. */
@@ -196,6 +194,7 @@ export async function createLanguageModel(
   }
 
   if (npm === '@ai-sdk/openai') {
+    if (spec.authType === 'oauth') requireChatGptPlanToken(apiKey);
     const createOpenAI = dependencies.createOpenAI
       ?? (await import('@ai-sdk/openai')).createOpenAI;
     const useResponsesEndpoint = shouldUseOpenAiResponsesEndpoint(modelId);
@@ -224,24 +223,16 @@ export async function createLanguageModel(
     const oauthOptions = spec.authType === 'oauth'
       ? {
           apiKey,
-          baseURL: 'https://chatgpt.com/backend-api/codex',
+          baseURL: 'https://api.openai.com/v1',
           headers: {
             ...spec.headers,
-            ...(accountId && { 'ChatGPT-Account-Id': accountId }),
-            originator: 'clodex',
-            // Responses-Lite models (backend use_responses_lite,
-            // e.g. gpt-5.6-luna) require these on the request.
-            ...(spec.useResponsesLite && {
-              version: CODEX_RESPONSES_LITE_VERSION,
-              'x-openai-internal-codex-responses-lite': 'true',
-            }),
           },
           // Keep every ChatGPT/Codex OAuth Responses conversation on the
           // persistent WebSocket transport so connection-local
           // previous_response_id continuation remains available.
           ...(useResponsesEndpoint && {
             fetch: (dependencies.createResponsesWebSocketFetch ?? createResponsesWebSocketFetch)(
-              CODEX_RESPONSES_LITE_WS_URL,
+              OPENAI_RESPONSES_WS_URL,
               spec.onDebug,
               {
                   providerId: spec.providerId ?? 'openai',
@@ -579,7 +570,7 @@ function isGpt56Model(modelId: string): boolean {
 }
 
 function isGpt6Model(modelId: string): boolean {
-  return /^(?:gpt-6-astra|gpt-6\.1-sol)$/i.test(modelId);
+  return /^(?:gpt-6-(?:astra|luna)|gpt-6\.1-sol)$/i.test(modelId);
 }
 
 function mapCodexEffortToOpenAI(effort: string, modelId?: string): string | undefined {

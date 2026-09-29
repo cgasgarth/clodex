@@ -58,7 +58,7 @@ export interface Account {
 
 export interface DeviceCodePrompt {
   url: string;
-  userCode: string;
+  userCode?: string;
 }
 
 export type UsagePeriod = 'day' | 'last7' | 'last30';
@@ -283,7 +283,7 @@ export function accountDisplayName(account: Pick<Account, 'email' | 'name'>): st
 }
 
 export function deviceCodeInstruction({ userCode }: DeviceCodePrompt): string {
-  return `Enter code ${userCode} in the browser.`;
+  return userCode ? `Enter code ${userCode} in the browser.` : 'Continue with ChatGPT in the browser and allow Clodex to use your plan.';
 }
 
 function startOfDay(date: Date): Date {

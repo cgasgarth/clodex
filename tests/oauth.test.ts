@@ -171,7 +171,7 @@ describe('oauth refresh http', () => {
 describe('openai oauth helpers', () => {
   it('extracts account id from jwt', () => {
     const header = Buffer.from('{}').toString('base64url');
-    const payload = Buffer.from(JSON.stringify({ chatgpt_account_id: 'user-123' })).toString('base64url');
+    const payload = Buffer.from(JSON.stringify({ client_id: 'user-123' })).toString('base64url');
     const id = extractOpenAiAccountId({ access_token: `${header}.${payload}.x`, refresh_token: 'r' });
     expect(id).toBe('user-123');
   });
@@ -196,6 +196,7 @@ describe('oauth refresh', () => {
       access: 'old',
       refresh: 'rt',
       expires: 0,
+      providerData: {clientId: 'oaiapp_test'},
     });
     expect(cred.access).toBe('new-access');
     expect(oauthCredentialShouldRefresh(cred, 'openai-oauth')).toBe(false);

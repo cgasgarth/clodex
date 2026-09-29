@@ -8,9 +8,10 @@ import {
   probeProviderCredentialStore,
   provisionProviderCredential,
   saveProviderCredential,
+  resolveProviderOAuthProviderData,
 } from '../config/environment.js';
 import { credentialInstanceAuthRef } from '../credentials/helper.js';
-import { runOpenAiDeviceCodeFlow } from '../oauth/openai.js';
+import { runOpenAiSignIn, openAiRegistrationFromData } from '../oauth/openai.js';
 import { runXaiDeviceCodeFlow } from '../oauth/xai.js';
 import {
   supportsNativeOAuth,
@@ -18,6 +19,7 @@ import {
   oauthCredentialToKeychainJson,
   type NativeOAuthProviderId,
   type StoredOAuthCredential,
+  type OAuthSignInResult,
 } from '../oauth/types.js';
 import { getTemplateById } from '../providers/templates.js';
 import { oauthAuthRef, oauthTemplateId, toOAuthRegistryId } from './import-build.js';
@@ -64,7 +66,7 @@ function openBrowser(url: string): void {
   open(url).catch(() => {});
 }
 
-async function runNativeDeviceCode(providerId: NativeOAuthProviderId): Promise<StoredOAuthCredential> {
+async function runNativeSignIn(providerId: NativeOAuthProviderId): Promise<StoredOAuthCredential> {
   const label = PROVIDER_DISPLAY[providerId];
   printOAuthStepsPanel(`${label} — Sign in`, label);
 
@@ -72,18 +74,28 @@ async function runNativeDeviceCode(providerId: NativeOAuthProviderId): Promise<S
   spinner.start('Waiting for authorization...');
 
   try {
-    const runFlow = providerId === 'openai' || providerId === 'openai-oauth'
-      ? runOpenAiDeviceCodeFlow
-      : runXaiDeviceCodeFlow;
-    const { tokens, accountId } = await runFlow(({ url, userCode }) => {
+    const showAuthorization = ({ url, userCode }: { url: string; userCode?: string }) => {
       spinner.stop('');
-      p.log.info(`Visit: ${pc.cyan(url)}`);
-      p.log.info(`Enter code: ${pc.bold(userCode)}`);
+      const displayUrl = new URL(url);
+      displayUrl.searchParams.delete('id_token_hint');
+      p.log.info(`Visit: ${pc.cyan(displayUrl.toString())}`);
+      if (userCode) p.log.info(`Enter code: ${pc.bold(userCode)}`);
       openBrowser(url);
       spinner.start('Waiting for authorization...');
-    });
+    };
+    const isOpenAi = providerId === 'openai' || providerId === 'openai-oauth';
+    const existingRef = isOpenAi
+      ? loadRegistryStrict().providers.find(provider => provider.id === toOAuthRegistryId(providerId))?.authRef
+      : undefined;
+    const registration = existingRef
+      ? openAiRegistrationFromData(await resolveProviderOAuthProviderData(existingRef))
+      : undefined;
+    const result: OAuthSignInResult = isOpenAi
+      ? await runOpenAiSignIn(showAuthorization, registration)
+      : await runXaiDeviceCodeFlow(showAuthorization);
     spinner.stop(pc.green(`Signed in to ${label}`));
-    return tokensToStoredCredential(tokens, undefined, accountId);
+    return tokensToStoredCredential(result.tokens, undefined, result.accountId,
+      result.providerData);
   } catch (err) {
     spinner.stop('');
     throw err;
@@ -236,7 +248,7 @@ export async function authenticateProvider(
     );
   }
 
-  const cred = await runNativeDeviceCode(providerId);
+  const cred = await runNativeSignIn(providerId);
   const persisted = await persistNativeOAuthCredential(providerId, cred);
 
   const refreshSpinner = p.spinner();
@@ -263,7 +275,7 @@ ${pc.bold('Usage:')}
   clodex providers auth openai
   clodex providers auth xai
 
-${pc.bold('Device code (works on SSH/VPS):')}
-  openai   ChatGPT Plus/Pro (device code at auth.openai.com/codex/device)
+${pc.bold('Sign-in methods:')}
+  openai   Continue with ChatGPT in your browser (local loopback callback)
   xai      SuperGrok (device code at auth.x.ai)`;
 }

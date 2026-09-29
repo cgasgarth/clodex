@@ -1,6 +1,5 @@
-import { describe, expect, it, vi } from 'bun:test';
+import { describe, expect, it } from 'bun:test';
 import {
-  fetchOpenAiUsage,
   parseOpenAiUsage,
 } from '../src/daemon/openai-usage.js';
 
@@ -61,23 +60,5 @@ describe('OpenAI usage fetcher', () => {
     expect(usage.weekly?.usedPercent).toBe(5);
   });
 
-  it('sends account-scoped authenticated requests without exposing the token', async () => {
-    const request = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
-      const headers = new Headers(init?.headers);
-      expect(String(url)).toBe('https://chatgpt.com/backend-api/wham/usage');
-      expect(headers.get('authorization')).toBe('Bearer secret-token');
-      expect(headers.get('chatgpt-account-id')).toBe('acct-1');
-      expect(headers.get('user-agent')).toBe('codex-cli');
-      return new Response(JSON.stringify(payload), {
-        status: 200,
-        headers: { 'content-type': 'application/json' },
-      });
-    });
-    const usage = await fetchOpenAiUsage('secret-token', 'acct-1', {
-      // SAFETY: The test fixture defines the asserted runtime shape.
-      fetch: request as typeof fetch,
-    });
-    expect(usage.plan).toBe('pro');
-    expect(request).toHaveBeenCalledOnce();
-  });
+
 });

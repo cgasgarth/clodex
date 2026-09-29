@@ -385,8 +385,6 @@ export interface ProxyRoute {
   supportedParameters?: string[];
   reasoning?: boolean;
   interleavedReasoningField?: string;
-  /** Backend capability: model requires the Responses-Lite request shape (x-openai-internal-codex-responses-lite). */
-  useResponsesLite?: boolean;
   /** Static headers sent on every upstream request (e.g. a plan/auth-tracking header a custom endpoint requires). */
   headers?: Record<string, string>;
 }
@@ -938,7 +936,6 @@ export async function startProxyCatalog(
             oauthAccountId: route.oauthAccountId,
             providerData: route.providerData,
             headers: route.headers,
-            useResponsesLite: route.useResponsesLite,
             openAiCompactThreshold: openAiOAuth
               ? resolveOpenAiCompactionThreshold(route.realModelId, route.contextWindow)
               : undefined,
@@ -1241,7 +1238,6 @@ export function startProxy(
     supportedParameters?: string[];
     reasoning?: boolean;
     interleavedReasoningField?: string;
-    useResponsesLite?: boolean;
     processingMode?: ApiProcessingMode;
     headers?: Record<string, string>;
   },
@@ -1266,7 +1262,6 @@ export function startProxy(
     supportedParameters: sdk?.supportedParameters,
     reasoning: sdk?.reasoning,
     interleavedReasoningField: sdk?.interleavedReasoningField,
-    useResponsesLite: sdk?.useResponsesLite,
     processingMode: sdk?.processingMode,
     headers: sdk?.headers,
   }], clientModelId, debug);

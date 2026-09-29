@@ -604,7 +604,6 @@ async function getOrInitLanguageModel(
       authType: model.authType,
       oauthAccountId: model.oauthAccountId,
       headers: model.headers,
-      useResponsesLite: model.useResponsesLite,
       openAiCompactThreshold: model.authType === 'oauth'
         ? resolveOpenAiCompactionThreshold(upstreamModelId(model), model.contextWindow)
         : undefined,

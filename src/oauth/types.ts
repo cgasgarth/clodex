@@ -24,6 +24,14 @@ export interface OAuthTokenResponse {
   refresh_token?: string;
   expires_in?: number;
   id_token?: string;
+  scope?: string;
+}
+
+export interface OAuthSignInResult {
+  tokens: OAuthTokenResponse;
+  accountId?: string;
+  email?: string;
+  providerData?: Record<string, ProviderDataValue>;
 }
 
 export function tokensToStoredCredential(

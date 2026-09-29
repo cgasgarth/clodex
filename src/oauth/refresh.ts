@@ -25,12 +25,17 @@ export async function refreshStoredOAuthCredential(
 
   let tokens;
   if (providerId === 'openai' || providerId === 'openai-oauth') {
-    tokens = await refreshOpenAiAccessToken(cred.refresh);
+    tokens = await refreshOpenAiAccessToken(cred.refresh, cred.providerData);
   } else if (providerId === 'xai' || providerId === 'xai-oauth') {
     tokens = await refreshXaiAccessToken(cred.refresh);
   } else {
     throw new Error(`OAuth refresh not implemented for provider "${providerId}"`);
   }
 
-  return tokensToStoredCredential(tokens, cred.refresh, cred.accountId, cred.providerData);
+  const providerData = cred.providerData && {
+    ...cred.providerData,
+    ...(tokens.id_token && { idToken: tokens.id_token }),
+    ...(tokens.scope && { scope: tokens.scope }),
+  };
+  return tokensToStoredCredential(tokens, cred.refresh, cred.accountId, providerData);
 }

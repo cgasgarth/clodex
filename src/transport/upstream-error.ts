@@ -127,6 +127,7 @@ const USAGE_LIMIT_IDENTIFIERS = new Set([
   'quota_exceeded',
   'usage_limit_exceeded',
   'usage_limit_reached',
+  'subscription_sharing_usage_limit_exceeded',
 ]);
 
 export function isUsageLimitIdentifier(code: string | undefined, type: string | undefined): boolean {

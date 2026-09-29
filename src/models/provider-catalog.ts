@@ -120,7 +120,6 @@ export function localProvidersToServerModels(localProviders: LocalProvider[]): S
       supportedParameters: model.supportedParameters,
       reasoning: model.reasoning,
       interleavedReasoningField: model.interleavedReasoningField,
-      useResponsesLite: model.useResponsesLite,
       headers: provider.headers,
       providerData: provider.providerData,
     }))

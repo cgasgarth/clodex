@@ -1,3 +1,4 @@
+const planToken = `e30.${Buffer.from(JSON.stringify({scope: "chatgpt.tokens.use.direct"})).toString("base64url")}.signature`;
 import { describe, it, expect, vi } from 'bun:test';
 import { streamText } from 'ai';
 import {
@@ -456,7 +457,7 @@ describe('createLanguageModel', () => {
     await create({
       npm: '@ai-sdk/openai',
       modelId: 'gpt-5.6-sol',
-      apiKey: 'oauth-token',
+      apiKey: planToken,
       authType: 'oauth',
       oauthAccountId: 'acct-transport-threshold',
       openAiCompactThreshold: 244_800,
@@ -480,7 +481,7 @@ describe('createLanguageModel', () => {
     await create({
       npm: '@ai-sdk/openai',
       modelId: 'gpt-5.6-sol',
-      apiKey: 'oauth-token',
+      apiKey: planToken,
       authType: 'oauth',
       oauthAccountId: 'acct-compaction-disabled',
     });
@@ -500,7 +501,7 @@ describe('createLanguageModel', () => {
     const createOpenAI = vi.fn(() => ({ responses, chat }));
 
     const header = Buffer.from('{}').toString('base64url');
-    const payload = Buffer.from(JSON.stringify({ chatgpt_account_id: 'acct-123' })).toString('base64url');
+    const payload = Buffer.from(JSON.stringify({ client_id: 'acct-123', scope: 'chatgpt.tokens.use.direct' })).toString('base64url');
     const accessToken = `${header}.${payload}.sig`;
 
     await createLanguageModel({
@@ -513,64 +514,11 @@ describe('createLanguageModel', () => {
 
     expect(createOpenAI).toHaveBeenCalledWith({
       apiKey: accessToken,
-      baseURL: 'https://chatgpt.com/backend-api/codex',
+      baseURL: 'https://api.openai.com/v1',
       fetch: expect.any(Function),
-      headers: {
-        'ChatGPT-Account-Id': 'acct-123',
-        originator: 'clodex',
-      },
+      headers: {},
     });
     expect(responses).toHaveBeenCalledWith('gpt-5.5');
-  });
-
-  it('identifies Responses-Lite requests as the current Codex client', async () => {
-    const responses = vi.fn((modelId: string) => ({ modelId, provider: 'openai-responses' }));
-    const createOpenAI = vi.fn(() => ({ responses, chat: vi.fn() }));
-
-    await createLanguageModel({
-      npm: '@ai-sdk/openai',
-      modelId: 'gpt-6-astra',
-      apiKey: 'oauth-token',
-      authType: 'oauth',
-      useResponsesLite: true,
-    }, { createOpenAI: /* SAFETY: The mock implements the required provider factory. */ createOpenAI as never });
-
-    expect(createOpenAI).toHaveBeenCalledWith(expect.objectContaining({
-      headers: {
-        originator: 'clodex',
-        version: '0.153.3',
-        'x-openai-internal-codex-responses-lite': 'true',
-      },
-    }));
-    expect(responses).toHaveBeenCalledWith('gpt-6-astra');
-  });
-
-  it('falls back to the stored OpenAI account id when the current token has no account claim', async () => {
-    const responses = vi.fn((modelId: string) => ({
-      modelId,
-      provider: 'openai-responses',
-    }));
-    const chat = vi.fn((modelId: string) => ({
-      modelId,
-      provider: 'openai-chat',
-    }));
-    const createOpenAI = vi.fn(() => ({ responses, chat }));
-
-    await createLanguageModel({
-      npm: '@ai-sdk/openai',
-      modelId: 'gpt-5.5',
-      apiKey: 'opaque-access-token',
-      authType: 'oauth',
-      oauthAccountId: 'stored-acct-456',
-    }, { createOpenAI: /* SAFETY: The mock implements the required provider factory. */ createOpenAI as never });
-
-    expect(createOpenAI).toHaveBeenCalledWith(
-      expect.objectContaining({
-        headers: expect.objectContaining({
-          'ChatGPT-Account-Id': 'stored-acct-456',
-        }),
-      }),
-    );
   });
 
   it('installs credential-header stripping for anonymous OpenAI providers', async () => {

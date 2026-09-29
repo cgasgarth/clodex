@@ -4,7 +4,6 @@ import type { ClaudeQueueSubscription } from '../../runtime/claude-queue.js';
 import type { ResponseUsage } from './protocol.js';
 import type { WebSocketConstructor } from './transport.js';
 
-export const RESPONSES_LITE_HEADER = 'x-openai-internal-codex-responses-lite';
 export const TERMINAL_EVENT_TYPES = new Set(['response.completed', 'response.failed', 'response.incomplete']);
 export const FAILURE_EVENT_TYPES = new Set(['error', 'response.failed', 'response.incomplete']);
 

@@ -1,6 +1,6 @@
 // src/registry/fetch-template-models.ts — test connection and list models for template providers
 
-import { isBoolean, isNumber } from '../runtime/type-guards.js';
+import { isNumber } from '../runtime/type-guards.js';
 import { deriveBrand } from '../models/types.js';
 import { resolveContextWindow } from '../models/context-window.js';
 import type { ProviderTemplate } from '../providers/templates.js';
@@ -138,7 +138,6 @@ function parseModelList(body: OpenAiModelListResponse, npm: string): CachedModel
       modelFormat: format,
       npm,
       supportedParameters: Array.isArray(row.supported_parameters) ? row.supported_parameters : undefined,
-      useResponsesLite: isBoolean(row.use_responses_lite) ? row.use_responses_lite : undefined,
     });
   }
 

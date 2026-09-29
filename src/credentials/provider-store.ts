@@ -163,6 +163,23 @@ export async function resolveProviderOAuthProviderData(
   return normalized;
 }
 
+/** Revoke the renewable ChatGPT session before clearing its local credential. */
+export async function revokeChatGptSession(authRef: string): Promise<boolean> {
+  const parsed = parseAuthRef(authRef);
+  if (!parsed || parsed.kind === 'env' || parsed.kind === 'none') return false;
+  try {
+    const credential = parseStoredOAuthCredential(await readStoredCredential(parsed));
+    const clientId = credential?.providerData?.clientId;
+    if (!credential?.refresh || !isString(clientId)) return false;
+    const response = await fetch('https://auth.openai.com/api/accounts/oauth/revoke', {
+      method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ token: credential.refresh, token_type_hint: 'refresh_token', client_id: clientId }),
+      signal: AbortSignal.timeout(10_000),
+    });
+    return response.ok;
+  } catch { return false; }
+}
+
 function parseProviderDataValue<Value>(value: Value): ProviderDataValue | undefined {
   if (value === null) return null;
   if (isString(value)) return value;

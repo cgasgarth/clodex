@@ -10,7 +10,7 @@ ${pc.bold('Usage:')}
   clodex start
   clodex stop
   clodex daemon <install|run|status|restart|stop|uninstall>
-  clodex accounts <list|add|select|remove|usage>
+  clodex accounts <list|add|login|select|remove|usage>
   clodex server [options]
   clodex models
   clodex favorites

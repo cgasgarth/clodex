@@ -1,7 +1,6 @@
 import { BunNativeWebSocket } from '../src/transport/bun-websocket.js';
 import {
-  CODEX_RESPONSES_LITE_VERSION,
-  CODEX_RESPONSES_LITE_WS_URL,
+  OPENAI_RESPONSES_WS_URL,
   CODEX_RESPONSES_WEBSOCKETS_BETA,
 } from '../src/constants.js';
 import { extractOpenAiAccountId } from '../src/oauth/openai.js';
@@ -56,14 +55,12 @@ const accountId = extractOpenAiAccountId({ access_token: provider.apiKey })?.tri
 const headers: BenchmarkHeaders = {
   Authorization: `Bearer ${provider.apiKey}`,
   originator: 'clodex-cache-benchmark',
-  version: CODEX_RESPONSES_LITE_VERSION,
-  'x-openai-internal-codex-responses-lite': 'true',
   'OpenAI-Beta': CODEX_RESPONSES_WEBSOCKETS_BETA,
 };
 if (accountId) headers['ChatGPT-Account-Id'] = accountId;
 
 async function openSocket(): Promise<BunNativeWebSocket> {
-  const socket = new BunNativeWebSocket(CODEX_RESPONSES_LITE_WS_URL, { headers });
+  const socket = new BunNativeWebSocket(OPENAI_RESPONSES_WS_URL, { headers });
   await new Promise<void>((resolve, reject) => {
     socket.once('open', resolve);
     socket.once('error', reject);

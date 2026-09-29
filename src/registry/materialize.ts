@@ -76,7 +76,6 @@ export function cachedModelToLocal(
     supportedParameters: cached.supportedParameters,
     reasoning: cached.reasoning ?? modelsDev?.reasoning,
     interleavedReasoningField: cached.interleavedReasoningField ?? modelsDev?.interleaved?.field,
-    useResponsesLite: cached.useResponsesLite,
   };
 }
 

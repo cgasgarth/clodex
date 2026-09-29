@@ -26,7 +26,8 @@ vi.mock('../src/ui/prompts.js', () => ({
   printOAuthStepsPanel: vi.fn(),
 }));
 vi.mock('../src/oauth/openai.js', () => ({
-  runOpenAiDeviceCodeFlow: vi.fn(async () => ({
+  openAiRegistrationFromData: vi.fn(() => undefined),
+  runOpenAiSignIn: vi.fn(async () => ({
     tokens: {
       access_token: 'openai-access',
       refresh_token: 'openai-refresh',
@@ -48,6 +49,7 @@ vi.mock('../src/config/environment.js', () => {
   const actual = importActual<typeof import('../src/config/environment.js')>('../src/config/environment.js', import.meta.url);
   return {
     ...actual,
+    resolveProviderOAuthProviderData: vi.fn(async () => undefined),
     deleteProviderCredential: vi.fn(),
     probeProviderCredentialStore: vi.fn(),
     provisionProviderCredential: vi.fn(),
@@ -141,7 +143,7 @@ import {
   provisionProviderCredential,
   saveProviderCredential,
 } from '../src/config/environment.js';
-import { runOpenAiDeviceCodeFlow } from '../src/oauth/openai.js';
+import { runOpenAiSignIn } from '../src/oauth/openai.js';
 import { runXaiDeviceCodeFlow } from '../src/oauth/xai.js';
 import { reconcilePendingCredentialDeletes } from '../src/registry/credential-lifecycle.js';
 import * as cleanupJournal from '../src/registry/credential-cleanup-journal.js';
@@ -192,7 +194,7 @@ describe('authenticateProvider', () => {
       // SAFETY: The test fixture defines the asserted runtime shape.
       registryState.current = structuredClone(registry) as typeof registryState.current;
     });
-    asMocked(runOpenAiDeviceCodeFlow).mockReset().mockResolvedValue({
+    asMocked(runOpenAiSignIn).mockReset().mockResolvedValue({
       tokens: { access_token: 'openai-access', refresh_token: 'openai-refresh', expires_in: 3600 },
       accountId: 'acct-123',
     });
@@ -233,7 +235,7 @@ describe('authenticateProvider', () => {
       'keyring:oauth:provider:openai-oauth',
       expect.any(Function),
     );
-    expect(runOpenAiDeviceCodeFlow).toHaveBeenCalled();
+    expect(runOpenAiSignIn).toHaveBeenCalled();
     expect(saveRegistry).toHaveBeenCalled();
     expect(result.providerId).toBe('openai-oauth');
     expect(result.credential.access).toBe('openai-access');
@@ -250,7 +252,7 @@ describe('authenticateProvider', () => {
       'Credential store is unavailable: native keyring probe failed. '
       + 'Set CLODEX_CREDENTIAL_HELPER to an absolute path to an external credential helper and try again.',
     );
-    expect(runOpenAiDeviceCodeFlow).not.toHaveBeenCalled();
+    expect(runOpenAiSignIn).not.toHaveBeenCalled();
     expect(provisionProviderCredential).not.toHaveBeenCalled();
     expect(saveProviderCredential).not.toHaveBeenCalled();
     expect(saveRegistry).not.toHaveBeenCalled();
@@ -351,7 +353,7 @@ describe('authenticateProvider', () => {
 
   it('keeps authorization and model refresh outside the credential transaction lock', async () => {
     const observations: Array<[string, boolean, boolean]> = [];
-    asMocked(runOpenAiDeviceCodeFlow).mockImplementationOnce(async () => {
+    asMocked(runOpenAiSignIn).mockImplementationOnce(async () => {
       observations.push(['authorization', lockState.active, lockState.credentialActive]);
       return {
         tokens: {

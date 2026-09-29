@@ -1,185 +1,79 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'bun:test';
-import {
-  extractOpenAiAccountId,
-  refreshOpenAiAccessToken,
-  runOpenAiDeviceCodeFlow,
-} from '../src/oauth/openai.js';
-import { asMocked, type JsonObject } from './test-helpers.js';
+import { afterEach, describe, expect, it, vi } from 'bun:test';
+import { createLocalJWKSet, exportJWK, generateKeyPair, SignJWT } from 'jose';
+import { refreshOpenAiAccessToken, validateChatGptTokens, runOpenAiSignIn } from '../src/oauth/openai.js';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
-function buildJwt(claims: JsonObject): string {
-  return `header.${Buffer.from(JSON.stringify(claims)).toString('base64url')}.signature`;
+const originalFetch = global.fetch;
+const originalHome = process.env.CLODEX_HOME;
+const keys = await generateKeyPair('ES256');
+const publicKey = await exportJWK(keys.publicKey);
+const localJwks = createLocalJWKSet({ keys: [{ ...publicKey, kid: 'test', alg: 'ES256' }] });
+const scope = 'openid email offline_access resource.invoke chatgpt.tokens.use.direct';
+const home = mkdtempSync(join(tmpdir(), 'clodex-siwc-test-'));
+
+async function idToken(nonce: string, audience = 'oaiapp_test') {
+  return new SignJWT({ nonce, email: 'test@example.com' })
+    .setProtectedHeader({ alg: 'ES256', kid: 'test' })
+    .setIssuer('https://auth.openai.com').setAudience(audience).setSubject('user_test')
+    .setIssuedAt().setExpirationTime('5m').sign(keys.privateKey);
 }
 
-describe('oauth/openai', () => {
-  const originalFetch = global.fetch;
+afterEach(() => {
+  global.fetch = originalFetch;
+  if (originalHome === undefined) delete process.env.CLODEX_HOME;
+  else process.env.CLODEX_HOME = originalHome;
+});
 
-  beforeEach(() => {
-    global.fetch = vi.fn();
+describe('ChatGPT plan sign-in', () => {
+  it('validates a signed identity, audience, nonce, and plan grant', async () => {
+    const token = await idToken('nonce');
+    const result = await validateChatGptTokens({ access_token: 'access', id_token: token, scope }, 'oaiapp_test', 'nonce', localJwks);
+    expect(result.sub).toBe('user_test');
+    await expect(validateChatGptTokens({ access_token: 'access', id_token: token, scope }, 'oaiapp_test', 'wrong', localJwks)).rejects.toThrow('validation failed');
+    await expect(validateChatGptTokens({ access_token: 'access', id_token: token, scope }, 'other_client', 'nonce', localJwks)).rejects.toThrow();
   });
 
-  afterEach(() => {
-    global.fetch = originalFetch;
-    vi.restoreAllMocks();
+  it('requires the granted ChatGPT plan permission', async () => {
+    await expect(validateChatGptTokens({ access_token: 'access', id_token: await idToken('nonce'), scope: 'openid email' }, 'oaiapp_test', 'nonce', localJwks)).rejects.toThrow('not approved');
   });
 
-  describe('extractOpenAiAccountId', () => {
-    it('returns undefined if no token provided', () => {
-      expect(extractOpenAiAccountId({})).toBeUndefined();
+  it('completes dynamic registration through a real loopback callback', async () => {
+    process.env.CLODEX_HOME = home;
+    let authorization: URL;
+    let callbackRequest: Promise<Response> | undefined;
+    let exchange: URLSearchParams | undefined;
+    global.fetch = Object.assign(vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = input instanceof Request ? input.url : String(input);
+      if (url.endsWith('/.well-known/jwks.json')) return Response.json({ keys: [{ ...publicKey, kid: 'test', alg: 'ES256' }] });
+      exchange = new URLSearchParams(String(init?.body));
+      return Response.json({ access_token: 'access', refresh_token: 'refresh', scope,
+        id_token: await idToken(authorization.searchParams.get('nonce')!) });
+    }), { preconnect: originalFetch.preconnect });
+    const result = await runOpenAiSignIn(({ url }) => {
+      authorization = new URL(url);
+      expect(authorization.searchParams.get('client_id')).toBe('dynamic_agent_client');
+      expect(authorization.searchParams.get('agent_name_hint')).toBe('Clodex');
+      expect(authorization.searchParams.get('ext_agent_host_id')).toMatch(/^urn:uuid:/);
+      const callback = new URL(authorization.searchParams.get('redirect_uri')!);
+      expect(callback.hostname).toBe('127.0.0.1');
+      callback.search = new URLSearchParams({ state: authorization.searchParams.get('state')!, code: 'code', client_id: 'oaiapp_test' }).toString();
+      callbackRequest = originalFetch(callback);
     });
-
-    it('extracts from chatgpt_account_id', () => {
-      const token = buildJwt({ chatgpt_account_id: 'acc_123' });
-      expect(extractOpenAiAccountId({ id_token: token, access_token: '' })).toBe('acc_123');
-    });
-
-    it('extracts from api.openai.com/auth', () => {
-      const token = buildJwt({ 'https://api.openai.com/auth': { chatgpt_account_id: 'acc_456' } });
-      expect(extractOpenAiAccountId({ access_token: token })).toBe('acc_456');
-    });
-
-    it('extracts from organizations array', () => {
-      const token = buildJwt({ organizations: [{ id: 'org_789' }] });
-      expect(extractOpenAiAccountId({ id_token: token, access_token: '' })).toBe('org_789');
-    });
-
-    it('returns undefined for invalid JWT', () => {
-      expect(extractOpenAiAccountId({ id_token: 'invalid.jwt.token' })).toBeUndefined();
-      expect(extractOpenAiAccountId({ id_token: 'not-even-three-parts' })).toBeUndefined();
-    });
+    await callbackRequest;
+    expect(result.providerData.clientId).toBe('oaiapp_test');
+    expect(result.email).toBe('test@example.com');
+    expect(exchange?.get('client_id')).toBe('oaiapp_test');
+    expect(exchange?.get('resource')).toBe('https://api.openai.com/v1');
+    rmSync(home, { recursive: true, force: true });
   });
 
-  describe('refreshOpenAiAccessToken', () => {
-    it('returns tokens on success', async () => {
-      // SAFETY: The test fixture defines the asserted runtime shape.
-      asMocked(global.fetch).mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({ access_token: 'new_token' }),
-      } as Response);
-
-      const res = await refreshOpenAiAccessToken('refresh_123');
-      expect(res.access_token).toBe('new_token');
-      expect(global.fetch).toHaveBeenCalledWith(
-        'https://auth.openai.com/oauth/token',
-        expect.objectContaining({ method: 'POST' }),
-      );
-    });
-
-    it('throws on non-ok response', async () => {
-      // SAFETY: The test fixture defines the asserted runtime shape.
-      asMocked(global.fetch).mockResolvedValueOnce({
-        ok: false,
-        status: 401,
-      } as Response);
-
-      await expect(refreshOpenAiAccessToken('refresh_123')).rejects.toThrow(/OpenAI token refresh failed \(401\)/);
-    });
-  });
-
-  describe('runOpenAiDeviceCodeFlow', () => {
-    it('handles successful polling loop', async () => {
-      // 1. Device initiation response
-      // SAFETY: The test fixture defines the asserted runtime shape.
-      asMocked(global.fetch).mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
-          device_auth_id: 'auth_id',
-          user_code: 'user_code',
-          interval: '1',
-          expires_in: 60,
-        }),
-      } as Response);
-
-      // 2. First polling attempt: authorization pending (403)
-      // SAFETY: The test fixture defines the asserted runtime shape.
-      asMocked(global.fetch).mockResolvedValueOnce({
-        ok: false,
-        status: 403,
-      } as Response);
-
-      // 3. Second polling attempt: user authorized (200 OK)
-      // SAFETY: The test fixture defines the asserted runtime shape.
-      asMocked(global.fetch).mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({ authorization_code: 'auth_code', code_verifier: 'verifier' }),
-      } as Response);
-
-      // 4. Token exchange response
-      // SAFETY: The test fixture defines the asserted runtime shape.
-      asMocked(global.fetch).mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({ access_token: 'final_access_token' }),
-      } as Response);
-
-      const onDeviceCode = vi.fn();
-      const sleep = vi.fn().mockResolvedValue(undefined);
-      let time = 1000;
-      const now = vi.fn(() => time);
-
-      const promise = runOpenAiDeviceCodeFlow(onDeviceCode, { sleep, now });
-      
-      // Advance time for the loop
-      time = 2000;
-      
-      const result = await promise;
-
-      expect(onDeviceCode).toHaveBeenCalledWith({
-        url: 'https://auth.openai.com/codex/device',
-        userCode: 'user_code',
-      });
-      expect(sleep).toHaveBeenCalledWith(expect.any(Number)); // Called after the 403
-      expect(result.tokens.access_token).toBe('final_access_token');
-    });
-
-    it('throws if device initiation fails', async () => {
-      // SAFETY: The test fixture defines the asserted runtime shape.
-      asMocked(global.fetch).mockResolvedValueOnce({
-        ok: false,
-        status: 500,
-      } as Response);
-
-      await expect(runOpenAiDeviceCodeFlow(vi.fn())).rejects.toThrow('Failed to initiate OpenAI device authorization');
-    });
-
-    it('throws if polling hits an unexpected error (e.g. 500)', async () => {
-      // 1. Device initiation
-      // SAFETY: The test fixture defines the asserted runtime shape.
-      asMocked(global.fetch).mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({ device_auth_id: 'auth_id', user_code: 'user_code', interval: '1', expires_in: 60 }),
-      } as Response);
-
-      // 2. Polling fails with 500
-      // SAFETY: The test fixture defines the asserted runtime shape.
-      asMocked(global.fetch).mockResolvedValueOnce({
-        ok: false,
-        status: 500,
-      } as Response);
-
-      await expect(runOpenAiDeviceCodeFlow(vi.fn())).rejects.toThrow('OpenAI device authorization failed (500)');
-    });
-
-    it('throws if device authorization times out', async () => {
-      // 1. Device initiation (succeeds)
-      // SAFETY: The test fixture defines the asserted runtime shape.
-      asMocked(global.fetch).mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({ device_auth_id: 'auth_id', user_code: 'user_code', interval: '1', expires_in: 0 }),
-      } as Response);
-      
-      // 2. Polling loop (fails with 403 authorization pending, but we time out)
-      // SAFETY: The test fixture defines the asserted runtime shape.
-      asMocked(global.fetch).mockResolvedValue({
-        ok: false,
-        status: 403,
-      } as Response);
-
-      let time = 1000;
-      const now = vi.fn(() => time);
-      const sleep = vi.fn(async (ms) => {
-        time += ms;
-      });
-
-      await expect(runOpenAiDeviceCodeFlow(vi.fn(), { sleep, now })).rejects.toThrow('OpenAI device authorization timed out');
-    });
+  it('refreshes with the account registration and public resource', async () => {
+    const request = vi.fn(async () => Response.json({ access_token: 'renewed', refresh_token: 'rotated', scope }));
+    global.fetch = Object.assign(request, { preconnect: originalFetch.preconnect });
+    const result = await refreshOpenAiAccessToken('refresh', { clientId: 'oaiapp_test' });
+    expect(result.refresh_token).toBe('rotated');
+    expect(String(request.mock.calls[0]?.[0])).toBe('https://auth.openai.com/api/accounts/oauth/token');
   });
 });
