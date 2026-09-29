@@ -1,306 +1,61 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'bun:test';
+import { afterEach, describe, expect, it, vi } from 'bun:test';
 import { refreshProviderModels } from '../src/registry/refresh-models.js';
 import * as io from '../src/registry/io.js';
 import type { ProviderRegistry } from '../src/registry/types.js';
 import { asMocked } from './test-helpers.js';
 
-vi.mock('../src/registry/io.js', () => ({
-  loadRegistry: vi.fn(),
-  loadRegistryStrict: vi.fn(),
-  saveRegistry: vi.fn(),
-}));
-
+vi.mock('../src/registry/io.js', () => ({ loadRegistry: vi.fn(), loadRegistryStrict: vi.fn(), saveRegistry: vi.fn() }));
 vi.mock('../src/registry/pricing.js', () => ({
-  loadPricingCache: vi.fn(),
-  enrichModelsWithPricing: vi.fn((models) => models),
-  enrichPricingAsync: vi.fn(),
-  pricingPlatformForProvider: vi.fn(),
-  buildPricingIndex: vi.fn(),
+  loadPricingCache: vi.fn(), enrichModelsWithPricing: vi.fn(models => models),
+  enrichPricingAsync: vi.fn(), pricingPlatformForProvider: vi.fn(), buildPricingIndex: vi.fn(),
 }));
 
-describe('registry/refresh-models', () => {
-  const originalFetch = global.fetch;
+const originalFetch = global.fetch;
+const token = `e30.${Buffer.from(JSON.stringify({ scope: 'chatgpt.tokens.use.direct' })).toString('base64url')}.signature`;
+function registry(): ProviderRegistry {
+  return { schemaVersion: 1, providers: [{ id: 'openai-oauth', templateId: 'openai',
+    name: 'OpenAI (ChatGPT)', enabled: true, authRef: 'keyring', authType: 'oauth', api: {},
+  }] };
+}
+afterEach(() => { global.fetch = originalFetch; vi.clearAllMocks(); });
 
-  beforeEach(() => {
-    global.fetch = vi.fn();
-    vi.clearAllMocks();
+describe('ChatGPT plan model discovery', () => {
+  it('includes Sol 6.1 while the public catalog lists only Astra', async () => {
+    const saved = registry();
+    asMocked(io.loadRegistryStrict).mockReturnValue(saved);
+    global.fetch = Object.assign(vi.fn(async () => Response.json({ models: [
+      { slug: 'gpt-6-astra', display_name: 'Astra', visibility: 'list' },
+    ] })), { preconnect: originalFetch.preconnect });
+    expect(await refreshProviderModels('openai-oauth', token, saved)).toMatchObject({ ok: true, modelCount: 2 });
+    expect(asMocked(io.saveRegistry).mock.calls[0]?.[0].providers[0]?.modelsCache?.models.map(model => model.id))
+      .toEqual(['gpt-6.1-sol', 'gpt-6-astra']);
   });
 
-  afterEach(() => {
-    global.fetch = originalFetch;
-    vi.restoreAllMocks();
-  });
-
-  describe('refreshProviderModels (OpenAI OAuth 3-tier fetch)', () => {
-    it('Tier 1: uses Codex endpoint if available', async () => {
-      const mockRegistry: ProviderRegistry = {
-        version: 1,
-        providers: [{
-          id: 'openai-oauth',
-          templateId: 'openai',
-          name: 'OpenAI (ChatGPT)',
-          enabled: true,
-          authRef: 'keyring',
-          authType: 'oauth',
-          api: {},
-        }],
-      };
-      asMocked(io.loadRegistryStrict).mockReturnValue(mockRegistry);
-
-      // Codex endpoint returns valid models
-      // SAFETY: The test fixture defines the asserted runtime shape.
-      asMocked(global.fetch).mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
-          models: [{ slug: 'gpt-4', title: 'GPT-4' }]
-        }),
-      } as Response);
-
-      const result = await refreshProviderModels('openai-oauth', 'mock_token', mockRegistry);
-
-      expect(global.fetch).toHaveBeenCalledTimes(1);
-      expect(global.fetch).toHaveBeenCalledWith(expect.stringContaining('https://chatgpt.com/backend-api/codex/models?client_version='), expect.anything());
-      
-      expect(result.ok).toBe(true);
-      expect(result.modelCount).toBe(1);
-      
-      // SAFETY: The test fixture defines the asserted runtime shape.
-      const savedRegistry = asMocked(io.saveRegistry).mock.calls[0]?.[0] as ProviderRegistry;
-      const models = savedRegistry.providers[0]?.modelsCache?.models;
-      expect(models?.[0]?.id).toBe('gpt-4');
-    });
-
-    it('Tier 2: falls back to general endpoint and filters unsupported if Codex fails', async () => {
-      const mockRegistry: ProviderRegistry = {
-        version: 1,
-        providers: [{
-          id: 'openai-oauth',
-          templateId: 'openai', // legacy template id, same logic
-          name: 'OpenAI',
-          enabled: true,
-          authRef: 'keyring',
-          authType: 'oauth',
-          api: {},
-        }],
-      };
-      asMocked(io.loadRegistryStrict).mockReturnValue(mockRegistry);
-
-      // 1. Codex endpoint 404s
-      // SAFETY: The test fixture defines the asserted runtime shape.
-      asMocked(global.fetch).mockResolvedValueOnce({
-        ok: false,
-        status: 404,
-      } as Response);
-
-      // 2. General endpoint returns models, including unsupported ones
-      // SAFETY: The test fixture defines the asserted runtime shape.
-      asMocked(global.fetch).mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
-          models: [
-            { slug: 'gpt-4', title: 'GPT-4' },
-            { slug: 'gpt-5.5-fast', title: 'GPT-5.5-fast' } // unsupported
-          ]
-        }),
-      } as Response);
-
-      const result = await refreshProviderModels('openai-oauth', 'mock_token', mockRegistry);
-
-      expect(global.fetch).toHaveBeenCalledTimes(2);
-      expect(global.fetch).toHaveBeenNthCalledWith(2, 'https://chatgpt.com/backend-api/models', expect.anything());
-      // SAFETY: The test fixture defines the asserted runtime shape.
-      const savedRegistry = asMocked(io.saveRegistry).mock.calls[0]?.[0] as ProviderRegistry;
-      const models = savedRegistry.providers[0]?.modelsCache?.models;
-      console.log('MODELS RETURNED:', models);
-      
-      expect(result.ok).toBe(true);
-      expect(result.modelCount).toBe(1); // the gizmo model is filtered out
-      expect(models?.length).toBe(1);
-      expect(models?.[0]?.id).toBe('gpt-4');
-    });
-
-    it('Tier 3: falls back to static seed if both endpoints fail', async () => {
-      const mockRegistry: ProviderRegistry = {
-        version: 1,
-        providers: [{
-          id: 'openai-oauth',
-          templateId: 'openai',
-          name: 'OpenAI',
-          enabled: true,
-          authRef: 'keyring',
-          authType: 'oauth',
-          api: {},
-        }],
-      };
-      asMocked(io.loadRegistryStrict).mockReturnValue(mockRegistry);
-
-      // Both endpoints fail
-      // SAFETY: The test fixture defines the asserted runtime shape.
-      asMocked(global.fetch).mockResolvedValue({
-        ok: false,
-        status: 500,
-      } as Response);
-
-      const result = await refreshProviderModels('openai-oauth', 'mock_token', mockRegistry);
-
-      expect(global.fetch).toHaveBeenCalledTimes(2);
-      expect(result.ok).toBe(true);
-      expect(result.modelCount).toBeGreaterThan(0); // static seed models
-    });
-
-    it('Tier 3: keeps existing cached models instead of overwriting with the static seed', async () => {
-      const mockRegistry: ProviderRegistry = {
-        version: 1,
-        providers: [{
-          id: 'openai-oauth',
-          templateId: 'openai',
-          name: 'OpenAI',
-          enabled: true,
-          authRef: 'keyring',
-          authType: 'oauth',
-          api: {},
-          modelsCache: {
-            models: [{
-              id: 'gpt-5.6-sol',
-              name: 'GPT-5.6 Sol',
-              upstreamModelId: 'gpt-5.6-sol',
-              family: 'gpt',
-              brand: 'GPT',
-              contextWindow: 1_000_000,
-              modelFormat: 'openai',
-              npm: '@ai-sdk/openai',
-              reasoning: true,
-            }],
-            fetchedAt: Date.now(),
-          },
-        }],
-      };
-      asMocked(io.loadRegistryStrict).mockReturnValue(mockRegistry);
-
-      // Both live endpoints fail — would normally fall back to the static seed.
-      // SAFETY: The test fixture defines the asserted runtime shape.
-      asMocked(global.fetch).mockResolvedValue({
-        ok: false,
-        status: 500,
-      } as Response);
-
-      const result = await refreshProviderModels('openai-oauth', 'mock_token', mockRegistry);
-
-      expect(result.ok).toBe(true);
-      expect(result.skipped).toBe(true);
-      expect(result.modelCount).toBe(1);
-      // The previously cached gpt-5.6-sol model must survive — not overwritten by the
-      // older static seed list, and saveRegistry must not have been called.
-      expect(io.saveRegistry).not.toHaveBeenCalled();
-      expect(mockRegistry.providers[0]?.modelsCache?.models[0]?.id).toBe('gpt-5.6-sol');
-    });
-
-    it('captures the use_responses_lite flag from the live Codex endpoint', async () => {
-      const mockRegistry: ProviderRegistry = {
-        version: 1,
-        providers: [{
-          id: 'openai-oauth',
-          templateId: 'openai',
-          name: 'OpenAI (ChatGPT)',
-          enabled: true,
-          authRef: 'keyring',
-          authType: 'oauth',
-          api: {},
-        }],
-      };
-      asMocked(io.loadRegistryStrict).mockReturnValue(mockRegistry);
-
-      // SAFETY: The test fixture defines the asserted runtime shape.
-      asMocked(global.fetch).mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
-          models: [
-            { slug: 'gpt-6-astra', title: 'gpt-6-astra', context_window: 272_000, use_responses_lite: true },
-            { slug: 'gpt-5.6-luna', title: 'GPT-5.6 Luna', context_window: 272_000, use_responses_lite: true },
-            { slug: 'gpt-6.1-sol', title: 'GPT-6.1 Sol', context_window: 272_000 },
-            { slug: 'gpt-5.6-terra', title: 'GPT-5.6 Terra', context_window: 272_000 },
-          ],
-        }),
-      } as Response);
-
-      await refreshProviderModels('openai-oauth', 'mock_token', mockRegistry);
-
-      // SAFETY: The test fixture defines the asserted runtime shape.
-      const savedRegistry = asMocked(io.saveRegistry).mock.calls[0]?.[0] as ProviderRegistry;
-      const models = savedRegistry.providers[0]?.modelsCache?.models ?? [];
-      const astra = models.find(m => m.id === 'gpt-6-astra');
-      const luna = models.find(m => m.id === 'gpt-5.6-luna');
-      const sol = models.find(m => m.id === 'gpt-6.1-sol');
-      const terra = models.find(m => m.id === 'gpt-5.6-terra');
-      expect(astra).toMatchObject({
-        name: 'GPT-6 Astra',
-        contextWindow: 1_000_000,
-        reasoning: true,
-        useResponsesLite: true,
-      });
-      expect(luna?.useResponsesLite).toBe(true);
-      expect(luna?.contextWindow).toBe(1_000_000);
-      expect(sol).toMatchObject({ name: 'sol-6.1', contextWindow: 1_000_000, reasoning: true });
-      expect(terra?.contextWindow).toBe(1_000_000);
-      // A model the backend does not flag stays on the HTTP path.
-      expect(sol?.useResponsesLite).toBeUndefined();
-    });
-
-    it('Tier 3: static seed carries current OpenAI capability flags during a discovery outage', async () => {
-      const mockRegistry: ProviderRegistry = {
-        version: 1,
-        providers: [{
-          id: 'openai-oauth',
-          templateId: 'openai',
-          name: 'OpenAI',
-          enabled: true,
-          authRef: 'keyring',
-          authType: 'oauth',
-          api: {},
-        }],
-      };
-      asMocked(io.loadRegistryStrict).mockReturnValue(mockRegistry);
-
-      // Both live endpoints fail → static seed.
-      // SAFETY: The test fixture defines the asserted runtime shape.
-      asMocked(global.fetch).mockResolvedValue({ ok: false, status: 500 } as Response);
-
-      await refreshProviderModels('openai-oauth', 'mock_token', mockRegistry);
-
-      // SAFETY: The test fixture defines the asserted runtime shape.
-      const savedRegistry = asMocked(io.saveRegistry).mock.calls[0]?.[0] as ProviderRegistry;
-      const sol61 = savedRegistry.providers[0]?.modelsCache?.models.find(m => m.id === 'gpt-6.1-sol');
-      const astra = savedRegistry.providers[0]?.modelsCache?.models.find(m => m.id === 'gpt-6-astra');
-      const luna = savedRegistry.providers[0]?.modelsCache?.models.find(m => m.id === 'gpt-5.6-luna');
-      expect(astra).toMatchObject({
-        name: 'GPT-6 Astra',
-        contextWindow: 1_000_000,
-        reasoning: true,
-        useResponsesLite: true,
-      });
-      expect(sol61?.contextWindow).toBe(1_000_000);
-      expect(luna?.contextWindow).toBe(1_000_000);
-      expect(luna?.useResponsesLite).toBe(true);
-    });
-
-    it('returns error if OAuth token is missing', async () => {
-      const mockRegistry: ProviderRegistry = {
-        version: 1,
-        providers: [{
-          id: 'openai-oauth',
-          templateId: 'openai-oauth',
-          name: 'OpenAI',
-          enabled: true,
-          authRef: 'keyring',
-          authType: 'oauth',
-          api: {},
-        }],
-      };
-
-      const result = await refreshProviderModels('openai-oauth', null, mockRegistry);
-      expect(result.ok).toBe(false);
-      expect(result.reason).toContain('OAuth token not available');
+  it('loads the account catalog from the public API and preserves Sol context', async () => {
+    const saved = registry();
+    asMocked(io.loadRegistryStrict).mockReturnValue(saved);
+    const request = vi.fn(async () => Response.json({ models: [
+      { slug: 'gpt-6.1-sol', display_name: 'Sol 6.1', visibility: 'list', context_window: 272_000 },
+    ] }));
+    global.fetch = Object.assign(request, { preconnect: originalFetch.preconnect });
+    const result = await refreshProviderModels('openai-oauth', token, saved);
+    expect(result.ok).toBe(true);
+    expect(result.modelCount).toBe(1);
+    expect(request).toHaveBeenCalledWith('https://api.openai.com/v1/models', expect.objectContaining({
+      headers: expect.objectContaining({ Authorization: `Bearer ${token}` }),
+    }));
+    expect(asMocked(io.saveRegistry).mock.calls[0]?.[0].providers[0]?.modelsCache?.models[0]).toMatchObject({
+      id: 'gpt-6.1-sol', name: 'sol-6.1', contextWindow: 1_000_000,
     });
   });
 
-    });
+  it('reports account admission failures without overwriting the catalog', async () => {
+    const saved = registry();
+    asMocked(io.loadRegistryStrict).mockReturnValue(saved);
+    global.fetch = Object.assign(vi.fn(async () => Response.json({ detail: 'permission denied' }, { status: 403 })), { preconnect: originalFetch.preconnect });
+    const result = await refreshProviderModels('openai-oauth', token, saved);
+    expect(result.ok).toBe(false);
+    expect(result.reason).toContain('403');
+    expect(io.saveRegistry).not.toHaveBeenCalled();
+  });
+});

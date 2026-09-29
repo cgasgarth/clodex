@@ -9,7 +9,6 @@ const BRAND_MAP: Array<[string, string]> = [
   ['kimi', 'Kimi'],
   ['glm', 'GLM'],
   ['mimo', 'MiMo'],
-  ['grok', 'Grok'],
   ['nemotron', 'Nemotron'],
 ];
 

@@ -1,6 +1,5 @@
 import { createHash } from 'node:crypto';
 import { isObject, isString } from '../../runtime/type-guards.js';
-import { RESPONSES_LITE_HEADER } from './types.js';
 import type { ResponsesWebSocketFetchOptions, JsonObject, JsonValue } from './types.js';
 
 export interface HeaderRecord {
@@ -28,12 +27,6 @@ export function toHeaderRecord(headers: HeadersInit | undefined): HeaderRecord {
   return out;
 }
 
-export function hasResponsesLiteHeader(headers: HeaderRecord): boolean {
-  return Object.entries(headers).some(
-    ([key, value]) => key.toLowerCase() === RESPONSES_LITE_HEADER && value.toLowerCase() === 'true',
-  );
-}
-
 export function authorizationHeaderFingerprint(headers: HeaderRecord): string {
   const authorization = Object.entries(headers)
     .find(([key]) => key.toLowerCase() === 'authorization')?.[1];
@@ -46,14 +39,6 @@ export function bodyToString(body: BodyInit | null | undefined): string {
   if (body instanceof Uint8Array) return Buffer.from(body).toString('utf8');
   if (body instanceof ArrayBuffer) return Buffer.from(new Uint8Array(body)).toString('utf8');
   return Object.prototype.toString.call(body);
-}
-
-export function applyResponsesLiteContract(payload: JsonObject): JsonObject {
-  const reasoning = isJsonObject(payload.reasoning)
-    ? { ...payload.reasoning }
-    : {};
-  reasoning.context = 'all_turns';
-  return { ...payload, reasoning, store: false, parallel_tool_calls: false };
 }
 
 function canonicalize(value: JsonValue): JsonValue {

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'bun:test';
 import {
   accountDisplayName,
   cyclePeriod,
-  deviceCodeInstruction,
+  authorizationInstruction,
   diagnosticLines,
   diagnosticOverviewLine,
   formatUsd,
@@ -110,17 +110,14 @@ describe('dashboard usage chart', () => {
 describe('dashboard account identity', () => {
   it('uses an OpenAI email or a provider account name', () => {
     expect(accountDisplayName({ email: 'person@example.com' })).toBe('person@example.com');
-    expect(accountDisplayName({ name: 'xAI (SuperGrok)' })).toBe('xAI (SuperGrok)');
+    expect(accountDisplayName({ name: 'Mistral' })).toBe('Mistral');
     expect(accountDisplayName({})).toBe('Account identity unavailable');
   });
 });
 
-describe('dashboard device-code login', () => {
-  it('renders the complete device code independently of refresh status', () => {
-    expect(deviceCodeInstruction({
-      url: 'https://auth.openai.com/codex/device',
-      userCode: 'ABCD-EFGHI',
-    })).toBe('Enter code ABCD-EFGHI in the browser.');
+describe('dashboard browser sign-in', () => {
+  it('shows the ChatGPT plan authorization instruction', () => {
+    expect(authorizationInstruction()).toBe('Continue with ChatGPT in the browser and allow Clodex to use your plan.');
   });
 });
 
@@ -284,14 +281,13 @@ describe('dashboard refresh resilience', () => {
     const calls: Array<{ path: string; timeoutMs?: number }> = [];
     const snapshot = await loadDashboardPanels(dashboardRequestFrom({
       '/v1/status': new Error('status timed out'),
-      '/v1/accounts': { accounts: [], autoSwitchOnUsageLimit: true },
+      '/v1/accounts': { accounts: [] },
       '/v1/diagnostics?limit=20': new Error('diagnostics timed out'),
       '/v1/secondwind': new Error('Secondwind timed out'),
       '/v1/native-compaction': new Error('native compaction timed out'),
     }, calls));
 
     expect(snapshot.reachable).toBe(true);
-    expect(snapshot.autoSwitchOnUsageLimit).toBe(true);
     expect(calls.some(call => call.path === '/v1/health')).toBe(false);
   });
 

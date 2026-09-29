@@ -5,10 +5,8 @@ import {
 } from '@ai-sdk/openai';
 import { streamText } from 'ai';
 import {
-  CODEX_RESPONSES_LITE_VERSION,
-  CODEX_RESPONSES_LITE_WS_URL,
+  OPENAI_RESPONSES_WS_URL,
 } from '../src/constants.js';
-import { extractOpenAiAccountId } from '../src/oauth/openai.js';
 import { compactResponsesWindow } from '../src/oauth/responses-compaction.js';
 import { createResponsesWebSocketFetch } from '../src/oauth/responses-websocket.js';
 import type { ResponsesWebSocketDiagnosticEvent } from '../src/oauth/responses-websocket.js';
@@ -72,7 +70,6 @@ interface WireEvent {
 interface ProbeHeaders {
   [key: string]: string;
   Authorization: string;
-  originator: string;
 }
 
 type SyntheticInputItem = {
@@ -198,29 +195,21 @@ function openAiOAuthProvider(providers: LocalProvider[]): LocalProvider {
 }
 
 function targetModels(provider: LocalProvider): LocalProviderModel[] {
-  const ids = new Set(['gpt-5.6-sol', 'gpt-5.6-luna']);
+  const ids = new Set(['gpt-6.1-sol', 'gpt-5.6-luna']);
   const models = provider.models.filter(model => (
     model.npm === '@ai-sdk/openai'
     && ids.has(model.upstreamModelId)
   ));
   if (models.length === 0) {
-    throw new Error('Neither gpt-5.6-sol nor gpt-5.6-luna is available in the OpenAI OAuth provider');
+    throw new Error('Neither gpt-6.1-sol nor gpt-5.6-luna is available in the OpenAI OAuth provider');
   }
   return models;
 }
 
-function probeHeaders(provider: LocalProvider, model: LocalProviderModel): ProbeHeaders {
-  const accountId = extractOpenAiAccountId({ access_token: provider.apiKey })?.trim()
-    || provider.oauthAccountId?.trim();
+function probeHeaders(provider: LocalProvider): ProbeHeaders {
   const headers: ProbeHeaders = {
     Authorization: `Bearer ${provider.apiKey}`,
-    originator: 'clodex-compaction-probe',
   };
-  if (accountId) headers['ChatGPT-Account-Id'] = accountId;
-  if (model.useResponsesLite) {
-    headers.version = CODEX_RESPONSES_LITE_VERSION;
-    headers['x-openai-internal-codex-responses-lite'] = 'true';
-  }
   return headers;
 }
 
@@ -253,7 +242,7 @@ async function probeModel(
     instructions: 'Compact the synthetic conversation state. Do not execute tools.',
     tools: [],
     parallel_tool_calls: false,
-    reasoning: { effort: 'medium', context: model.useResponsesLite ? 'all_turns' : undefined },
+    reasoning: { effort: 'medium' },
     prompt_cache_key: promptCacheKey,
     text: { verbosity: 'low' },
   };
@@ -262,8 +251,8 @@ async function probeModel(
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
       const result = await compactResponsesWindow({
-        requestUrl: 'https://chatgpt.com/backend-api/codex/responses',
-        headers: probeHeaders(provider, model),
+        requestUrl: 'https://api.openai.com/v1/responses',
+        headers: probeHeaders(provider),
         payload,
       });
       const usage = result.usage;
@@ -301,7 +290,7 @@ async function probeContextManagement(
   model: LocalProviderModel,
 ): Promise<ProbeResult> {
   const wsFetch = createResponsesWebSocketFetch(
-    CODEX_RESPONSES_LITE_WS_URL,
+    OPENAI_RESPONSES_WS_URL,
     process.env.CLODEX_LIVE_COMPACTION_DEBUG === '1'
       ? message => process.stderr.write(`${message}\n`)
       : undefined,
@@ -314,10 +303,10 @@ async function probeContextManagement(
   // unrefs idle sockets, so this standalone probe needs its own bounded handle.
   const keepAlive = setInterval(() => {}, 1_000);
   try {
-    const { Authorization: _authorization, ...headers } = probeHeaders(provider, model);
+    const { Authorization: _authorization, ...headers } = probeHeaders(provider);
     const openai = createOpenAI({
       apiKey: provider.apiKey,
-      baseURL: 'https://chatgpt.com/backend-api/codex',
+      baseURL: 'https://api.openai.com/v1',
       headers,
       fetch: wsFetch,
     });
@@ -334,7 +323,6 @@ async function probeContextManagement(
           store: false,
           promptCacheKey: `clodex-context-management-probe-${randomUUID()}`,
           reasoningEffort: 'medium',
-          reasoningContext: model.useResponsesLite ? 'all_turns' : undefined,
           contextManagement: [{ type: 'compaction', compactThreshold: 1 }],
         } satisfies OpenAILanguageModelResponsesOptions,
       },
@@ -386,7 +374,7 @@ async function probeIntegratedCompaction(
 ): Promise<ProbeResult> {
   const diagnostics: ResponsesWebSocketDiagnosticEvent[] = [];
   const wsFetch = createResponsesWebSocketFetch(
-    CODEX_RESPONSES_LITE_WS_URL,
+    OPENAI_RESPONSES_WS_URL,
     process.env.CLODEX_LIVE_COMPACTION_DEBUG === '1'
       ? message => process.stderr.write(`${message}\n`)
       : undefined,
@@ -405,14 +393,14 @@ async function probeIntegratedCompaction(
     instructions: 'Reply with the word OK.',
     tools: [],
     parallel_tool_calls: false,
-    reasoning: { effort: 'medium', context: model.useResponsesLite ? 'all_turns' : undefined },
+    reasoning: { effort: 'medium' },
     prompt_cache_key: promptCacheKey,
     store: false,
   };
   try {
-    const first = await wsFetch('https://chatgpt.com/backend-api/codex/responses', {
+    const first = await wsFetch('https://api.openai.com/v1/responses', {
       method: 'POST',
-      headers: probeHeaders(provider, model),
+      headers: probeHeaders(provider),
       body: JSON.stringify({ ...basePayload, input }),
     });
     const firstSummary = summarizeWire(await first.text());
@@ -435,9 +423,9 @@ async function probeIntegratedCompaction(
       role: 'assistant',
       content: [{ type: 'output_text', text: firstSummary.assistantText }],
     };
-    const second = await wsFetch('https://chatgpt.com/backend-api/codex/responses', {
+    const second = await wsFetch('https://api.openai.com/v1/responses', {
       method: 'POST',
-      headers: probeHeaders(provider, model),
+      headers: probeHeaders(provider),
       body: JSON.stringify({
         ...basePayload,
         input: [
@@ -515,11 +503,11 @@ async function main(): Promise<void> {
     for (const model of models) {
       // The second identical Sol call validates prompt-cache reuse. Luna gets
       // one capability check to keep the live probe small.
-      const attempts = model.upstreamModelId === 'gpt-5.6-sol' ? 2 : 1;
+      const attempts = model.upstreamModelId === 'gpt-6.1-sol' ? 2 : 1;
       results.push(...await probeModel(provider, model, attempts));
     }
   }
-  const sol = models.find(model => model.upstreamModelId === 'gpt-5.6-sol');
+  const sol = models.find(model => model.upstreamModelId === 'gpt-6.1-sol');
   if (sol && (mode === 'all' || mode === 'context_management')) {
     results.push(await probeContextManagement(provider, sol));
   }

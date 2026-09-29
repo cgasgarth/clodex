@@ -25,7 +25,7 @@ export interface ProviderTemplate {
   unsupportedReason?: string;
 }
 
-/** Built-in provider templates. xAI is subscription-only; no API-key template is present. */
+/** Built-in OpenAI provider templates. */
 const PROVIDER_TEMPLATES: ProviderTemplate[] = [
   {
     id: 'openai',
@@ -44,17 +44,6 @@ const PROVIDER_TEMPLATES: ProviderTemplate[] = [
     npm: '@ai-sdk/openai',
     signupUrl: 'https://chatgpt.com',
     modelSource: 'api-list',
-    supported: true,
-  },
-  {
-    id: 'xai-oauth',
-    name: 'xAI (SuperGrok)',
-    authType: 'oauth',
-    npm: '@ai-sdk/xai',
-    defaultBaseUrl: 'https://cli-chat-proxy.grok.com/v1',
-    signupUrl: 'https://grok.com',
-    modelSource: 'static-seed',
-    staticModels: [{ id: 'grok-4.6', name: 'Grok 4.6' }],
     supported: true,
   },
 ];

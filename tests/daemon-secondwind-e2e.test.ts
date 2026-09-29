@@ -153,8 +153,6 @@ describe('single-endpoint daemon Secondwind integration', () => {
       accounts: {
         list: () => [],
         select: () => {},
-        settings: () => ({ autoSwitchOnUsageLimit: false }),
-        setAutoSwitchOnUsageLimit: () => {},
         createLaunchTicket: () => null,
       },
       secondwind,

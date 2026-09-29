@@ -1,3 +1,4 @@
+const testRegistration = {clientId: 'oaiapp_test', subject: 'fixture', idToken: 'fixture', scope: 'chatgpt.tokens.use.direct'};
 import { beforeEach, describe, expect, it, vi } from 'bun:test';
 
 const lockState = createHoisted(() => ({ active: false }));
@@ -45,6 +46,7 @@ const FRESH_AUTH_REF = `helper:v1:${'b'.repeat(64)}:oauth:provider:openai-oauth`
 function oauthCredential(access: string, expires: number): string {
   return JSON.stringify({
     type: 'oauth',
+    providerData: testRegistration,
     access,
     refresh: `${access}-refresh`,
     expires,
@@ -86,6 +88,7 @@ describe('OAuth credential refresh serialization', () => {
     const stale = oauthCredential('stale', 0);
     const refreshed = {
       type: 'oauth' as const,
+      providerData: testRegistration,
       access: 'refreshed',
       refresh: 'rotated-refresh',
       expires: Date.now() + 3_600_000,

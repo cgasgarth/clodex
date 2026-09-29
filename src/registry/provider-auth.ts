@@ -1,49 +1,16 @@
-// provider-auth.ts — clodex providers auth (native subscription device-code flows)
-
-import { printOAuthStepsPanel } from '../ui/prompts.js';
+// All subscription sign-ins use the managed account writer.
 import pc from 'picocolors';
 import * as p from '@clack/prompts';
-import open from 'open';
-import {
-  probeProviderCredentialStore,
-  provisionProviderCredential,
-  saveProviderCredential,
-} from '../config/environment.js';
-import { credentialInstanceAuthRef } from '../credentials/helper.js';
-import { runOpenAiDeviceCodeFlow } from '../oauth/openai.js';
-import { runXaiDeviceCodeFlow } from '../oauth/xai.js';
-import {
-  supportsNativeOAuth,
-  tokensToStoredCredential,
-  oauthCredentialToKeychainJson,
-  type NativeOAuthProviderId,
-  type StoredOAuthCredential,
-} from '../oauth/types.js';
-import { getTemplateById } from '../providers/templates.js';
-import { oauthAuthRef, oauthTemplateId, toOAuthRegistryId } from './import-build.js';
-import {
-  cancelCredentialDelete,
-  journalCredentialWrite,
-  queueCredentialDelete,
-  reconcilePendingCredentialDeletes,
-} from './credential-lifecycle.js';
-import { loadRegistryStrict, saveRegistry } from './io.js';
-import {
-  withCredentialMutationLock,
-  withProviderMutationLock,
-  withRegistryWriteLock,
-} from './lock.js';
-import { refreshProviderModels } from './refresh-models.js';
+import { link } from 'ansi-escapes';
+import { loginProviderAccount } from '../daemon/account-command.js';
+import { DaemonAccountStore } from '../daemon/account-store.js';
+import { readProviderOAuthCredential } from '../config/environment.js';
+import { supportsNativeOAuth, type StoredOAuthCredential } from '../oauth/types.js';
+import { loadRegistryStrict } from './io.js';
 import type { RegistryProvider } from './types.js';
 
-;
-
 export type ProviderAuthMethod = 'native';
-
-export interface ProviderAuthOptions {
-  method?: ProviderAuthMethod;
-}
-
+export interface ProviderAuthOptions { method?: ProviderAuthMethod }
 export interface ProviderAuthResult {
   providerId: string;
   credential: StoredOAuthCredential;
@@ -51,209 +18,38 @@ export interface ProviderAuthResult {
   credentialCleanupPending: boolean;
 }
 
-const OPENAI_DISPLAY = 'OpenAI ChatGPT Plus/Pro';
-const XAI_DISPLAY = 'xAI SuperGrok';
-const PROVIDER_DISPLAY = {
-  openai: OPENAI_DISPLAY,
-  'openai-oauth': OPENAI_DISPLAY,
-  xai: XAI_DISPLAY,
-  'xai-oauth': XAI_DISPLAY,
-} satisfies Record<NativeOAuthProviderId, string>;
-
-function openBrowser(url: string): void {
-  open(url).catch(() => {});
-}
-
-async function runNativeDeviceCode(providerId: NativeOAuthProviderId): Promise<StoredOAuthCredential> {
-  const label = PROVIDER_DISPLAY[providerId];
-  printOAuthStepsPanel(`${label} — Sign in`, label);
-
-  const spinner = p.spinner({ indicator: 'timer' });
-  spinner.start('Waiting for authorization...');
-
-  try {
-    const runFlow = providerId === 'openai' || providerId === 'openai-oauth'
-      ? runOpenAiDeviceCodeFlow
-      : runXaiDeviceCodeFlow;
-    const { tokens, accountId } = await runFlow(({ url, userCode }) => {
-      spinner.stop('');
-      p.log.info(`Visit: ${pc.cyan(url)}`);
-      p.log.info(`Enter code: ${pc.bold(userCode)}`);
-      openBrowser(url);
-      spinner.start('Waiting for authorization...');
-    });
-    spinner.stop(pc.green(`Signed in to ${label}`));
-    return tokensToStoredCredential(tokens, undefined, accountId);
-  } catch (err) {
-    spinner.stop('');
-    throw err;
-  }
-}
-
-/**
- * The OAuth provider shares a templateId with the API-key provider (openai),
- * so it needs a distinguishing display name for pickers.
- */
-function oauthDisplayName(registryId: string, fallbackName: string): string {
-  if (registryId === 'openai-oauth') return 'OpenAI (ChatGPT)';
-  if (registryId === 'xai-oauth') return 'xAI (SuperGrok)';
-  return fallbackName;
-}
-
-async function upsertOAuthProvider(
-  providerId: string,
-  authRef: string,
-  expectedAuthRef: string | undefined,
-): Promise<RegistryProvider> {
-  return withRegistryWriteLock(async () => {
-    const registryId = toOAuthRegistryId(providerId);
-    const templateId = oauthTemplateId(providerId);
-    const registry = loadRegistryStrict();
-    const template = getTemplateById(templateId);
-    let entry: RegistryProvider | undefined = registry.providers.find(pr => pr.id === registryId);
-    if (entry?.authRef !== expectedAuthRef) {
-      throw new Error(`Provider "${registryId}" changed while its credential was being saved`);
-    }
-
-    if (!entry) {
-      if (!template) {
-        throw new Error(`Provider "${providerId}" is not in your registry and has no template`);
-      }
-    }
-
-    const previousAuthRef = entry?.authRef;
-    if (!entry) {
-      if (!template) throw new Error(`Provider "${providerId}" has no template`);
-      const displayName = oauthDisplayName(registryId, template.name);
-      const api: RegistryProvider['api'] = {
-        npm: template.npm,
-        url: template.defaultBaseUrl ?? '',
-      };
-      if (template.headers) api.headers = template.headers;
-      entry = {
-        id: registryId,
-        templateId,
-        name: displayName,
-        enabled: true,
-        authRef,
-        authType: 'oauth',
-        api,
-        addedAt: new Date().toISOString(),
-      };
-    } else {
-      entry = { ...entry, authType: 'oauth', authRef, templateId };
-    }
-
-    const idx = registry.providers.findIndex(provider => provider.id === registryId);
-    if (idx >= 0) registry.providers[idx] = entry;
-    else registry.providers.push(entry);
-    if (previousAuthRef && previousAuthRef !== authRef) {
-      await queueCredentialDelete(previousAuthRef);
-    }
-    saveRegistry(registry);
-    try {
-      await cancelCredentialDelete(authRef);
-    } catch {
-      // Reconciliation below reports and retries the committed marker.
-    }
-    return entry;
-  });
-}
-
-async function persistNativeOAuthCredential(
-  providerId: string,
-  cred: StoredOAuthCredential,
-): Promise<{ registryProvider: RegistryProvider; credentialCleanupPending: boolean }> {
-  const registryId = toOAuthRegistryId(providerId);
-  const account = `oauth:provider:${registryId}`;
-  const registryProvider = await withProviderMutationLock(registryId, async () => {
-    const existingAuthRef = await withRegistryWriteLock(
-      () => {
-        const registry = loadRegistryStrict();
-        const templateId = oauthTemplateId(providerId);
-        const existing = registry.providers.find(provider => provider.id === registryId);
-        if (!existing && !getTemplateById(templateId)) {
-          throw new Error(`Provider "${providerId}" is not in your registry and has no template`);
-        }
-        return existing?.authRef;
-      },
-    );
-    const authRef = credentialInstanceAuthRef(account);
-    return withCredentialMutationLock(authRef, async () => {
-      await journalCredentialWrite(authRef);
-      let diagMsg = '';
-      const saved =
-        existingAuthRef === authRef
-          ? await saveProviderCredential(authRef, oauthCredentialToKeychainJson(cred), msg => {
-              diagMsg = msg;
-            })
-          : await provisionProviderCredential(authRef, oauthCredentialToKeychainJson(cred), msg => {
-              diagMsg = msg;
-            });
-      if (!saved) {
-        throw new Error(
-          `Could not save OAuth tokens to the credential store${
-            diagMsg ? ` — ${diagMsg}` : ' — check access and try again'
-          }`,
-        );
-      }
-      return upsertOAuthProvider(providerId, authRef, existingAuthRef);
-    });
-  });
-
-  let credentialCleanupPending = true;
-  try {
-    const cleanup = await reconcilePendingCredentialDeletes();
-    credentialCleanupPending =
-      cleanup.pending.length > 0 || cleanup.persistenceError !== undefined;
-  } catch {
-    credentialCleanupPending = true;
-  }
-  return {
-    registryProvider,
-    credentialCleanupPending,
-  };
-}
-
 export async function authenticateProvider(
   providerId: string,
   _options: ProviderAuthOptions = {},
 ): Promise<ProviderAuthResult> {
-  const registryId = toOAuthRegistryId(providerId);
-
   if (!supportsNativeOAuth(providerId)) {
-    throw new Error('OAuth sign-in is available for openai (ChatGPT Plus/Pro) and xai (SuperGrok).');
+    throw new Error('OAuth sign-in is available for openai (ChatGPT).');
   }
-
-  let storeDiagMsg = '';
-  const storeReady = await probeProviderCredentialStore(oauthAuthRef(registryId), msg => {
-    storeDiagMsg = msg;
-  });
-  if (!storeReady) {
-    throw new Error(
-      `Credential store is unavailable${storeDiagMsg ? `: ${storeDiagMsg}` : ''}. `
-      + 'Set CLODEX_CREDENTIAL_HELPER to an absolute path to an external credential helper and try again.',
-    );
-  }
-
-  const cred = await runNativeDeviceCode(providerId);
-  const persisted = await persistNativeOAuthCredential(providerId, cred);
-
-  const refreshSpinner = p.spinner();
-  refreshSpinner.start('Refreshing model list...');
+  const registryId = 'openai-oauth';
+  const store = new DaemonAccountStore();
+  const selected = store.selected();
+  const spinner = p.spinner({ indicator: 'timer' });
+  spinner.start('Starting subscription sign-in...');
   try {
-    await refreshProviderModels(registryId, cred.access);
-    refreshSpinner.stop('Models refreshed');
-  } catch {
-    refreshSpinner.stop('Could not refresh models — run clodex providers refresh-models later');
+    const signedIn = await loginProviderAccount(registryId, {
+      ...(selected && { reauthenticate: selected.id }),
+      onAuthorization: ({ url }) => {
+        spinner.stop('');
+        p.log.info(pc.cyan(link('Continue with ChatGPT', url)));
+        spinner.start('Waiting for authorization and credential save...');
+      },
+    });
+    const account = store.list().find(item => item.id === signedIn.id);
+    if (!account) throw new Error('The subscription account was not saved');
+    const credential = await readProviderOAuthCredential(account.authRef);
+    const registryProvider = loadRegistryStrict().providers.find(item => item.id === registryId);
+    if (!credential || !registryProvider) throw new Error('The subscription credential was not saved');
+    spinner.stop(pc.green(`Authorization saved for ${signedIn.email}`));
+    return { providerId: registryId, credential, registryProvider, credentialCleanupPending: false };
+  } catch (error) {
+    spinner.stop('Sign-in was not saved');
+    throw error;
   }
-
-  return {
-    providerId: registryId,
-    credential: cred,
-    registryProvider: persisted.registryProvider,
-    credentialCleanupPending: persisted.credentialCleanupPending,
-  };
 }
 
 export function providerAuthHelpText(): string {
@@ -261,9 +57,7 @@ export function providerAuthHelpText(): string {
 
 ${pc.bold('Usage:')}
   clodex providers auth openai
-  clodex providers auth xai
 
-${pc.bold('Device code (works on SSH/VPS):')}
-  openai   ChatGPT Plus/Pro (device code at auth.openai.com/codex/device)
-  xai      SuperGrok (device code at auth.x.ai)`;
+${pc.bold('Sign-in methods:')}
+  openai   Continue with ChatGPT in your browser (local loopback callback)`;
 }

@@ -30,8 +30,7 @@ flowchart LR
   children inherit that ticket, so a workflow shares the same account-selection
   policy as its parent without generating a new custom-key approval prompt.
 - Manual account selection affects the next request from new and existing
-  default-account launches. The Accounts dashboard can enable usage-limit
-  failover to another healthy account for the same provider. An explicit
+  default-account launches. An explicit
   `--clodex-account` launch remains pinned. Auth and capacity failures do not
   switch accounts.
 
@@ -94,12 +93,10 @@ On non-macOS systems, run `clodex daemon run` under the user's service manager.
 
 ## Accounts
 
-The first existing `openai-oauth` and `xai-oauth` logins are migrated into the
-account list. Additional logins use independent OS-credential-store entries:
+Each ChatGPT sign-in saves an independent app registration in the OS credential store:
 
 ```bash
 clodex accounts add openai
-clodex accounts add xai
 clodex accounts list
 clodex accounts select person@example.com
 clodex accounts remove person@example.com
@@ -107,8 +104,7 @@ clodex accounts remove person@example.com
 
 The dashboard and CLI identify accounts only by their provider and sign-in email.
 Clodex stores only account metadata in `~/.clodex/accounts.json`; OAuth secrets
-remain in the configured credential store. OpenAI and SuperGrok keep independent
-defaults. A normal signed ticket resolves those selections for every request, so
+remain in the configured credential store. A normal signed ticket resolves the selected ChatGPT account for every request, so
 an existing session switches after a manual selection. An explicit account
 override stays pinned. Removing or losing a pinned credential makes that session
 fail explicitly. Clodex does not select a different account after an error.

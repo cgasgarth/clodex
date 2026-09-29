@@ -1,3 +1,4 @@
+const planToken = (label: string) => `e30.${Buffer.from(JSON.stringify({scope: 'chatgpt.tokens.use.direct', jti: label})).toString('base64url')}.signature`;
 import { importActual } from './bun-import-actual.js';
 // tests/proxy.test.ts
 import { describe, it, expect, vi, afterEach } from 'bun:test';
@@ -282,7 +283,7 @@ describe('aliasModelId', () => {
   });
 
   it('prefixes non-claude ids with anthropic-{providerId}__', () => {
-    expect(aliasModelId('grok-4.6', 'xai-oauth')).toBe('anthropic-xai-oauth__grok-4.6');
+    expect(aliasModelId('mistral-large', 'mistral')).toBe('anthropic-mistral__mistral-large');
   });
 
   it('uses stable provider id slug in alias', () => {
@@ -1172,91 +1173,6 @@ it('returns an HTTP error when request translation throws instead of leaving the
     }
   }, 20_000);
 
-  it('switches accounts and retries a replay-safe inference after plan usage is exhausted', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'clodex-account-failover-'));
-    const inferenceLogPath = join(dir, 'inference.jsonl');
-    const authorizations: string[] = [];
-    const upstream = http.createServer((req, res) => {
-      authorizations.push(req.headers.authorization ?? '');
-      req.resume();
-      if (req.headers.authorization === 'Bearer exhausted-key') {
-        res.writeHead(429, {
-          'Content-Type': 'application/json',
-          'retry-after-ms': '1',
-          'Connection': 'close',
-        });
-        res.end(JSON.stringify({
-          error: {
-            type: 'usage_limit_reached',
-            code: 'insufficient_quota',
-            message: 'Plan usage limit reached',
-          },
-        }));
-        return;
-      }
-      res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Connection': 'close' });
-      res.write(openAiSseChunk({ role: 'assistant', content: 'recovered on healthy account' }, null));
-      res.write(openAiSseChunk({}, 'stop'));
-      res.end('data: [DONE]\n\n');
-    });
-    await new Promise<void>((resolve, reject) => {
-      upstream.once('error', reject);
-      upstream.listen(0, '127.0.0.1', () => resolve());
-    });
-    const address = requireTcpAddress(upstream.address(), 'test upstream did not bind');
-    const route: ProxyRoute = {
-      aliasId: 'clodex:test:usage-limited-model',
-      realModelId: 'usage-limited-model',
-      displayName: 'Usage Limited Model',
-      upstreamUrl: '',
-      apiKey: 'exhausted-key',
-      modelFormat: 'openai',
-      npm: '@ai-sdk/openai-compatible',
-      baseURL: `http://127.0.0.1:${address.port}/v1`,
-      providerId: 'openai-oauth',
-      authType: 'oauth',
-      metricsAccountId: 'exhausted-account',
-    };
-    const failover = vi.fn(async () => ({
-      ...route,
-      apiKey: 'healthy-key',
-      metricsAccountId: 'healthy-account',
-    }));
-    route.usageLimitFailover = failover;
-    const handle = await startProxyCatalog([route], route.aliasId, false, inferenceLogPath);
-
-    try {
-      const response = await postToProxy(handle.port, {
-        model: route.aliasId,
-        max_tokens: 100,
-        messages: [{ role: 'user', content: 'recover this inference' }],
-        stream: true,
-      }, 'req-account-failover');
-
-      expect(response.status).toBe(200);
-      expect(response.body).toContain('recovered on healthy account');
-      expect(failover).toHaveBeenCalledOnce();
-      expect(authorizations.at(-1)).toBe('Bearer healthy-key');
-      const entries = (await readFlushedLog(inferenceLogPath)).trim().split('\n').map(line => JSON.parse(line));
-      expect(entries).toContainEqual(expect.objectContaining({
-        event: 'translation_retrying',
-        requestId: 'req-account-failover',
-        accountId: 'healthy-account',
-        errorCode: 'usage_limit_failover',
-      }));
-      expect(entries).toContainEqual(expect.objectContaining({
-        event: 'translation_completed',
-        requestId: 'req-account-failover',
-        accountId: 'healthy-account',
-      }));
-      expect(entries.some(entry => entry.event === 'translation_failed')).toBe(false);
-    } finally {
-      await handle.close();
-      await new Promise<void>(resolve => upstream.close(() => resolve()));
-      rmSync(dir, { recursive: true, force: true });
-    }
-  }, 20_000);
-
   it('records the bounded WebSocket transport code in the translation lifecycle', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'clodex-sdk-transport-error-'));
     const inferenceLogPath = join(dir, 'inference.jsonl');
@@ -1464,124 +1380,6 @@ it('returns an HTTP error when request translation throws instead of leaving the
       }));
       expect(entries.some(entry => entry.event === 'translation_failed')).toBe(false);
       expect(entries.some(entry => entry.event === 'upstream_error')).toBe(false);
-    } finally {
-      await handle.close();
-      await new Promise<void>(resolve => upstream.close(() => resolve()));
-      rmSync(dir, { recursive: true, force: true });
-    }
-  }, 20_000);
-
-  it('streams SuperGrok output before the upstream response completes', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'clodex-xai-live-stream-'));
-    const inferenceLogPath = join(dir, 'inference.jsonl');
-    let releaseUpstream!: () => void;
-    const upstreamRelease = new Promise<void>(resolve => { releaseUpstream = resolve; });
-    let upstreamCompleted = false;
-    const upstream = http.createServer((req, res) => {
-      req.resume();
-      req.once('end', async () => {
-        res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Connection': 'close' });
-        res.write('data: {"id":"grok-live","object":"chat.completion.chunk","created":1,"model":"grok-4.6","choices":[{"index":0,"delta":{"role":"assistant","content":"visible before completion"},"finish_reason":null}]}\n\n');
-        await upstreamRelease;
-        res.write('data: {"id":"grok-live","object":"chat.completion.chunk","created":1,"model":"grok-4.6","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\n');
-        res.end('data: [DONE]\n\n');
-        upstreamCompleted = true;
-      });
-    });
-    await new Promise<void>((resolve, reject) => {
-      upstream.once('error', reject);
-      upstream.listen(0, '127.0.0.1', () => resolve());
-    });
-    const address = requireTcpAddress(upstream.address(), 'test upstream did not bind');
-    const route: ProxyRoute = {
-      aliasId: 'grok',
-      realModelId: 'grok-4.6',
-      displayName: 'Grok 4.6',
-      upstreamUrl: '',
-      apiKey: 'subscription-token',
-      modelFormat: 'openai',
-      npm: '@ai-sdk/openai-compatible',
-      baseURL: `http://127.0.0.1:${address.port}/v1`,
-      providerId: 'xai-oauth',
-    };
-    const handle = await startProxyCatalog([route], route.aliasId, false, inferenceLogPath);
-
-    try {
-      let visibleOutput = '';
-      const completed = postToProxy(handle.port, {
-        model: route.aliasId,
-        max_tokens: 100,
-        messages: [{ role: 'user', content: 'stream live' }],
-        stream: true,
-      }, 'req-xai-live', '/v1/messages', undefined, undefined, chunk => { visibleOutput += chunk; });
-
-      await waitForCondition(() => visibleOutput.includes('visible before completion'));
-      expect(upstreamCompleted).toBe(false);
-      releaseUpstream();
-
-      const response = await completed;
-      expect(response.status).toBe(200);
-      expect(response.body).toContain('visible before completion');
-      expect(response.body).toContain('event: message_stop');
-    } finally {
-      releaseUpstream();
-      await handle.close();
-      await new Promise<void>(resolve => upstream.close(() => resolve()));
-      rmSync(dir, { recursive: true, force: true });
-    }
-  }, 20_000);
-
-  it('does not replay SuperGrok after live output is visible', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'clodex-xai-live-failure-'));
-    const inferenceLogPath = join(dir, 'inference.jsonl');
-    let requestCount = 0;
-    const upstream = http.createServer((req, res) => {
-      requestCount += 1;
-      req.resume();
-      req.once('end', () => {
-        res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Connection': 'close' });
-        res.write('data: {"id":"grok-partial","object":"chat.completion.chunk","created":1,"model":"grok-4.6","choices":[{"index":0,"delta":{"role":"assistant","content":"one visible answer"},"finish_reason":null}]}\n\n');
-        res.end('data: {"error":{"type":"transport_error","code":"websocket_transport_error","message":"connection ended"}}\n\n');
-      });
-    });
-    await new Promise<void>((resolve, reject) => {
-      upstream.once('error', reject);
-      upstream.listen(0, '127.0.0.1', () => resolve());
-    });
-    const address = requireTcpAddress(upstream.address(), 'test upstream did not bind');
-    const route: ProxyRoute = {
-      aliasId: 'grok',
-      realModelId: 'grok-4.6',
-      displayName: 'Grok 4.6',
-      upstreamUrl: '',
-      apiKey: 'subscription-token',
-      modelFormat: 'openai',
-      npm: '@ai-sdk/openai-compatible',
-      baseURL: `http://127.0.0.1:${address.port}/v1`,
-      providerId: 'xai-oauth',
-    };
-    const handle = await startProxyCatalog([route], route.aliasId, false, inferenceLogPath);
-
-    try {
-      const response = await postToProxy(handle.port, {
-        model: route.aliasId,
-        max_tokens: 100,
-        messages: [{ role: 'user', content: 'fail after live output' }],
-        stream: true,
-      }, 'req-xai-live-failure');
-
-      expect(requestCount).toBe(1);
-      expect(response.status).toBe(200);
-      expect(response.body).toContain('one visible answer');
-      expect(response.body).toContain('event: error');
-      const entries = (await readFlushedLog(inferenceLogPath)).trim().split('\n').map(line => JSON.parse(line));
-      expect(entries).toContainEqual(expect.objectContaining({
-        event: 'translation_failed',
-        requestId: 'req-xai-live-failure',
-        partialResponse: true,
-        replaySafe: false,
-      }));
-      expect(entries.some(entry => entry.event === 'translation_retrying')).toBe(false);
     } finally {
       await handle.close();
       await new Promise<void>(resolve => upstream.close(() => resolve()));
@@ -2335,12 +2133,12 @@ describe('OAuth route credential resolution', () => {
       realModelId: 'gpt-3.5-turbo-compact',
       displayName: 'OAuth Compact Route',
       upstreamUrl: '',
-      apiKey: 'oauth-token',
+      apiKey: planToken('oauth-token'),
       modelFormat: 'openai',
       npm: '@ai-sdk/openai',
       providerId: 'oauth-provider',
       authType: 'oauth',
-      refreshToken: vi.fn(async () => 'oauth-token'),
+      refreshToken: vi.fn(async () => planToken('oauth-token')),
     };
     // SAFETY: The test fixture defines the asserted runtime shape.
     asMocked(withResponsesWebSocketDiagnosticContext).mockReturnValueOnce({
@@ -2383,13 +2181,13 @@ describe('OAuth route credential resolution', () => {
   });
 
   it('resolves the current token before dispatch and updates the route cache', async () => {
-    const refreshToken = vi.fn(async () => 'fresh-oauth-token');
+    const refreshToken = vi.fn(async () => planToken('fresh-oauth-token'));
     const route: ProxyRoute = {
       aliasId: 'claude-oauth-route',
       realModelId: 'claude-oauth-route',
       displayName: 'OAuth Route',
       upstreamUrl: 'https://api.example.test',
-      apiKey: 'stale-oauth-token',
+      apiKey: planToken('stale-oauth-token'),
       modelFormat: 'anthropic',
       providerId: 'oauth-provider',
       authType: 'oauth',
@@ -2417,10 +2215,10 @@ describe('OAuth route credential resolution', () => {
 
       expect(response.status).toBe(200);
       expect(refreshToken).toHaveBeenCalledTimes(1);
-      expect(route.apiKey).toBe('fresh-oauth-token');
+      expect(route.apiKey).toBe(planToken('fresh-oauth-token'));
       const [, init] = asMocked(fetch).mock.calls[0]!;
       expect(new Headers(init?.headers).get('Authorization')).toBe(
-        'Bearer fresh-oauth-token',
+        `Bearer ${planToken('fresh-oauth-token')}`,
       );
     } finally {
       await handle.close();
@@ -2430,8 +2228,8 @@ describe('OAuth route credential resolution', () => {
   it('rebuilds the translated SDK route and retries once after an OAuth 401', async () => {
     const refreshToken = vi.fn(async (rejectedAccessToken?: string) =>
       rejectedAccessToken === undefined
-        ? 'rejected-oauth-token'
-        : 'fresh-oauth-token',
+        ? planToken('rejected-oauth-token')
+        : planToken('fresh-oauth-token'),
     );
     const route: ProxyRoute = {
       aliasId: 'anthropic-oauth-provider__gpt-3-5-turbo-instruct',
@@ -2448,7 +2246,7 @@ describe('OAuth route credential resolution', () => {
     const fetchMock = vi.fn(
       async (_input: string | URL | Request, init?: RequestInit) => {
         const authorization = new Headers(init?.headers).get('authorization');
-        if (authorization === 'Bearer rejected-oauth-token') {
+        if (authorization === `Bearer ${planToken('rejected-oauth-token')}`) {
         return new Response(
             JSON.stringify({ error: { message: 'expired token' } }),
             {
@@ -2485,14 +2283,14 @@ describe('OAuth route credential resolution', () => {
       expect(response.status).toBe(200);
       expect(response.body).toContain('recovered');
       expect(refreshToken).toHaveBeenNthCalledWith(1);
-      expect(refreshToken).toHaveBeenNthCalledWith(2, 'rejected-oauth-token');
-      expect(route.apiKey).toBe('fresh-oauth-token');
+      expect(refreshToken).toHaveBeenNthCalledWith(2, planToken('rejected-oauth-token'));
+      expect(route.apiKey).toBe(planToken('fresh-oauth-token'));
       expect(fetchMock).toHaveBeenCalledTimes(2);
       expect(
         fetchMock.mock.calls.map(([, init]) =>
           new Headers(init?.headers).get('authorization'),
         ),
-      ).toEqual(['Bearer rejected-oauth-token', 'Bearer fresh-oauth-token']);
+      ).toEqual([`Bearer ${planToken('rejected-oauth-token')}`, `Bearer ${planToken('fresh-oauth-token')}`]);
     } finally {
       await handle.close();
     }
@@ -2501,8 +2299,8 @@ describe('OAuth route credential resolution', () => {
   it('surfaces a second translated OAuth 401 without another retry', async () => {
     const refreshToken = vi.fn(async (rejectedAccessToken?: string) =>
       rejectedAccessToken === undefined
-        ? 'rejected-oauth-token'
-        : 'fresh-oauth-token',
+        ? planToken('rejected-oauth-token')
+        : planToken('fresh-oauth-token'),
     );
     const route: ProxyRoute = {
       aliasId: 'anthropic-oauth-provider__gpt-3-5-turbo-second-401',
@@ -2537,7 +2335,7 @@ describe('OAuth route credential resolution', () => {
       expect(response.status).toBe(401);
       expect(fetchMock).toHaveBeenCalledTimes(2);
       expect(refreshToken).toHaveBeenCalledTimes(2);
-      expect(route.apiKey).toBe('fresh-oauth-token');
+      expect(route.apiKey).toBe(planToken('fresh-oauth-token'));
     } finally {
       await handle.close();
     }
@@ -2545,7 +2343,7 @@ describe('OAuth route credential resolution', () => {
 
   it('refuses to retry a translated OAuth 401 with an unchanged token', async () => {
     const refreshToken = vi.fn(async (rejectedAccessToken?: string) =>
-      rejectedAccessToken ?? 'rejected-oauth-token',
+      rejectedAccessToken ?? planToken('rejected-oauth-token'),
     );
     const route: ProxyRoute = {
       aliasId: 'anthropic-oauth-provider__gpt-3-5-turbo-unchanged',
@@ -2580,7 +2378,7 @@ describe('OAuth route credential resolution', () => {
       expect(response.status).toBe(401);
       expect(fetchMock).toHaveBeenCalledTimes(1);
       expect(refreshToken).toHaveBeenCalledTimes(2);
-      expect(route.apiKey).toBe('rejected-oauth-token');
+      expect(route.apiKey).toBe(planToken('rejected-oauth-token'));
     } finally {
       await handle.close();
     }

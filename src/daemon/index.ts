@@ -355,15 +355,12 @@ async function runDaemonProcess(): Promise<number> {
 
   try {
     const loaded = await loadHttpProxyRoutes();
-    if (loaded.routes.length === 0) {
-      throw new Error('No compatible favorite models are configured for the Clodex daemon');
-    }
     const resolveRoute = (route: Parameters<typeof accounts.routeForTicket>[0], context: {
       launchTicket?: string;
     }) => accounts.routeForTicket(route, context.launchTicket);
     endpoint = await startProxyCatalog(
       loaded.routes,
-      loaded.routes[0]!.aliasId,
+      loaded.routes[0]?.aliasId ?? '',
       false,
       inferenceLogPath,
       undefined,

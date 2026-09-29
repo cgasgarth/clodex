@@ -147,7 +147,7 @@ describe('provider-catalog-display', () => {
     it('distinguishes OAuth, API key, and env refs', () => {
       // SAFETY: The test fixture defines the asserted runtime shape.
       expect(formatRegistryAuthLabel({
-        authRef: 'keyring:oauth:provider:xai',
+        authRef: 'keyring:oauth:provider:mistral',
         authType: 'oauth',
       } as any)).toBe('keychain (OAuth)');
       // SAFETY: The test fixture defines the asserted runtime shape.

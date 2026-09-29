@@ -99,7 +99,7 @@ describe('supportsOpenAiPromptCacheBreakpoints', () => {
     expect(supportsOpenAiPromptCacheBreakpoints('gpt-5.6-sol')).toBe(true);
     expect(supportsOpenAiPromptCacheBreakpoints('gpt-5.10')).toBe(true);
     expect(supportsOpenAiPromptCacheBreakpoints('gpt-6')).toBe(true);
-    expect(supportsOpenAiPromptCacheBreakpoints('grok-5.6')).toBe(false);
+    expect(supportsOpenAiPromptCacheBreakpoints('mistral-large')).toBe(false);
   });
 });
 
@@ -219,7 +219,7 @@ describe('translateMessages', () => {
     const out = translateMessages([
       { role: 'user', content: 'hello' },
       { role: 'assistant', content: [{ type: 'text', text: 'hi there' }] },
-    ], '@ai-sdk/xai');
+    ], '@ai-sdk/mistral');
     expect(out).toEqual([
       { role: 'user', content: [{ type: 'text', text: 'hello' }] },
       { role: 'assistant', content: [{ type: 'text', text: 'hi there' }] },
@@ -472,7 +472,7 @@ describe('translateMessages', () => {
       messages: [{ role: 'user' as const, content: 'continue the existing plan' }],
     };
     const publicOpenAi = translateRequest(body, '@ai-sdk/openai');
-    const otherProvider = translateRequest({ ...body, model: 'grok-4.6' }, '@ai-sdk/xai');
+    const otherProvider = translateRequest({ ...body, model: 'mistral-large' }, '@ai-sdk/mistral');
 
     expect(publicOpenAi.instructions).toBeUndefined();
     expect(publicOpenAi.messages[0]).toMatchObject({
@@ -566,7 +566,7 @@ describe('translateMessages', () => {
     ];
     annotateToolNames(messages);
     // SAFETY: The test fixture defines the asserted runtime shape.
-    const out = translateMessages(messages, '@ai-sdk/xai') as any[];
+    const out = translateMessages(messages, '@ai-sdk/mistral') as any[];
     expect(out[0]).toEqual({ role: 'assistant', content: [{ type: 'tool-call', toolCallId: 'call_1', toolName: 'Read', input: { path: 'a' } }] });
     expect(out[1]).toEqual({ role: 'tool', content: [{ type: 'tool-result', toolCallId: 'call_1', toolName: 'Read', output: { type: 'text', value: 'file body' } }] });
   });
@@ -988,20 +988,20 @@ describe('translateRequest', () => {
 
   it('applies reasoning effort using reasoningMetadata.upstreamModelId, not the gateway-aliased body.model', () => {
     const params = translateRequest({
-      model: 'anthropic-xai-oauth__grok-4.6',
+      model: 'anthropic-mistral__mistral-large',
       output_config: { effort: 'high' },
       messages: [{ role: 'user', content: 'hi' }],
-    }, '@ai-sdk/xai', { reasoningMetadata: { upstreamModelId: 'grok-4.6' } });
-    expect(params.providerOptions?.xai).toMatchObject({ reasoningEffort: 'high' });
+    }, '@ai-sdk/mistral', { reasoningMetadata: { upstreamModelId: 'mistral-large' } });
+    expect(params.providerOptions?.mistral).toMatchObject({ reasoningEffort: 'high' });
   });
 
   it('does not apply reasoning effort when only the gateway-aliased model id is available (regression guard)', () => {
     const params = translateRequest({
-      model: 'anthropic-xai-oauth__grok-4.6',
+      model: 'anthropic-mistral__mistral-large',
       output_config: { effort: 'high' },
       messages: [{ role: 'user', content: 'hi' }],
-    }, '@ai-sdk/xai');
-    expect(params.providerOptions?.xai).toEqual({ store: false });
+    }, '@ai-sdk/mistral');
+    expect(params.providerOptions?.mistral).toBeUndefined();
   });
 
   it('reads effort from output_config via anthropicEffortFromRequest', () => {
@@ -1020,14 +1020,14 @@ describe('translateRequest', () => {
   });
   it('flattens array system prompts', () => {
     const params = translateRequest({
-      model: 'grok-4.6', system: [{ text: 'a' }, { text: 'b' }], messages: [],
-    }, '@ai-sdk/xai');
+      model: 'mistral-large', system: [{ text: 'a' }, { text: 'b' }], messages: [],
+    }, '@ai-sdk/mistral');
     expect(params.instructions).toBe('a\nb');
   });
 
   it('preserves inline role:system messages in their original position', () => {
     const params = translateRequest({
-      model: 'grok-4.6',
+      model: 'mistral-large',
       system: 'base prompt',
       messages: [
         { role: 'user', content: 'hi' },
@@ -1035,7 +1035,7 @@ describe('translateRequest', () => {
         { role: 'system', content: '<system-reminder>available skills: nlm-skill</system-reminder>' } as any,
         { role: 'user', content: 'continue' },
       ],
-    }, '@ai-sdk/xai');
+    }, '@ai-sdk/mistral');
     expect(params.instructions).toBe('base prompt');
     expect(params.allowSystemInMessages).toBe(true);
     // SAFETY: The test fixture defines the asserted runtime shape.
@@ -1046,10 +1046,10 @@ describe('translateRequest', () => {
 
   it('keeps an inline-only system message in the message sequence', () => {
     const params = translateRequest({
-      model: 'grok-4.6',
+      model: 'mistral-large',
       // SAFETY: The test fixture defines the asserted runtime shape.
       messages: [{ role: 'system', content: 'only inline context' } as any],
-    }, '@ai-sdk/xai');
+    }, '@ai-sdk/mistral');
     expect(params.instructions).toBeUndefined();
     expect(params.allowSystemInMessages).toBe(true);
     expect(params.messages).toEqual([{ role: 'system', content: 'only inline context' }]);
@@ -1145,13 +1145,13 @@ describe('translateRequest', () => {
 
   it('omits defer_loading tools until referenced in messages', () => {
     const params = translateRequest({
-      model: 'grok-4.6',
+      model: 'mistral-large',
       messages: [{ role: 'user', content: 'hi' }],
       tools: [
         { name: 'Read', input_schema: { type: 'object' } },
         { name: 'McpTool', input_schema: { type: 'object' }, defer_loading: true },
       ],
-    }, '@ai-sdk/xai');
+    }, '@ai-sdk/mistral');
     expect(params.tools && Object.keys(params.tools)).toEqual(['Read']);
   });
 
@@ -1908,6 +1908,6 @@ describe('translateRequest openai promptCacheKey', () => {
   });
 
   it('omits the key for non-OpenAI providers', () => {
-    expect(openAiPromptCacheKeyOf(req(), '@ai-sdk/xai')).toBeUndefined();
+    expect(openAiPromptCacheKeyOf(req(), '@ai-sdk/mistral')).toBeUndefined();
   });
 });

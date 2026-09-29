@@ -2,7 +2,7 @@
 
 [![npm version](https://img.shields.io/npm/v/%40cgasgarth%2Fclodex.svg)](https://www.npmjs.com/package/@cgasgarth/clodex)
 
-Clodex runs OpenAI Codex and Grok 4.6 models in the unmodified Claude Code
+Clodex runs OpenAI models in the unmodified Claude Code
 client. One local daemon provides the Anthropic-compatible endpoint, model
 routing, OpenAI WebSocket continuation, caching, native Codex compaction,
 accounts, metrics, and diagnostics.
@@ -17,18 +17,42 @@ Clodex targets Bun 1.4.2.
 
 ```bash
 bun add --global @cgasgarth/clodex
-clodex providers auth openai
-# Optional SuperGrok subscription:
-# clodex providers auth xai
+clodex accounts add openai
 clodex models
 clodex models --alias astra=clodex:openai-oauth:gpt-6-astra
-clodex models --alias sol=clodex:openai-oauth:gpt-5.6-sol
-clodex models --alias luna=clodex:openai-oauth:gpt-5.6-luna
-clodex models --alias terra=clodex:openai-oauth:gpt-5.6-terra
 ```
 
 For a local checkout, use `bun run install:global`. It installs the exact
 checkout and verifies the installed runtime artifacts.
+
+### ChatGPT plan sign-in
+
+Clodex uses OpenAI's [Sign in with ChatGPT flow for local open-source apps](https://developers.openai.com/siwc/token-sharing-open-source).
+Continue with ChatGPT in the browser and allow **Clodex** to use your plan.
+Each account registration keeps its issued client ID, tokens, and verified identity
+in the credential store. A stable host ID is stored in `~/.clodex/chatgpt-host-id`.
+Inference and model discovery use the public OpenAI Responses and models endpoints.
+Use `clodex models --list` to see models available to this app registration.
+Sol 6.1 is included while the public model catalog catches up with its rollout.
+
+For an existing installation, sign in again:
+
+```bash
+clodex accounts list
+clodex accounts login <account-id>
+clodex accounts select <account-id>
+claude
+```
+
+Use `clodex accounts add openai` to register another account. Returning sign-ins
+reuse the saved client ID. Review the app's plan limits and credit permission in
+[ChatGPT Settings → Usage](https://chatgpt.com/settings/usage).
+OpenAI plan-limit errors stop the request; Clodex does not rotate OpenAI accounts
+to bypass an app limit.
+
+This flow is in preview. Local tools, text, images, and same-connection WebSocket
+continuation are supported. Compaction and steering remain available in Clodex
+but need a live check with the new grant. See [OpenAI's preview limits](https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations).
 
 ## Configure Claude Code once
 
@@ -82,7 +106,7 @@ your absolute home path. Keep other settings and hooks that you already use.
         "description": "GPT-6 Astra"
       },
       {
-        "model": "sol[1m]",
+        "model": "sol-6.1[1m]",
         "label": "sol",
         "description": "GPT-5.6 Sol"
       },
@@ -192,7 +216,7 @@ clodex daemon uninstall
 
 The Usage view reports input, cache reads, cache writes, output, cache share,
 request status, and API-equivalent cost. The Accounts view shows subscription
-limits, manual account selection, and an optional usage-limit auto-switch. The
+plan settings and manual account selection. The
 Diagnostics view selects error-only or full lifecycle logs. The Secondwind view
 controls tool-output optimization and native Codex compaction.
 
@@ -203,14 +227,12 @@ tickets.
 
 ## Accounts and providers
 
-Clodex supports OpenAI API keys, ChatGPT/Codex OAuth, and SuperGrok OAuth.
+Clodex supports OpenAI API keys and ChatGPT plan sign-in.
 
 ```bash
 clodex providers auth openai
-clodex providers auth xai
 clodex providers list
 clodex accounts add openai
-clodex accounts add xai
 clodex accounts list
 clodex accounts select person@example.com
 clodex accounts usage
@@ -219,12 +241,8 @@ clodex accounts usage
 OAuth credentials remain in the OS credential store. On macOS, all accounts
 share one Clodex Keychain item so the runtime needs one Keychain access
 decision. Up to five accounts per subscription provider can be stored.
-Usage-limit auto-switch is on by default. Disable or enable it with `f` in the
-Accounts view. When the selected account reports a plan usage limit, Clodex
-checks the other signed-in accounts for that provider. It selects one with a
-healthy usage response and remaining quota, and it retries the inference once.
-The replacement stays selected. Explicit account launches remain pinned. Capacity and
-authentication errors do not switch accounts.
+Explicit account launches remain pinned. Capacity and authentication errors
+do not switch accounts.
 
 ## Models
 
@@ -235,7 +253,7 @@ Claude's native `/model` picker, and subagent model selection.
 clodex models
 clodex models --list
 clodex models --alias astra=clodex:openai-oauth:gpt-6-astra
-clodex models --alias sol=clodex:openai-oauth:gpt-5.6-sol
+clodex models --alias sol-6.1=clodex:openai-oauth:gpt-6.1-sol
 clodex models --unalias sol
 ```
 
@@ -266,7 +284,7 @@ clodex server --proxy
 ```
 
 Endpoint mode exposes a local gateway. Proxy mode selectively reroutes saved
-OpenAI and Grok models while an existing Claude client keeps its Anthropic
+OpenAI models while an existing Claude client keeps its Anthropic
 login. Run `clodex server --help` for listen, password, discovery, and provider
 options.
 
@@ -283,7 +301,7 @@ options.
 ## Known limits
 
 - Claude Code applies its own pricing table, so cost shown inside Claude Code is
-  not authoritative for OpenAI or Grok models.
+  not authoritative for OpenAI models.
 - Claude reads the context window at session start; a live `/model` switch does
   not change its displayed context limit.
 - An oversized legacy transcript without a matching native checkpoint may need

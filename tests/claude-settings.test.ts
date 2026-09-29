@@ -15,8 +15,8 @@ const routes = [
     contextWindow: 1_000_000,
   },
   {
-    aliasId: 'clodex:xai-oauth:grok-4.6',
-    displayName: 'Grok 4.6 (SuperGrok)',
+    aliasId: 'clodex:mistral:mistral-large',
+    displayName: 'Mistral Large',
     contextWindow: 500_000,
   },
 ];
@@ -29,9 +29,9 @@ describe('native Claude model picker settings', () => {
     ])).toEqual([
       { model: 'sol[1m]', label: 'sol', description: 'GPT-5.6 Sol (OpenAI)' },
       {
-        model: 'clodex:xai-oauth:grok-4.6[1m]',
-        label: 'Grok 4.6 (SuperGrok)',
-        description: 'clodex:xai-oauth:grok-4.6',
+        model: 'clodex:mistral:mistral-large[1m]',
+        label: 'Mistral Large',
+        description: 'clodex:mistral:mistral-large',
       },
     ]);
   });

@@ -154,14 +154,6 @@ export function printProviderDetailPanel(
 }
 
 
-export function printOAuthStepsPanel(title: string, providerLabel: string): void {
-  printPanel(pc.cyan(title), [
-    pc.white('1. Open the URL below in your browser'),
-    pc.white('2. Enter the code when prompted'),
-    `${pc.white('3. Approve access for ')}${fmtProvider(providerLabel)}`,
-  ]);
-}
-
 export function printNetworkWarningPanel(): void {
   printPanel(pc.yellow('Network mode'), [
     `${pc.yellow(pc.bold('Anyone on your network'))}${pc.white(' who knows the password can use this server through your account.')}`,

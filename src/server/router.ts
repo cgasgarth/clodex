@@ -421,7 +421,7 @@ async function handleAnthropicMessages(
     const clientWantsStream = Boolean(body.stream);
     // Use the display name in the response model field when masking is on — Claude
     // Desktop shows the response model field in its status bar chip, so this surfaces
-    // human-readable names ("Grok 4.3 (xAI)") instead of the reversed gateway IDs.
+    // human-readable names ("GPT-6 Astra (OpenAI)") instead of the reversed gateway IDs.
     const responseModelId = getResponseModelId(body.model, model, options);
 
     const sendSdkFailure = (
@@ -604,7 +604,6 @@ async function getOrInitLanguageModel(
       authType: model.authType,
       oauthAccountId: model.oauthAccountId,
       headers: model.headers,
-      useResponsesLite: model.useResponsesLite,
       openAiCompactThreshold: model.authType === 'oauth'
         ? resolveOpenAiCompactionThreshold(upstreamModelId(model), model.contextWindow)
         : undefined,

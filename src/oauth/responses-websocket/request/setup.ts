@@ -1,4 +1,3 @@
-import { CODEX_RESPONSES_WEBSOCKETS_BETA } from '../../../constants.js';
 import { isObject } from '../../../runtime/type-guards.js';
 import type {
   JsonObject,
@@ -13,10 +12,8 @@ import {
   RESPONSES_WS_NURSERY_IDLE_TTL_MS,
 } from '../types.js';
 import {
-  applyResponsesLiteContract,
   authorizationHeaderFingerprint,
   bodyToString,
-  hasResponsesLiteHeader,
   instructionsFromPayload,
   responsesCheckpointPartitionKey,
   responsesWebSocketPartitionKey,
@@ -24,7 +21,6 @@ import {
   responsesWebSocketPromptFingerprint,
   toHeaderRecord,
 } from '../fingerprint.js';
-import type { HeaderRecord } from '../fingerprint.js';
 import { rehomeOversizedResponsesInstructions } from './instructions.js';
 
 function isJsonObject<Value>(value: Value): value is Value & JsonObject {
@@ -46,33 +42,12 @@ export function resolveWebSocketOptions(options: ResponsesWebSocketFetchOptions)
   };
 }
 
-function hasNativeWebSearch(payload: JsonObject): boolean {
-  return Array.isArray(payload.tools)
-    && payload.tools.some(tool => (
-      isJsonObject(tool) && tool.type === 'web_search'
-    ));
-}
-
-function hasParallelFunctionTools(payload: JsonObject): boolean {
-  return payload.parallel_tool_calls === true
-    && Array.isArray(payload.tools)
-    && payload.tools.some(tool => (
-      isJsonObject(tool) && tool.type === 'function'
-    ));
-}
-
-function deleteHeader(headers: HeaderRecord, name: string): void {
-  const key = Object.keys(headers).find(candidate => candidate.toLowerCase() === name);
-  if (key) delete headers[key];
-}
-
 export function prepareResponsesRequest(
   wsUrl: string,
   init: RequestInit | undefined,
   options: ResponsesWebSocketFetchOptions,
 ) {
   const headers = toHeaderRecord(init?.headers);
-  headers['OpenAI-Beta'] = CODEX_RESPONSES_WEBSOCKETS_BETA;
 
   let payload: JsonObject;
   try {
@@ -81,19 +56,28 @@ export function prepareResponsesRequest(
   } catch {
     payload = {};
   }
-  const hasLiteHeader = hasResponsesLiteHeader(headers);
-  const bypassForWebSearch = hasLiteHeader && hasNativeWebSearch(payload);
-  const bypassForParallelTools = hasLiteHeader && hasParallelFunctionTools(payload);
-  const bypassResponsesLite = bypassForWebSearch || bypassForParallelTools;
-  if (bypassResponsesLite) {
-    // Responses Lite rejects hosted tools and parallel function calls. The same
-    // model can use both features on the full Responses protocol over this
-    // endpoint. Remove only the Lite negotiation headers and keep the request
-    // in a separate socket partition because upgrade headers are connection-scoped.
-    deleteHeader(headers, 'x-openai-internal-codex-responses-lite');
-    deleteHeader(headers, 'version');
-  } else if (hasLiteHeader) {
-    payload = applyResponsesLiteContract(payload);
+  payload.store = false;
+  for (const field of ['stream', 'background', 'conversation', 'max_output_tokens', 'max_tool_calls',
+    'metadata', 'moderation', 'multi_agent', 'prompt', 'prompt_cache_retention',
+    'safety_identifier', 'temperature', 'top_logprobs', 'top_p', 'truncation', 'user']) {
+    delete payload[field];
+  }
+  if (Array.isArray(payload.tools)) {
+    const localTools = payload.tools.filter(tool => isJsonObject(tool) && (tool.type === 'function' || tool.type === 'custom'));
+    if (localTools.length) {
+      payload.tools = [
+        ...payload.tools.filter(tool => !localTools.includes(tool)),
+        { type: 'namespace', name: 'clodex', description: 'Tools executed by the Clodex client', tools: localTools },
+      ];
+      if (isJsonObject(payload.tool_choice) && payload.tool_choice.type === 'function') {
+        payload.tool_choice.namespace = 'clodex';
+      }
+    }
+  }
+  if (Array.isArray(payload.input)) {
+    for (const item of payload.input) {
+      if (isJsonObject(item) && item.role === 'system') item.role = 'developer';
+    }
   }
 
   // Preserve prompt diagnostics from Claude's original instruction string.
@@ -106,22 +90,17 @@ export function prepareResponsesRequest(
   payload = rehomedInstructions.payload;
 
   const authorizationFingerprint = authorizationHeaderFingerprint(headers);
-  const partitionUrl = bypassForWebSearch
-    ? `${wsUrl}#full-responses-web-search`
-    : bypassForParallelTools
-      ? `${wsUrl}#full-responses-parallel-tools`
-      : wsUrl;
   return {
     headers,
     payload,
     partitionKey: responsesWebSocketPartitionKey(
-      partitionUrl,
+      wsUrl,
       payload,
       options,
       authorizationFingerprint,
     ),
     checkpointKey: responsesCheckpointPartitionKey(
-      partitionUrl,
+      wsUrl,
       payload,
       options,
       authorizationFingerprint,

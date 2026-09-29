@@ -1,6 +1,6 @@
 // src/registry/refresh-models.ts — user-initiated model list refresh per modelSource
 
-import { isBoolean, isNumber, isObject, isString } from '../runtime/type-guards.js';
+import { isNumber, isObject, isString } from '../runtime/type-guards.js';
 import { isDeepStrictEqual } from 'node:util';
 import { fetchAnthropicModels } from './custom-endpoint.js';
 import { fetchTemplateModels } from './fetch-template-models.js';
@@ -24,21 +24,18 @@ import { cachedModelCount, isLikelyPlaceholderKey, resolveRefreshCredential, ski
 import type { CachedModel, ProviderRegistry, RegistryProvider } from './types.js';
 import {
   buildOpenAiOAuthModels,
-  CHATGPT_CODEX_UNSUPPORTED_MODELS,
   OPENAI_MILLION_CONTEXT_MODELS,
   OPENAI_MILLION_CONTEXT_WINDOW,
   OPENAI_OAUTH_RETIRED_MODELS,
 } from '../data/openai-oauth-models.js';
-import { buildXaiOAuthModels } from '../data/xai-oauth-models.js';
 import { modelPrefersResponsesApi } from '../provider-factory.js';
 import { deriveBrand } from '../models/types.js';
 import { resolveContextWindow } from '../models/context-window.js';
-import { getInstalledClaudeVersion } from '../runtime/launch.js';
+import { requireChatGptPlanToken } from '../oauth/openai.js';
 import { classifyFreeStatus, isFreeStatus } from '../models/free-models.js';
 import { PROVIDER_METADATA_TIMEOUT_MS } from '../config/timeouts.js';
 import { diagnosticRecord } from '../observability/trace-log.js';
 import type { DiagnosticRecord } from '../observability/trace-log.js';
-import type { DiagnosticValue } from '../observability/trace-log.js';
 
 export interface RefreshProviderResult {
   id: string;
@@ -54,38 +51,15 @@ export interface RefreshModelsResult {
   refreshed: RefreshProviderResult[];
 }
 
-/**
- * OAuth model refresh:
- * - OpenAI OAuth: Fetch from chatgpt.com/backend-api/models using the OAuth access token.
- *   Falls back to static seed on network failure or unexpected response format.
- *   Note: api.openai.com/v1/models rejects OAuth tokens — never call that endpoint here.
- * - xAI OAuth: Keep the single supported SuperGrok model from the static seed.
- */
-async function refreshOAuthProvider(
-  provider: RegistryProvider,
-  accessToken: string,
-): Promise<{ models: CachedModel[]; baseUrl?: string; source: 'live' | 'seed'; failureReason?: string }> {
-  const tpl = provider.templateId;
-  if (tpl === 'openai' || tpl === 'openai-oauth') return refreshOpenAiOAuthModels(accessToken);
-  if (tpl === 'xai-oauth') return { models: buildXaiOAuthModels(), source: 'seed' };
-  throw new Error(`refreshOAuthProvider: unsupported template "${tpl}"`);
-}
-
 /** A parsed model entry, including backend-reported request capability flags. */
 interface OpenAiModelEntry {
   id: string;
   name: string;
   context_window?: number;
-  /** Backend flag: model needs the Responses-Lite shape. */
-  useResponsesLite?: boolean;
 }
 
 interface OpenAiModelPayload {
   value: unknown;
-}
-
-function optionalBoolean(value: DiagnosticValue): boolean | undefined {
-  return isBoolean(value) ? value : undefined;
 }
 
 function optionalString(record: DiagnosticRecord, key: string): string | undefined {
@@ -98,28 +72,22 @@ function optionalFiniteNumber(record: DiagnosticRecord, key: string): number | u
   return isNumber(value) && Number.isFinite(value) ? value : undefined;
 }
 
-/** Read the Responses-Lite capability flag off a raw model entry. */
-function readCapabilityFlags(m: DiagnosticRecord): Pick<OpenAiModelEntry, 'useResponsesLite'> {
-  return {
-    useResponsesLite: optionalBoolean(m['use_responses_lite']),
-  };
-}
-
 /** Parse model entries from OpenAI-standard or ChatGPT-internal response shapes. */
 function parseOpenAiModelEntries(body: OpenAiModelPayload['value']): OpenAiModelEntry[] {
   if (!body || !isObject(body)) return [];
   const b = diagnosticRecord(body);
 
-  // ChatGPT backend format: { models: [{ slug, title }] }
+  // ChatGPT plan model catalog: { models: [{ slug, display_name, visibility }] }
   if (Array.isArray(b.models)) {
     return b.models
       .filter(isObject)
       .map(diagnosticRecord)
-      .map(m => Object.assign({
+      .filter(m => m.visibility === 'list')
+      .map(m => ({
         id: optionalString(m, 'slug') ?? '',
-        name: optionalString(m, 'title') ?? optionalString(m, 'name') ?? optionalString(m, 'slug') ?? '',
+        name: optionalString(m, 'display_name') ?? optionalString(m, 'slug') ?? '',
         context_window: optionalFiniteNumber(m, 'context_window'),
-      }, readCapabilityFlags(m)))
+      }))
       .filter(m => m.id.length > 0);
   }
   // Standard OpenAI format: { data: [{ id, name }] }
@@ -127,11 +95,11 @@ function parseOpenAiModelEntries(body: OpenAiModelPayload['value']): OpenAiModel
     return b.data
       .filter(isObject)
       .map(diagnosticRecord)
-      .map(m => Object.assign({
+      .map(m => ({
         id: optionalString(m, 'id') ?? '',
         name: optionalString(m, 'name') ?? optionalString(m, 'id') ?? '',
         context_window: optionalFiniteNumber(m, 'context_window'),
-      }, readCapabilityFlags(m)))
+      }))
       .filter(m => m.id.length > 0);
   }
   return [];
@@ -153,7 +121,6 @@ function buildDynamicOAuthModel(entry: OpenAiModelEntry, seedById: Map<string, C
     return {
       ...seed,
       contextWindow,
-      useResponsesLite: entry.useResponsesLite ?? seed.useResponsesLite,
     };
   }
   const { id } = entry;
@@ -168,7 +135,6 @@ function buildDynamicOAuthModel(entry: OpenAiModelEntry, seedById: Map<string, C
     modelFormat: 'openai' as const,
     npm: '@ai-sdk/openai',
     reasoning: modelPrefersResponsesApi(id),
-    useResponsesLite: entry.useResponsesLite,
   };
 }
 
@@ -185,7 +151,6 @@ async function fetchJsonWithAuth(
       headers: {
         Accept: 'application/json',
         Authorization: `Bearer ${accessToken}`,
-        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
       },
       signal: controller.signal,
     }).finally(() => clearTimeout(timer));
@@ -200,58 +165,22 @@ async function fetchJsonWithAuth(
 }
 
 /**
- * Fetch OpenAI OAuth (ChatGPT) models using a 3-tier strategy:
- *
- * 1. chatgpt.com/backend-api/codex/models — Codex-specific endpoint.
- *    If it exists, it returns models the Codex API supports. Retired Sol
- *    routes are hidden from the Clodex catalog.
- *
- * 2. chatgpt.com/backend-api/models — all ChatGPT models, filtered by the
- *    confirmed-bad set. Used when the Codex endpoint doesn't exist or returns nothing.
- *
- * 3. Static seed — emergency fallback with no network dependency.
+ * Fetch the selected ChatGPT registration's public model catalog.
  */
 async function refreshOpenAiOAuthModels(
   accessToken: string,
-): Promise<{ models: CachedModel[]; source: 'live' | 'seed'; failureReason?: string }> {
-  const TIMEOUT_MS = PROVIDER_METADATA_TIMEOUT_MS;
+): Promise<{ models: CachedModel[]; source: 'live' }> {
+  requireChatGptPlanToken(accessToken);
   const seedById = new Map(buildOpenAiOAuthModels().map(m => [m.id, m]));
-  const toModels = (entries: OpenAiModelEntry[]) =>
-    entries.map(entry => buildDynamicOAuthModel(entry, seedById));
-
-  const claudeVersion = getInstalledClaudeVersion();
-
-  // Tier 1: Codex-specific model listing — source of truth for Codex availability.
-  const codexResult = await fetchJsonWithAuth(
-    `https://chatgpt.com/backend-api/codex/models?client_version=${claudeVersion}`,
-    accessToken,
-    TIMEOUT_MS,
-  );
-  const codexEntries = parseOpenAiModelEntries(codexResult.body)
-    .filter(({ id }) => !OPENAI_OAUTH_RETIRED_MODELS.has(id.toLowerCase()));
-  if (codexEntries.length > 0) {
-    return { models: toModels(codexEntries), source: 'live' };
-  }
-
-  // Tier 2: General ChatGPT model list, filtered by known Codex restrictions.
-  const chatGptResult = await fetchJsonWithAuth(
-    'https://chatgpt.com/backend-api/models',
-    accessToken,
-    TIMEOUT_MS,
-  );
-  const chatGptEntries = parseOpenAiModelEntries(chatGptResult.body)
+  const result = await fetchJsonWithAuth('https://api.openai.com/v1/models', accessToken, PROVIDER_METADATA_TIMEOUT_MS);
+  if (result.error) throw new Error(`ChatGPT model discovery failed: ${result.error}`);
+  const models = parseOpenAiModelEntries(result.body)
     .filter(({ id }) => !OPENAI_OAUTH_RETIRED_MODELS.has(id.toLowerCase()))
-    .filter(({ id }) => !CHATGPT_CODEX_UNSUPPORTED_MODELS.has(id));
-  if (chatGptEntries.length > 0) {
-    return { models: toModels(chatGptEntries), source: 'live' };
-  }
-
-  // Tier 3: Static seed — reuse already-built map instead of calling the builder again.
-  return {
-    models: [...seedById.values()],
-    source: 'seed',
-    failureReason: chatGptResult.error ?? codexResult.error,
-  };
+    .map(entry => buildDynamicOAuthModel(entry, seedById));
+  // Sol 6.1 accepts direct plan requests before /v1/models lists it.
+  const sol = seedById.get('gpt-6.1-sol')!;
+  if (!models.some(model => model.id === sol.id)) models.unshift(sol);
+  return { models, source: 'live' };
 }
 
 async function refreshApiListProvider(
@@ -370,16 +299,12 @@ export async function refreshProviderModels(
     const previousModelCount = provider.modelsCache?.models.length ?? 0;
     let models: CachedModel[] = [];
     let baseUrl: string | undefined;
-    let oauthFallbackReason: string | undefined;
 
     if (provider.authType === 'oauth' && (
       provider.templateId === 'openai'
       || provider.id === 'openai-oauth'
-      || provider.templateId === 'xai-oauth'
-      || provider.id === 'xai-oauth'
     )) {
-      // OAuth tokens are not valid API keys for the developer endpoints.
-      // OpenAI: ChatGPT JWT rejected by api.openai.com; no /v1/models on ChatGPT backend.
+      // Discover models authorized for this ChatGPT plan grant.
       if (!apiKey) {
         return {
           id: provider.id,
@@ -388,23 +313,7 @@ export async function refreshProviderModels(
           reason: 'OAuth token not available — try signing in again with clodex providers auth.',
         };
       }
-      const oauthResult = await refreshOAuthProvider(provider, apiKey);
-      const staticOnly = provider.templateId === 'xai-oauth' || provider.id === 'xai-oauth';
-      const failureDetail = oauthResult.failureReason ? ` (${oauthResult.failureReason})` : '';
-      if (!staticOnly && oauthResult.source === 'seed' && cachedModelCount(provider) > 0) {
-        // Live discovery failed — keep the existing cache (which may already include
-        // models newer than the built-in fallback list) instead of overwriting it.
-        return skipWithCachedModels(
-          provider,
-          `Live model discovery failed${failureDetail} — kept your existing cached model list instead of `
-          + "overwriting it with clodex's built-in fallback list. Try refreshing again later.",
-        );
-      }
-      if (!staticOnly && oauthResult.source === 'seed') {
-        oauthFallbackReason = `Live model discovery failed${failureDetail} — showing clodex's built-in fallback `
-          + 'model list, which may not include the newest models yet. Try refreshing again later.';
-      }
-      models = oauthResult.models;
+      models = (await refreshOpenAiOAuthModels(apiKey)).models;
       if (models.length === 0) {
         return {
           id: provider.id,
@@ -483,7 +392,6 @@ export async function refreshProviderModels(
       ok: true,
       modelCount: enriched.length,
       previousModelCount: provider.refreshedAt ? previousModelCount : undefined,
-      reason: oauthFallbackReason,
     };
   } catch (err) {
     return {

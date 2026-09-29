@@ -21,7 +21,6 @@ function modelToCached(model: LocalProviderModel): CachedModel {
     supportedParameters: model.supportedParameters,
     reasoning: model.reasoning,
     interleavedReasoningField: model.interleavedReasoningField,
-    useResponsesLite: model.useResponsesLite,
   };
 }
 

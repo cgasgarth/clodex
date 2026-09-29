@@ -1,5 +1,5 @@
+const planToken = `e30.${Buffer.from(JSON.stringify({scope: "chatgpt.tokens.use.direct"})).toString("base64url")}.signature`;
 import { describe, it, expect, vi } from 'bun:test';
-import { streamText } from 'ai';
 import {
   createLanguageModel,
   deepMergeProviderOptions,
@@ -11,7 +11,6 @@ import {
   shouldUseOpenAiResponsesEndpoint,
   thinkingProviderOptions,
 } from '../src/provider-factory.js';
-import { createXaiSubscriptionFetch } from '../src/oauth/xai-proxy.js';
 import { restoreTestGlobals, stubTestGlobal } from './test-helpers.js';
 
 async function expectCredentialHeadersStripped(
@@ -175,16 +174,6 @@ describe('getReasoningCapabilities', () => {
     });
   });
 
-  it('returns the documented SuperGrok effort levels for Grok 4.6', () => {
-    const caps = getReasoningCapabilities('@ai-sdk/xai', 'grok-4.6');
-    expect(caps.levels).toEqual(['low', 'medium', 'high', 'xhigh']);
-    expect(caps.defaultLevel).toBe('high');
-  });
-
-  it('does not expose old Grok models', () => {
-    expect(getReasoningCapabilities('@ai-sdk/xai', 'grok-4.5').levels).toEqual([]);
-  });
-
   it('returns high/max/off for deepseek-v4-flash', () => {
     const caps = getReasoningCapabilities('@ai-sdk/openai-compatible', 'deepseek-v4-flash');
     expect(caps.levels).toEqual(['high', 'max', 'off']);
@@ -266,173 +255,9 @@ describe('effortProviderOptions + deepMergeProviderOptions', () => {
     });
   });
 
-  it('keeps Grok 4.6 reasoning replay private and preserves each effort level', () => {
-    expect(thinkingProviderOptions('@ai-sdk/xai')).toEqual({ xai: { store: false } });
-    for (const effort of ['low', 'medium', 'high', 'xhigh']) {
-      expect(effortProviderOptions('@ai-sdk/xai', effort, 'grok-4.6')).toEqual({
-        xai: { reasoningEffort: effort },
-      });
-    }
-  });
-
 });
 
 describe('createLanguageModel', () => {
-  it('surfaces only the accepted native Grok recovery through SDK stream parts', async () => {
-    const events = [
-      {
-        type: 'response.created',
-        response: {
-          id: 'resp-grok-live', created_at: 1, model: 'grok-4.6', object: 'response',
-          output: [], status: 'in_progress',
-        },
-      },
-      {
-        type: 'response.reasoning_summary_part.added',
-        item_id: 'reasoning-1', output_index: 0, summary_index: 0,
-        part: { type: 'summary_text', text: '' },
-      },
-      {
-        type: 'response.reasoning_summary_text.delta',
-        item_id: 'reasoning-1', output_index: 0, summary_index: 0,
-        delta: 'working through it',
-      },
-      {
-        type: 'response.output_item.done', output_index: 0,
-        item: {
-          type: 'reasoning', id: 'reasoning-1', status: 'completed',
-          summary: [{ type: 'summary_text', text: 'working through it' }],
-          content: null, encrypted_content: null,
-        },
-      },
-      {
-        type: 'response.output_text.delta',
-        item_id: 'message-1', output_index: 1, content_index: 0,
-        delta: 'finished answer',
-      },
-      {
-        type: 'response.output_text.done',
-        item_id: 'message-1', output_index: 1, content_index: 0,
-        text: 'finished answer', annotations: [], logprobs: [],
-      },
-      {
-        type: 'response.completed',
-        response: {
-          id: 'resp-grok-live', created_at: 1, model: 'grok-4.6', object: 'response',
-          output: [], status: 'completed',
-          usage: {
-            input_tokens: 10, output_tokens: 5, total_tokens: 15,
-            input_tokens_details: { cached_tokens: 8 },
-            output_tokens_details: { reasoning_tokens: 3 },
-          },
-        },
-      },
-    ];
-    const responseBody = events.map(event => `data: ${JSON.stringify(event)}\n\n`).join('');
-    const poisonedBody = [
-      events[0],
-      events[1],
-      { ...events[2], delta: 'poisoned thought' },
-      {
-        type: 'response.doom_loop_check',
-        doom_loop_check: { triggers: ['tail_repetition:8@thinking'] },
-      },
-    ].map(event => `data: ${JSON.stringify(event)}\n\n`).join('');
-    const transport = vi.fn()
-      .mockResolvedValueOnce(new Response(poisonedBody, {
-        status: 200,
-        headers: { 'content-type': 'text/event-stream' },
-      }))
-      .mockResolvedValueOnce(new Response(responseBody, {
-        status: 200,
-        headers: { 'content-type': 'text/event-stream' },
-      }));
-    const xaiFetch = createXaiSubscriptionFetch(
-      'grok-4.6',
-      'session-live-parts',
-      // SAFETY: The test fixture defines the asserted runtime shape.
-      transport as typeof fetch,
-      { random: () => 0, sleep: async () => {} },
-    );
-    const model = await createLanguageModel({
-      npm: '@ai-sdk/xai',
-      modelId: 'grok-4.6',
-      apiKey: 'subscription-token',
-      authType: 'oauth',
-      providerId: 'xai-oauth',
-      claudeSessionId: 'session-live-parts',
-    }, {
-      // SAFETY: The test fixture defines the asserted runtime shape.
-      createXaiSubscriptionFetch: vi.fn(() => xaiFetch as typeof fetch) as never,
-    });
-
-    const streamed = streamText({ model, prompt: 'test live Grok reasoning', maxRetries: 0 });
-    const partTypes: string[] = [];
-    let reasoning = '';
-    let text = '';
-    for await (const part of streamed.stream) {
-      partTypes.push(part.type);
-      if (part.type === 'reasoning-delta') reasoning += part.text;
-      if (part.type === 'text-delta') text += part.text;
-    }
-
-    expect(partTypes).toContain('reasoning-start');
-    expect(partTypes).toContain('reasoning-delta');
-    expect(partTypes).toContain('text-start');
-    expect(transport).toHaveBeenCalledTimes(2);
-    expect(reasoning).toBe('working through it');
-    expect(reasoning).not.toContain('poisoned');
-    expect(text).toBe('finished answer');
-  });
-
-  it('routes only Grok 4.6 OAuth through the SuperGrok Responses proxy', async () => {
-    const responses = vi.fn((modelId: string) => ({ modelId, provider: 'xai-responses' }));
-    const createXai = vi.fn(() => ({ responses }));
-    const xaiFetch = vi.fn();
-    const createXaiFetch = vi.fn(() => xaiFetch);
-
-    const model = await createLanguageModel({
-      npm: '@ai-sdk/xai',
-      modelId: 'grok-4.6',
-      apiKey: 'subscription-token',
-      authType: 'oauth',
-      providerId: 'xai-oauth',
-      claudeSessionId: 'session-123',
-    }, {
-      // SAFETY: The test fixture defines the asserted runtime shape.
-      createXai: createXai as never,
-      // SAFETY: The test fixture defines the asserted runtime shape.
-      createXaiSubscriptionFetch: createXaiFetch as never,
-    });
-
-    expect(createXaiFetch).toHaveBeenCalledWith('grok-4.6', 'session-123');
-    expect(createXai).toHaveBeenCalledWith({
-      apiKey: 'subscription-token',
-      baseURL: 'https://cli-chat-proxy.grok.com/v1',
-      fetch: xaiFetch,
-    });
-    expect(responses).toHaveBeenCalledWith('grok-4.6');
-    // SAFETY: The test fixture defines the asserted runtime shape.
-    expect(model).toEqual({ modelId: 'grok-4.6', provider: 'xai-responses' } as never);
-  });
-
-  it('rejects xAI API keys and old Grok models', async () => {
-    await expect(createLanguageModel({
-      npm: '@ai-sdk/xai',
-      modelId: 'grok-4.6',
-      apiKey: 'api-key',
-      authType: 'api',
-      providerId: 'xai',
-    })).rejects.toThrow('API-key access is not supported');
-
-    await expect(createLanguageModel({
-      npm: '@ai-sdk/xai',
-      modelId: 'grok-4.5',
-      apiKey: 'subscription-token',
-      authType: 'oauth',
-      providerId: 'xai-oauth',
-    })).rejects.toThrow('only grok-4.6');
-  });
 
   it('passes the resolved native-compaction threshold into the OAuth transport', async () => {
     const responsesFetch = vi.fn();
@@ -456,7 +281,7 @@ describe('createLanguageModel', () => {
     await create({
       npm: '@ai-sdk/openai',
       modelId: 'gpt-5.6-sol',
-      apiKey: 'oauth-token',
+      apiKey: planToken,
       authType: 'oauth',
       oauthAccountId: 'acct-transport-threshold',
       openAiCompactThreshold: 244_800,
@@ -480,7 +305,7 @@ describe('createLanguageModel', () => {
     await create({
       npm: '@ai-sdk/openai',
       modelId: 'gpt-5.6-sol',
-      apiKey: 'oauth-token',
+      apiKey: planToken,
       authType: 'oauth',
       oauthAccountId: 'acct-compaction-disabled',
     });
@@ -492,85 +317,6 @@ describe('createLanguageModel', () => {
       }),
     );
     expect(getResponsesCheckpointStore).toHaveBeenCalledOnce();
-  });
-
-  it('prefers the current OpenAI OAuth token account claim over stored metadata', async () => {
-    const responses = vi.fn((modelId: string) => ({ modelId, provider: 'openai-responses' }));
-    const chat = vi.fn((modelId: string) => ({ modelId, provider: 'openai-chat' }));
-    const createOpenAI = vi.fn(() => ({ responses, chat }));
-
-    const header = Buffer.from('{}').toString('base64url');
-    const payload = Buffer.from(JSON.stringify({ chatgpt_account_id: 'acct-123' })).toString('base64url');
-    const accessToken = `${header}.${payload}.sig`;
-
-    await createLanguageModel({
-      npm: '@ai-sdk/openai',
-      modelId: 'gpt-5.5',
-      apiKey: accessToken,
-      authType: 'oauth',
-      oauthAccountId: 'stored-acct-456',
-    }, { createOpenAI: /* SAFETY: The mock implements the required provider factory. */ createOpenAI as never });
-
-    expect(createOpenAI).toHaveBeenCalledWith({
-      apiKey: accessToken,
-      baseURL: 'https://chatgpt.com/backend-api/codex',
-      fetch: expect.any(Function),
-      headers: {
-        'ChatGPT-Account-Id': 'acct-123',
-        originator: 'clodex',
-      },
-    });
-    expect(responses).toHaveBeenCalledWith('gpt-5.5');
-  });
-
-  it('identifies Responses-Lite requests as the current Codex client', async () => {
-    const responses = vi.fn((modelId: string) => ({ modelId, provider: 'openai-responses' }));
-    const createOpenAI = vi.fn(() => ({ responses, chat: vi.fn() }));
-
-    await createLanguageModel({
-      npm: '@ai-sdk/openai',
-      modelId: 'gpt-6-astra',
-      apiKey: 'oauth-token',
-      authType: 'oauth',
-      useResponsesLite: true,
-    }, { createOpenAI: /* SAFETY: The mock implements the required provider factory. */ createOpenAI as never });
-
-    expect(createOpenAI).toHaveBeenCalledWith(expect.objectContaining({
-      headers: {
-        originator: 'clodex',
-        version: '0.153.3',
-        'x-openai-internal-codex-responses-lite': 'true',
-      },
-    }));
-    expect(responses).toHaveBeenCalledWith('gpt-6-astra');
-  });
-
-  it('falls back to the stored OpenAI account id when the current token has no account claim', async () => {
-    const responses = vi.fn((modelId: string) => ({
-      modelId,
-      provider: 'openai-responses',
-    }));
-    const chat = vi.fn((modelId: string) => ({
-      modelId,
-      provider: 'openai-chat',
-    }));
-    const createOpenAI = vi.fn(() => ({ responses, chat }));
-
-    await createLanguageModel({
-      npm: '@ai-sdk/openai',
-      modelId: 'gpt-5.5',
-      apiKey: 'opaque-access-token',
-      authType: 'oauth',
-      oauthAccountId: 'stored-acct-456',
-    }, { createOpenAI: /* SAFETY: The mock implements the required provider factory. */ createOpenAI as never });
-
-    expect(createOpenAI).toHaveBeenCalledWith(
-      expect.objectContaining({
-        headers: expect.objectContaining({
-          'ChatGPT-Account-Id': 'stored-acct-456',
-        }),
-      }),
-    );
   });
 
   it('installs credential-header stripping for anonymous OpenAI providers', async () => {

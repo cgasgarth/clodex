@@ -5,8 +5,8 @@ import type { LanguageModel } from 'ai';
 import { wrapLanguageModel, extractReasoningMiddleware } from 'ai';
 import type { FetchFunction, ProviderOptions } from '@ai-sdk/provider-utils';
 import type { ProviderDataValue } from './types.js';
-import { CODEX_RESPONSES_LITE_VERSION, CODEX_RESPONSES_LITE_WS_URL } from './constants.js';
-import { extractOpenAiAccountId } from './oauth/openai.js';
+import { OPENAI_RESPONSES_WS_URL } from './constants.js';
+import { requireChatGptPlanToken } from './oauth/openai.js';
 import {
   createResponsesWebSocketFetch,
   type ResponsesWebSocketDiagnosticEvent,
@@ -20,12 +20,6 @@ import {
   injectClaudeIdentity,
 } from './oauth/claude-identity.js';
 import { isCredentialBearingHeader } from './credentials/headers.js';
-import {
-  createXaiSubscriptionFetch,
-  XAI_SUBSCRIPTION_BASE_URL,
-  XAI_SUBSCRIPTION_MODEL,
-} from './oauth/xai-proxy.js';
-
 /** Models that must use /v1/responses instead of /v1/chat/completions. */
 const RESPONSES_ONLY_PREFIXES = [
   'gpt-5-codex',
@@ -102,7 +96,7 @@ export function shouldUseOpenAiResponsesEndpoint(modelId: string): boolean {
 }
 
 export interface ProviderModelSpec {
-  /** OpenCode `api.npm` package, e.g. `@ai-sdk/xai`. */
+  /** OpenCode `api.npm` package, e.g. `@ai-sdk/openai`. */
   npm: string;
   modelId: string;
   apiKey: string;
@@ -110,14 +104,12 @@ export interface ProviderModelSpec {
   baseURL?: string;
   /** Provider id for naming openai-compatible instances (diagnostics only). */
   providerId?: string;
-  /** Registry authentication mode. OpenAI OAuth uses the ChatGPT Codex backend. */
+  /** Registry authentication mode. OpenAI OAuth uses the public API with a ChatGPT plan grant. */
   authType?: 'api' | 'oauth' | 'none';
   oauthAccountId?: string;
   providerData?: Record<string, ProviderDataValue>;
   /** Static headers sent on every upstream request (e.g. a plan/auth-tracking header a custom endpoint requires). */
   headers?: Record<string, string>;
-  /** Backend capability: model requires the Responses-Lite request shape (x-openai-internal-codex-responses-lite). */
-  useResponsesLite?: boolean;
   /** Native compaction token threshold for OAuth Responses models. */
   openAiCompactThreshold?: number;
   /** Hard model context window used to prevent known-oversized Responses sends. */
@@ -126,18 +118,14 @@ export interface ProviderModelSpec {
   onDebug?: (msg: string) => void;
   /** Optional privacy-safe structured WebSocket diagnostics. */
   onWebSocketDiagnostic?: (event: ResponsesWebSocketDiagnosticEvent) => void;
-  /** Stable Claude session id used for SuperGrok proxy request correlation. */
-  claudeSessionId?: string;
 }
 
 export interface ProviderFactoryDependencies {
   createOpenAI?: typeof import('@ai-sdk/openai')['createOpenAI'];
   createAnthropic?: typeof import('@ai-sdk/anthropic')['createAnthropic'];
   createOpenAICompatible?: typeof import('@ai-sdk/openai-compatible')['createOpenAICompatible'];
-  createXai?: typeof import('@ai-sdk/xai')['createXai'];
   createResponsesWebSocketFetch?: typeof createResponsesWebSocketFetch;
   getResponsesCheckpointStore?: () => ResponsesCheckpointStore | undefined;
-  createXaiSubscriptionFetch?: typeof createXaiSubscriptionFetch;
   loadSdkProviderFactory?: typeof loadSdkProviderFactory;
 }
 
@@ -196,14 +184,12 @@ export async function createLanguageModel(
   }
 
   if (npm === '@ai-sdk/openai') {
+    if (spec.authType === 'oauth') requireChatGptPlanToken(apiKey);
     const createOpenAI = dependencies.createOpenAI
       ?? (await import('@ai-sdk/openai')).createOpenAI;
     const useResponsesEndpoint = shouldUseOpenAiResponsesEndpoint(modelId);
-    const tokenAccountId = spec.authType === 'oauth'
-      ? extractOpenAiAccountId({ access_token: apiKey })?.trim()
-      : undefined;
     const accountId = spec.authType === 'oauth'
-      ? tokenAccountId || spec.oauthAccountId
+      ? spec.oauthAccountId
       : undefined;
     let checkpointStore: ResponsesCheckpointStore | undefined;
     if (
@@ -224,24 +210,16 @@ export async function createLanguageModel(
     const oauthOptions = spec.authType === 'oauth'
       ? {
           apiKey,
-          baseURL: 'https://chatgpt.com/backend-api/codex',
+          baseURL: 'https://api.openai.com/v1',
           headers: {
             ...spec.headers,
-            ...(accountId && { 'ChatGPT-Account-Id': accountId }),
-            originator: 'clodex',
-            // Responses-Lite models (backend use_responses_lite,
-            // e.g. gpt-5.6-luna) require these on the request.
-            ...(spec.useResponsesLite && {
-              version: CODEX_RESPONSES_LITE_VERSION,
-              'x-openai-internal-codex-responses-lite': 'true',
-            }),
           },
           // Keep every ChatGPT/Codex OAuth Responses conversation on the
           // persistent WebSocket transport so connection-local
           // previous_response_id continuation remains available.
           ...(useResponsesEndpoint && {
             fetch: (dependencies.createResponsesWebSocketFetch ?? createResponsesWebSocketFetch)(
-              CODEX_RESPONSES_LITE_WS_URL,
+              OPENAI_RESPONSES_WS_URL,
               spec.onDebug,
               {
                   providerId: spec.providerId ?? 'openai',
@@ -263,25 +241,6 @@ export async function createLanguageModel(
         : { apiKey, ...(spec.headers && { headers: spec.headers }) };
     const openai = createOpenAI(oauthOptions);
     return useResponsesEndpoint ? openai.responses(modelId) : openai.chat(modelId);
-  }
-  if (npm === '@ai-sdk/xai') {
-    if (spec.authType !== 'oauth' || spec.providerId !== 'xai-oauth') {
-      throw new Error('xAI API-key access is not supported; sign in with SuperGrok');
-    }
-    if (modelId !== XAI_SUBSCRIPTION_MODEL) {
-      throw new Error(`SuperGrok supports only ${XAI_SUBSCRIPTION_MODEL}`);
-    }
-    const createXai = dependencies.createXai ?? (await import('@ai-sdk/xai')).createXai;
-    const xai = createXai({
-      apiKey,
-      baseURL: XAI_SUBSCRIPTION_BASE_URL,
-      ...(spec.headers && { headers: spec.headers }),
-      fetch: (dependencies.createXaiSubscriptionFetch ?? createXaiSubscriptionFetch)(
-        modelId,
-        spec.claudeSessionId,
-      ),
-    });
-    return xai.responses(modelId);
   }
   // Registry stores root URL (no /v1) for GET /v1/models discovery — passing it here
   // makes the SDK call https://api.anthropic.com/messages → 404.
@@ -371,8 +330,8 @@ export interface ReasoningMetadata {
   reasoning?: boolean;
   interleavedReasoningField?: string;
   /**
-   * Bare upstream model id (e.g. 'grok-4.6'), distinct from the request's `model`
-   * field which may be a gateway alias or catalog slug (e.g. 'xai-oauth__grok-4.6').
+   * Bare upstream model id (e.g. 'gpt-6-astra'), distinct from the request's `model`
+   * field which may be a gateway alias or catalog slug (e.g. 'openai-oauth__gpt-6-astra').
    * Reasoning-capability id-pattern checks must match against this, not body.model.
    */
   upstreamModelId?: string;
@@ -393,7 +352,6 @@ const OPENAI_EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh'] as const;
 const GPT_56_EFFORT_LEVELS = ['none', 'low', 'medium', 'high', 'xhigh', 'max'] as const;
 const GPT_6_EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
 const MISTRAL_EFFORT_LEVELS = ['high', 'off'] as const;
-const XAI_EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh'] as const;
 const OPENROUTER_EFFORT_LEVELS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'] as const;
 /** DeepSeek V4 wire values (low/medium map to high; xhigh maps to max). */
 const DEEPSEEK_EFFORT_LEVELS = ['high', 'max', 'off'] as const;
@@ -436,14 +394,7 @@ function isMistralReasoningModel(modelId: string): boolean {
     || lower.includes('reasoning');
 }
 
-/**
- * The only xAI model exposed by clodex accepts `reasoning_effort`.
- */
-function isXaiReasoningEffortModel(modelId: string): boolean {
-  return modelId.toLowerCase() === XAI_SUBSCRIPTION_MODEL;
-}
-
-/** DeepSeek V4 models with thinking mode + reasoning_effort (direct API). */
+/** DeepSeek models with thinking mode and reasoning effort. */
 function isDeepSeekReasoningModel(modelId: string): boolean {
   const lower = modelId.toLowerCase();
   return lower === 'deepseek-v4-flash'
@@ -579,7 +530,7 @@ function isGpt56Model(modelId: string): boolean {
 }
 
 function isGpt6Model(modelId: string): boolean {
-  return /^(?:gpt-6-astra|gpt-6\.1-sol)$/i.test(modelId);
+  return /^(?:gpt-6-(?:astra|luna)|gpt-6\.1-sol)$/i.test(modelId);
 }
 
 function mapCodexEffortToOpenAI(effort: string, modelId?: string): string | undefined {
@@ -604,23 +555,6 @@ function mapCodexEffortToGlm52(effort: string): 'high' | 'max' | undefined {
     case 'xhigh':
     case 'max':
       return 'max';
-    default:
-      return undefined;
-  }
-}
-
-function mapCodexEffortToXai(effort: string): string | undefined {
-  switch (effort) {
-    case 'none':
-    case 'minimal':
-      return 'low';
-    case 'low':
-    case 'medium':
-    case 'high':
-    case 'xhigh':
-      return effort;
-    case 'max':
-      return 'xhigh';
     default:
       return undefined;
   }
@@ -682,21 +616,6 @@ export function getReasoningCapabilities(
         source: 'provider-rule',
         confidence: 'documented',
         wireFormat: { kind: 'mistral-reasoning-effort' },
-      };
-    }
-    return EMPTY_REASONING;
-  }
-
-  if (npm === '@ai-sdk/xai') {
-    if (isXaiReasoningEffortModel(modelId)) {
-      return {
-        levels: [...XAI_EFFORT_LEVELS],
-        defaultLevel: 'high',
-        supportsSummaries: true,
-        mode: 'controllable',
-        source: 'provider-rule',
-        confidence: 'documented',
-        wireFormat: { kind: 'openai-reasoning-effort' },
       };
     }
     return EMPTY_REASONING;
@@ -806,12 +725,6 @@ export function effortProviderOptions(
     return { openai: { reasoningEffort } };
   }
 
-  if (npm === '@ai-sdk/xai') {
-    if (!modelId || !isXaiReasoningEffortModel(modelId)) return undefined;
-    const reasoningEffort = mapCodexEffortToXai(effort);
-    return reasoningEffort ? { xai: { reasoningEffort } } : undefined;
-  }
-
   if (npm === '@ai-sdk/anthropic') {
     if (!modelId || !isClaudeReasoningModel(modelId)) return undefined;
     const mapped = mapCodexEffortToAnthropic(effort);
@@ -893,9 +806,6 @@ export function thinkingProviderOptions(npm: string): ProviderOptions | undefine
         include: ['reasoning.encrypted_content'],
       },
     };
-  }
-  if (npm === '@ai-sdk/xai') {
-    return { xai: { store: false } };
   }
   return undefined;
 }

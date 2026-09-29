@@ -3,17 +3,10 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import pkg from '../package.json' with { type: 'json' };
 
-// ChatGPT Codex WebSocket Responses transport. Clodex uses it for OAuth
+// Public Responses WebSocket transport for ChatGPT plan usage.
 // Responses models so connection-local previous_response_id continuation
 // remains available.
-export const CODEX_RESPONSES_LITE_WS_URL = 'wss://chatgpt.com/backend-api/codex/responses';
-// `version` header the Codex backend expects on Responses-Lite requests. The
-// official Codex CLI sends its own version here; OpenAI may require this to be
-// bumped over time — confirm via --trace if a Responses-Lite model rejects an
-// older Codex client.
-export const CODEX_RESPONSES_LITE_VERSION = '0.153.3';
-// OpenAI-Beta opt-in for the WebSocket Responses transport.
-export const CODEX_RESPONSES_WEBSOCKETS_BETA = 'responses_websockets=2026-02-06';
+export const OPENAI_RESPONSES_WS_URL = 'wss://api.openai.com/v1/responses';
 
 // These must be removed from the child process environment to avoid conflicts
 // with Vertex AI, Bedrock, AWS, Foundry, and any stale Anthropic config.

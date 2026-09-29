@@ -18,6 +18,7 @@ import {
   type StoredOAuthCredential,
 } from '../oauth/types.js';
 import { refreshStoredOAuthCredential, oauthCredentialShouldRefresh } from '../oauth/refresh.js';
+import { openAiRegistrationFromData } from '../oauth/openai.js';
 import { withCredentialMutationLock } from '../registry/lock.js';
 import {
   clodexKeyEnvVar,
@@ -163,6 +164,30 @@ export async function resolveProviderOAuthProviderData(
   return normalized;
 }
 
+/** Read a subscription credential for the managed sign-in result. */
+export async function readProviderOAuthCredential(authRef: string): Promise<StoredOAuthCredential | null> {
+  const parsed = parseAuthRef(authRef);
+  if (!parsed || parsed.kind === 'env' || parsed.kind === 'none') return null;
+  return parseStoredOAuthCredential(await readStoredCredential(parsed));
+}
+
+/** Revoke the renewable ChatGPT session before clearing its local credential. */
+export async function revokeChatGptSession(authRef: string): Promise<boolean> {
+  const parsed = parseAuthRef(authRef);
+  if (!parsed || parsed.kind === 'env' || parsed.kind === 'none') return false;
+  try {
+    const credential = parseStoredOAuthCredential(await readStoredCredential(parsed));
+    const clientId = credential?.providerData?.clientId;
+    if (!credential?.refresh || !isString(clientId)) return false;
+    const response = await fetch('https://auth.openai.com/api/accounts/oauth/revoke', {
+      method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ token: credential.refresh, token_type_hint: 'refresh_token', client_id: clientId }),
+      signal: AbortSignal.timeout(10_000),
+    });
+    return response.ok;
+  } catch { return false; }
+}
+
 function parseProviderDataValue<Value>(value: Value): ProviderDataValue | undefined {
   if (value === null) return null;
   if (isString(value)) return value;
@@ -286,8 +311,12 @@ async function readOAuthProviderSecret(
 
       const cred = parseStoredOAuthCredential(raw);
       if (!cred) {
+        if (providerId === 'openai' || providerId === 'openai-oauth') return null;
         const decoded = decodeProviderSecret(raw);
         return decoded === rejectedAccessToken ? null : decoded;
+      }
+      if ((providerId === 'openai' || providerId === 'openai-oauth') && !openAiRegistrationFromData(cred.providerData)) {
+        throw new Error('ChatGPT sign-in required: run clodex accounts login <account-id> (see clodex accounts list)');
       }
       cacheOAuthCredential(stateKey, cred);
 

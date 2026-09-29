@@ -23,27 +23,19 @@ interface JsonResponsePayload {
 
 export interface DaemonAccountView {
   id: string;
-  providerId: 'openai-oauth' | 'xai-oauth';
+  providerId: 'openai-oauth';
   name?: string;
   email?: string;
   selected: boolean;
-  plan?: string;
-  usage?: object;
-}
-
-export interface DaemonAccountSettings {
-  autoSwitchOnUsageLimit: boolean;
+  requiresSignIn?: boolean;
 }
 
 export interface DaemonAccountController {
   list(): Promise<DaemonAccountView[]> | DaemonAccountView[];
   select(id: string): Promise<void> | void;
-  settings(): DaemonAccountSettings;
-  setAutoSwitchOnUsageLimit(enabled: boolean): Promise<void> | void;
-  refreshUsage?(): Promise<void>;
   createLaunchTicket(accountId?: string, processingMode?: ApiProcessingMode): {
     ticket: string;
-    accountIds: Partial<Record<'openai-oauth' | 'xai-oauth', string>>;
+    accountIds: Partial<Record<'openai-oauth', string>>;
     accountLabel: string;
     processingMode: ApiProcessingMode;
   } | null;
@@ -229,22 +221,9 @@ export async function dispatchDaemonControlRequest(
         return sendJson(200, options.secondwind.snapshot());
       }
       if (request.method === 'GET' && url.pathname === '/v1/accounts') {
-        if (url.searchParams.get('refresh') === '1') await options.accounts.refreshUsage?.();
         return sendJson(200, {
           accounts: await options.accounts.list(),
-          ...options.accounts.settings(),
         });
-      }
-      if (request.method === 'POST' && url.pathname === '/v1/accounts/auto-switch') {
-        const body = await readJsonBody(request);
-        const enabled = body && isObject(body)
-          ? diagnosticRecord(body).enabled
-          : undefined;
-        if (!isBoolean(enabled)) {
-          return sendJson(400, { error: 'Account auto-switch enabled must be a boolean' });
-        }
-        await options.accounts.setAutoSwitchOnUsageLimit(enabled);
-        return sendJson(200, options.accounts.settings());
       }
       if (request.method === 'POST' && url.pathname === '/v1/launches/attach') {
         const body = await readJsonBody(request);

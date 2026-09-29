@@ -79,7 +79,6 @@ const REGISTRY_TO_MODELS_DEV: RegistryModelsDevMap = {
   togetherai: 'together',
   cerebras: 'cerebras',
   deepinfra: 'deepinfra',
-  'xai-oauth': 'xai',
   perplexity: 'perplexity',
   cohere: 'cohere',
   alibaba: 'alibaba',

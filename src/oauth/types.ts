@@ -24,6 +24,14 @@ export interface OAuthTokenResponse {
   refresh_token?: string;
   expires_in?: number;
   id_token?: string;
+  scope?: string;
+}
+
+export interface OAuthSignInResult {
+  tokens: OAuthTokenResponse;
+  accountId?: string;
+  email?: string;
+  providerData?: Record<string, ProviderDataValue>;
 }
 
 export function tokensToStoredCredential(
@@ -123,7 +131,7 @@ export function accessTokenIsExpiring(token: string | undefined, skewMs = OAUTH_
   }
 }
 
-const NATIVE_OAUTH_PROVIDER_IDS = ['openai', 'openai-oauth', 'xai', 'xai-oauth'] as const;
+const NATIVE_OAUTH_PROVIDER_IDS = ['openai', 'openai-oauth'] as const;
 export type NativeOAuthProviderId = typeof NATIVE_OAUTH_PROVIDER_IDS[number];
 
 export function supportsNativeOAuth(providerId: string): providerId is NativeOAuthProviderId {

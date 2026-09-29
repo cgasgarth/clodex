@@ -78,7 +78,6 @@ export function oauthProviderIdFromAccount(account: string): string | null {
   // Managed account credentials use a unique suffix while retaining the
   // canonical OAuth provider id for token refresh behavior.
   if (providerId.startsWith('openai-oauth:account:')) return 'openai-oauth';
-  if (providerId.startsWith('xai-oauth:account:')) return 'xai-oauth';
   return providerId;
 }
 

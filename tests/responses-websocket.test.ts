@@ -96,7 +96,9 @@ const sessionPayload = (input: JsonValue[], extra: JsonObject = {}) => ({
   model: 'gpt-5.6-sol',
   prompt_cache_key: 'relay-session-abc',
   instructions: 'You are a coding assistant.',
-  tools: [{ type: 'function', name: 'Read', parameters: { type: 'object' } }],
+  tools: [{ type: 'namespace', name: 'clodex', description: 'Tools executed by the Clodex client',
+    tools: [{ type: 'function', name: 'Read', parameters: { type: 'object' } }],
+  }],
   reasoning: { effort: 'high' },
   store: false,
   input,
@@ -249,131 +251,6 @@ function emitToolCallResponse(
 beforeEach(() => {
     resetResponsesWebSocketConnectionsForTests();
     fakeSockets.length = 0;
-  });
-
-  it('forwards request headers and adds the WebSocket beta header on the upgrade', async () => {
-    const wsFetch = createResponsesWebSocketFetch(WS_URL);
-    await wsFetch('https://chatgpt.com/backend-api/codex/responses', {
-      method: 'POST',
-      headers: {
-        Authorization: 'Bearer tok',
-        'ChatGPT-Account-Id': 'acct-123',
-        originator: 'clodex',
-        version: '0.153.3',
-        'x-openai-internal-codex-responses-lite': 'true',
-      },
-      body: JSON.stringify({ model: 'gpt-5.6-luna', input: [] }),
-    });
-
-    const headers = lastSocket().options.headers ?? {};
-    expect(lastSocket().url).toBe(WS_URL);
-    expect(headers['Authorization']).toBe('Bearer tok');
-    expect(headers['ChatGPT-Account-Id']).toBe('acct-123');
-    expect(headers['version']).toBe('0.153.3');
-    expect(headers['x-openai-internal-codex-responses-lite']).toBe('true');
-    expect(headers['OpenAI-Beta']).toContain('responses_websockets');
-  });
-
-  it('sends the payload as the first frame and folds in the Responses-Lite shape', async () => {
-    const wsFetch = createResponsesWebSocketFetch(WS_URL);
-    await wsFetch('https://x', {
-      method: 'POST',
-      headers: { 'x-openai-internal-codex-responses-lite': 'true' },
-      body: JSON.stringify({
-        model: 'gpt-5.6-luna',
-        reasoning: { effort: 'high' },
-        parallel_tool_calls: true,
-        service_tier: 'priority',
-      }),
-    });
-
-    const socket = lastSocket();
-    socket.emit('open');
-    expect(socket.send).toHaveBeenCalledTimes(1);
-    // SAFETY: The test fixture defines the asserted runtime shape.
-    const sent = JSON.parse(socket.send.mock.calls[0]![0] as string);
-    // Must be a `response.create` event with the Responses fields at top level.
-    expect(sent.type).toBe('response.create');
-    expect(sent.model).toBe('gpt-5.6-luna');
-    expect(sent.parallel_tool_calls).toBe(false);
-    expect(sent.store).toBe(false);
-    expect(sent.service_tier).toBe('priority');
-    expect(sent.reasoning).toEqual({ effort: 'high', context: 'all_turns' });
-  });
-
-  it('does not mutate the body when the Responses-Lite header is absent', async () => {
-    const wsFetch = createResponsesWebSocketFetch(WS_URL);
-    await wsFetch('https://x', {
-      method: 'POST',
-      headers: { Authorization: 'Bearer t' },
-      body: JSON.stringify({ model: 'gpt-5.6-sol' }),
-    });
-    const socket = lastSocket();
-    socket.emit('open');
-    // SAFETY: The test fixture defines the asserted runtime shape.
-    const sent = JSON.parse(socket.send.mock.calls[0]![0] as string);
-    // Still wrapped in the response.create envelope, but no Responses-Lite fields added.
-    expect(sent).toEqual({ type: 'response.create', model: 'gpt-5.6-sol' });
-  });
-
-  it('uses the full Responses protocol for native web search on a Lite model', async () => {
-    const wsFetch = createResponsesWebSocketFetch(WS_URL);
-    await wsFetch('https://x', {
-      method: 'POST',
-      headers: {
-        version: '0.153.3',
-        'x-openai-internal-codex-responses-lite': 'true',
-      },
-      body: JSON.stringify({
-        model: 'gpt-5.6-sol',
-        tools: [{ type: 'web_search' }],
-        reasoning: { effort: 'high' },
-      }),
-    });
-
-    const socket = lastSocket();
-    expect(socket.options.headers).not.toHaveProperty('version');
-    expect(socket.options.headers).not.toHaveProperty('x-openai-internal-codex-responses-lite');
-    socket.emit('open');
-    // SAFETY: The test fixture defines the asserted runtime shape.
-    const sent = JSON.parse(socket.send.mock.calls[0]![0] as string);
-    expect(sent).toEqual({
-      type: 'response.create',
-      model: 'gpt-5.6-sol',
-      tools: [{ type: 'web_search' }],
-      reasoning: { effort: 'high' },
-    });
-  });
-
-  it('uses the full Responses protocol for parallel function tools on a Lite model', async () => {
-    const wsFetch = createResponsesWebSocketFetch(WS_URL);
-    await wsFetch('https://x', {
-      method: 'POST',
-      headers: {
-        version: '0.153.3',
-        'x-openai-internal-codex-responses-lite': 'true',
-      },
-      body: JSON.stringify({
-        model: 'gpt-5.6-luna',
-        tools: [{ type: 'function', name: 'Read', parameters: { type: 'object' } }],
-        parallel_tool_calls: true,
-        reasoning: { effort: 'high' },
-      }),
-    });
-
-    const socket = lastSocket();
-    expect(socket.options.headers).not.toHaveProperty('version');
-    expect(socket.options.headers).not.toHaveProperty('x-openai-internal-codex-responses-lite');
-    socket.emit('open');
-    // SAFETY: The test fixture defines the asserted runtime shape.
-    const sent = JSON.parse(socket.send.mock.calls[0]![0] as string);
-    expect(sent).toEqual({
-      type: 'response.create',
-      model: 'gpt-5.6-luna',
-      tools: [{ type: 'function', name: 'Read', parameters: { type: 'object' } }],
-      parallel_tool_calls: true,
-      reasoning: { effort: 'high' },
-    });
   });
 
   it('collapses each frame onto a single SSE data line and closes on response.completed', async () => {
@@ -1498,7 +1375,9 @@ beforeEach(() => {
     expect(sent.previous_response_id).toBe('resp_1');
     expect(sent.input).toEqual([nextUser]);
     expect(sent.instructions).toBe('You are a coding assistant. A skill is now active.');
-    expect(sent.tools).toEqual(updatedTools);
+    expect(sent.tools).toEqual([{ type: 'namespace', name: 'clodex',
+      description: 'Tools executed by the Clodex client', tools: updatedTools,
+    }]);
 
     emitTextResponse(socket, 'resp_2', 'hello again');
     await readAll(second);

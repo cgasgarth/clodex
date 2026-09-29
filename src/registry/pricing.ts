@@ -65,7 +65,6 @@ const TEMPLATE_TO_PRICING_PLATFORM: TemplatePricingPlatformMap = {
   togetherai: 'together',
   cerebras: 'cerebras',
   deepinfra: 'deepinfra',
-  'xai-oauth': 'xai',
   perplexity: 'perplexity',
   cohere: 'cohere',
   openai: 'openai',

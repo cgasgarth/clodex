@@ -34,7 +34,7 @@ export interface LocalProviderModel {
   upstreamModelId: string;
   baseUrl?: string;        // set for anthropic-format models
   completionsUrl?: string; // set for openai-format models
-  npm?: string;            // OpenCode api.npm package, e.g. @ai-sdk/xai (SDK routing)
+  npm?: string;            // OpenCode api.npm package, e.g. @ai-sdk/openai (SDK routing)
   apiBaseUrl?: string;     // raw api.url, for openai-compatible/openrouter SDK base URL
   cost?: ModelCost;
   contextWindow?: number;
@@ -44,8 +44,6 @@ export interface LocalProviderModel {
   reasoning?: boolean;
   /** Streaming/interleaved reasoning field name from metadata, e.g. reasoning_content. */
   interleavedReasoningField?: string;
-  /** Backend capability: model requires the Responses-Lite request shape (x-openai-internal-codex-responses-lite). */
-  useResponsesLite?: boolean;
   /** OpenCode Zen free-tier models only. */
   isFree?: boolean;
   freeStatus?: FreeStatus;

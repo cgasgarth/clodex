@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Box, Text, render, useApp, useInput } from 'ink';
+import { TerminalLink } from './terminal-link.js';
 import { daemonControlRequest } from '../daemon/control-client.js';
 import { DASHBOARD_USAGE_REQUEST_TIMEOUT_MS } from '../config/timeouts.js';
 import {
@@ -18,7 +19,7 @@ import {
   accountDisplayName,
   compactNumber,
   cyclePeriod,
-  deviceCodeInstruction,
+  authorizationInstruction,
   diagnosticLines,
   diagnosticOverviewLine,
   formatUsd,
@@ -34,7 +35,7 @@ import {
   VIEW_SWITCH_HINT,
   type Account,
   type DaemonStatus,
-  type DeviceCodePrompt,
+  type AuthorizationPrompt,
   type Diagnostic,
   type MetricBucket,
   type UsagePeriod,
@@ -69,75 +70,6 @@ function duration(seconds: number): string {
   const minutes = Math.floor((seconds % 3600) / 60);
   if (hours > 0) return `${hours}h ${minutes}m`;
   return `${minutes}m`;
-}
-
-function resetLabel(epochSeconds: number | undefined): string {
-  if (!epochSeconds) return 'unknown reset';
-  const seconds = Math.max(0, epochSeconds - Date.now() / 1000);
-  if (seconds < 60) return '<1m';
-  if (seconds < 3600) return `${Math.ceil(seconds / 60)}m`;
-  if (seconds < 86_400) return `${Math.ceil(seconds / 3600)}h`;
-  return `${Math.ceil(seconds / 86_400)}d`;
-}
-
-function UsageBar({
-  label,
-  used,
-  resetAt,
-}: {
-  label: string;
-  used: number | undefined;
-  resetAt: number | undefined;
-}): React.ReactNode {
-  const normalized = Math.max(0, Math.min(100, used ?? 0));
-  const filled = Math.round((100 - normalized) / 5);
-  return (
-    <Text>
-      {label.padEnd(8)} <Text color="cyan">{'█'.repeat(filled)}</Text>
-      <Text dimColor>{'░'.repeat(20 - filled)}</Text>
-      {' '}{String(Math.round(100 - normalized)).padStart(3)}% left · {resetLabel(resetAt)}
-    </Text>
-  );
-}
-
-function formatCents(value: number | undefined): string {
-  return value === undefined ? 'unknown' : `$${(value / 100).toFixed(2)}`;
-}
-
-function AccountUsageDetails({ usage }: { usage: NonNullable<Account['usage']> }): React.ReactNode {
-  return (
-    <Box paddingLeft={4} flexDirection="column">
-      {usage.primaryUsedPercent !== undefined && (
-        <UsageBar label="5-hour" used={usage.primaryUsedPercent} resetAt={usage.primaryResetAt} />
-      )}
-      {usage.weeklyUsedPercent !== undefined && (
-        <UsageBar label="weekly" used={usage.weeklyUsedPercent} resetAt={usage.weeklyResetAt} />
-      )}
-      {usage.limitUsedPercent !== undefined && (
-        <UsageBar
-          label={usage.limitPeriod ?? 'usage'}
-          used={usage.limitUsedPercent}
-          resetAt={usage.limitResetAt}
-        />
-      )}
-      {(usage.usedCents !== undefined || usage.limitCents !== undefined) && (
-        <Text>
-          included {formatCents(usage.usedCents)} used
-          {usage.limitCents !== undefined ? ` of ${formatCents(usage.limitCents)}` : ''}
-        </Text>
-      )}
-      {(usage.onDemandUsedCents !== undefined || usage.onDemandLimitCents !== undefined) && (
-        <Text>
-          on-demand {formatCents(usage.onDemandUsedCents)} used
-          {usage.onDemandLimitCents !== undefined ? ` of ${formatCents(usage.onDemandLimitCents)}` : ''}
-        </Text>
-      )}
-      {usage.prepaidBalanceCents !== undefined && (
-        <Text>prepaid balance {formatCents(usage.prepaidBalanceCents)}</Text>
-      )}
-      {usage.stale && <Text color="yellow">usage stale{usage.error ? ` · ${usage.error}` : ''}</Text>}
-    </Box>
-  );
 }
 
 function Chart({
@@ -194,14 +126,13 @@ function Dashboard(): React.ReactNode {
     [period, periodOffset, rangeNow],
   );
   const refreshSequence = useRef(0);
-  const usageRefreshSequence = useRef(0);
+  const accountRefreshSequence = useRef(0);
   const refreshInFlight = useRef(false);
-  const usageRefreshInFlight = useRef(false);
+  const accountRefreshInFlight = useRef(false);
   const [status, setStatus] = useState<DaemonStatus | null>(null);
   const [daemonReachable, setDaemonReachable] = useState<boolean | null>(null);
   const [metrics, setMetrics] = useState<MetricBucket[]>([]);
   const [accounts, setAccounts] = useState<Account[]>([]);
-  const [autoSwitchOnUsageLimit, setAutoSwitchOnUsageLimit] = useState(true);
   const [diagnostics, setDiagnostics] = useState<Diagnostic[]>([]);
   const [diagnosticLogMode, setDiagnosticLogMode] = useState<DiagnosticLogMode>('error');
   const [secondwind, setSecondwind] = useState<SecondwindSnapshot | null>(null);
@@ -212,7 +143,8 @@ function Dashboard(): React.ReactNode {
   const [accountAction, setAccountAction] = useState(false);
   const [pendingLogoutId, setPendingLogoutId] = useState<string>();
   const [pendingRestart, setPendingRestart] = useState(false);
-  const [deviceCode, setDeviceCode] = useState<DeviceCodePrompt>();
+  const [authorization, setAuthorization] = useState<AuthorizationPrompt>();
+  const [signInResult, setSignInResult] = useState<{ ok: boolean; text: string }>();
   const [secondwindAction, setSecondwindAction] = useState(false);
   const [pendingSecondwindMode, setPendingSecondwindMode] = useState<SecondwindMode>();
   const [nativeCompactionAction, setNativeCompactionAction] = useState(false);
@@ -231,9 +163,6 @@ function Dashboard(): React.ReactNode {
       if (snapshot.accounts) {
         setAccounts(snapshot.accounts);
         setSelectedIndex(index => Math.min(index, Math.max(0, snapshot.accounts!.length - 1)));
-      }
-      if (snapshot.autoSwitchOnUsageLimit !== undefined) {
-        setAutoSwitchOnUsageLimit(snapshot.autoSwitchOnUsageLimit);
       }
       if (snapshot.diagnostics) setDiagnostics(snapshot.diagnostics);
       if (snapshot.diagnosticLogMode) setDiagnosticLogMode(snapshot.diagnosticLogMode);
@@ -265,71 +194,58 @@ function Dashboard(): React.ReactNode {
     }
   }, [range, usageAccountScope]);
 
-  const refreshUsage = useCallback(async () => {
-    if (usageRefreshInFlight.current) return;
-    usageRefreshInFlight.current = true;
-    const sequence = ++usageRefreshSequence.current;
+  const refreshAccounts = useCallback(async () => {
+    if (accountRefreshInFlight.current) return;
+    accountRefreshInFlight.current = true;
+    const sequence = ++accountRefreshSequence.current;
     try {
       const nextAccounts = await daemonControlRequest<{
         accounts: Account[];
-        autoSwitchOnUsageLimit: boolean;
       }>(
-        '/v1/accounts?refresh=1',
+        '/v1/accounts',
         { timeoutMs: DASHBOARD_USAGE_REQUEST_TIMEOUT_MS },
       );
-      if (sequence !== usageRefreshSequence.current) return;
+      if (sequence !== accountRefreshSequence.current) return;
       setAccounts(nextAccounts.accounts);
-      setAutoSwitchOnUsageLimit(nextAccounts.autoSwitchOnUsageLimit);
       setSelectedIndex(index => Math.min(index, Math.max(0, nextAccounts.accounts.length - 1)));
     } catch (error) {
-      if (sequence !== usageRefreshSequence.current) return;
-      setMessage(`Account usage refresh failed · ${requestFailure(error)}`);
+      if (sequence !== accountRefreshSequence.current) return;
+      setMessage(`Account refresh failed · ${requestFailure(error)}`);
     } finally {
-      usageRefreshInFlight.current = false;
+      accountRefreshInFlight.current = false;
     }
   }, []);
-
-  const toggleAccountAutoSwitch = useCallback(() => {
-    if (accountAction) return;
-    const enabled = !autoSwitchOnUsageLimit;
-    setAccountAction(true);
-    daemonControlRequest<{ autoSwitchOnUsageLimit: boolean }>('/v1/accounts/auto-switch', {
-      method: 'POST',
-      body: { enabled },
-    }).then(
-      snapshot => {
-        setAutoSwitchOnUsageLimit(snapshot.autoSwitchOnUsageLimit);
-        setMessage(`Account usage failover is ${snapshot.autoSwitchOnUsageLimit ? 'on' : 'off'}.`);
-      },
-      error => setMessage(error instanceof Error ? error.message : String(error)),
-    ).finally(() => setAccountAction(false));
-  }, [accountAction, autoSwitchOnUsageLimit]);
 
   const login = useCallback((providerId: ManagedOAuthProviderId) => {
     if (accountAction) return;
     setAccountAction(true);
-    setDeviceCode(undefined);
-    const providerName = providerId === 'openai-oauth' ? 'OpenAI' : 'xAI';
+    setAuthorization(undefined);
+    setSignInResult(undefined);
+    const providerName = 'OpenAI';
     setMessage(`Starting ${providerName} sign-in…`);
+    const reauthAccount = accounts[selectedIndex];
     loginProviderAccount(providerId, {
-      onDeviceCode: ({ url, userCode }) => {
-        setDeviceCode({ url, userCode });
+      ...(reauthAccount?.providerId === providerId && reauthAccount.requiresSignIn && { reauthenticate: reauthAccount.id }),
+      onAuthorization: ({ url }) => {
+        setAuthorization({ url });
         setMessage(`Browser opened; complete ${providerName} sign-in below.`);
       },
     }).then(
       account => {
-        setDeviceCode(undefined);
+        setAuthorization(undefined);
+        setSignInResult({ ok: true, text: `Authorization saved for ${account.email}` });
         setMessage(`Signed in as ${account.email}`);
-        void Promise.allSettled([refresh(), refreshUsage()])
+        void Promise.allSettled([refresh(), refreshAccounts()])
           .finally(() => setAccountAction(false));
       },
       error => {
-        setDeviceCode(undefined);
+        setAuthorization(undefined);
+        setSignInResult({ ok: false, text: `Sign-in was not saved: ${error instanceof Error ? error.message : String(error)}` });
         setAccountAction(false);
         setMessage(error instanceof Error ? error.message : String(error));
       },
     );
-  }, [accountAction, refresh, refreshUsage]);
+  }, [accountAction, accounts, selectedIndex, refresh, refreshAccounts]);
 
   const setSecondwindMode = useCallback((mode: SecondwindMode) => {
     if (secondwindAction || secondwind?.mode === mode) return;
@@ -370,7 +286,7 @@ function Dashboard(): React.ReactNode {
       email => {
         setPendingLogoutId(undefined);
         setMessage(`Signed out ${email}`);
-        void Promise.allSettled([refresh(), refreshUsage()])
+        void Promise.allSettled([refresh(), refreshAccounts()])
           .finally(() => setAccountAction(false));
       },
       error => {
@@ -379,7 +295,7 @@ function Dashboard(): React.ReactNode {
         setMessage(error instanceof Error ? error.message : String(error));
       },
     );
-  }, [accountAction, refresh, refreshUsage]);
+  }, [accountAction, refresh, refreshAccounts]);
 
   useEffect(() => {
     // Do not render the previous period's values under a newly selected label
@@ -389,12 +305,6 @@ function Dashboard(): React.ReactNode {
     const timer = setInterval(() => void refresh(), 5_000);
     return () => clearInterval(timer);
   }, [refresh]);
-
-  useEffect(() => {
-    void refreshUsage();
-    const timer = setInterval(() => void refreshUsage(), 90_000);
-    return () => clearInterval(timer);
-  }, [refreshUsage]);
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -458,7 +368,7 @@ function Dashboard(): React.ReactNode {
     }
     if (input === 'r') {
       void refresh();
-      void refreshUsage();
+      void refreshAccounts();
       return;
     }
     if (view === 'usage') {
@@ -520,16 +430,8 @@ function Dashboard(): React.ReactNode {
       }
     }
     if (view === 'accounts') {
-      if (input === 'f') {
-        toggleAccountAutoSwitch();
-        return;
-      }
       if (input === 'o') {
         login('openai-oauth');
-        return;
-      }
-      if (input === 'g') {
-        login('xai-oauth');
         return;
       }
       if (input === 'x' && accounts[selectedIndex]) {
@@ -565,7 +467,7 @@ function Dashboard(): React.ReactNode {
         }).then(
           () => {
             setPeriodOffset(0);
-            return Promise.allSettled([refresh(), refreshUsage()]);
+            return Promise.allSettled([refresh(), refreshAccounts()]);
           },
           error => {
             setMessage(error instanceof Error ? error.message : String(error));
@@ -641,12 +543,10 @@ function Dashboard(): React.ReactNode {
   const logicalInput = totals.input + totals.cached + totals.cacheWrite;
   const selectedAccounts = accounts.filter(account => account.selected);
   const activeAccount = selectedAccounts[0];
-  const accountGroups = (['openai-oauth', 'xai-oauth'] as const).map(providerId => ({
-    providerId,
-    accounts: accounts
-      .map((account, index) => ({ account, index }))
-      .filter(entry => entry.account.providerId === providerId),
-  })).filter(group => group.accounts.length > 0);
+  const accountGroups = [{
+    providerId: 'openai-oauth',
+    accounts: accounts.map((account, index) => ({ account, index })),
+  }];
 
   if (daemonReachable === false) {
     return (
@@ -708,9 +608,9 @@ function Dashboard(): React.ReactNode {
                 <Box key={account.id} flexDirection="column">
                   <Text color="cyan">
                     ● {account.name ?? account.providerId} · {accountDisplayName(account)}
-                    {account.plan ? ` · ${account.plan}` : ''}
+                    {account.requiresSignIn ? ' · sign-in required' : ''}
                   </Text>
-                  {account.usage && <AccountUsageDetails usage={account.usage} />}
+                  <Box paddingLeft={4}><TerminalLink href="https://chatgpt.com/settings/usage">Manage ChatGPT plan limits and credits</TerminalLink></Box>
                 </Box>
               ))}
         </Box>
@@ -782,10 +682,10 @@ function Dashboard(): React.ReactNode {
             {' · '}fast {formatUsd(totals.fastCost)} ({totals.fastRequests} req)
           </Text>
           <Text dimColor>
-            Sol, Terra, Luna, and Grok · token-only estimate · rates as of {API_PRICING_AS_OF}
+            OpenAI models · token-only estimate · rates as of {API_PRICING_AS_OF}
           </Text>
           <Text dimColor>
-            {API_PRICING_SOURCE}{' · '}Grok 4.6 estimated at published Grok 4.5 rates
+            {API_PRICING_SOURCE}
             {totals.unpricedRequests > 0 ? ` · ${totals.unpricedRequests} other-model requests excluded` : ''}
           </Text>
         </Box>
@@ -798,20 +698,14 @@ function Dashboard(): React.ReactNode {
       </>
     );
   } else if (view === 'accounts') {
-    controls = `↑/↓ account · Enter select · f auto-switch · o login OpenAI · g login xAI · x x logout · ${VIEW_SWITCH_HINT} · r refresh · q quit`;
+    controls = `↑/↓ account · Enter select · o login OpenAI · x x logout · ${VIEW_SWITCH_HINT} · r refresh · q quit`;
     content = (
       <>
         <Box borderStyle="round" paddingX={1} flexDirection="column">
           <Text bold>Accounts and subscription limits</Text>
-          <Text dimColor>Each provider has one selected account; existing default-account sessions switch on their next request.</Text>
-          <Text>
-            Usage-limit auto-switch: <Text bold color={autoSwitchOnUsageLimit ? 'green' : undefined}>
-              {autoSwitchOnUsageLimit ? 'on' : 'off'}
-            </Text>
-            <Text dimColor> · press f to toggle · default-account launches only</Text>
-          </Text>
+          <Text dimColor>One ChatGPT account is selected; existing default-account sessions switch on their next request.</Text>
           {accounts.length === 0
-            ? <Text dimColor>No managed accounts. Press o for OpenAI or g for xAI.</Text>
+            ? <Text dimColor>No managed accounts. Press o for OpenAI.</Text>
             : accountGroups.map(group => (
                 <Box key={group.providerId} flexDirection="column">
                   <Text bold>{group.accounts[0]!.account.name ?? group.providerId}</Text>
@@ -819,20 +713,23 @@ function Dashboard(): React.ReactNode {
                     <Box key={account.id} flexDirection="column">
                       <Text color={index === selectedIndex ? 'cyan' : undefined}>
                         {index === selectedIndex ? '›' : ' '} {account.selected ? '●' : '○'} {accountDisplayName(account)}
-                        {account.plan ? ` · ${account.plan}` : ''}
+                        {account.requiresSignIn ? ' · sign-in required' : ''}
                       </Text>
-                      {account.usage && <AccountUsageDetails usage={account.usage} />}
+                      <Box paddingLeft={4}><TerminalLink href="https://chatgpt.com/settings/usage">Manage ChatGPT plan limits and credits</TerminalLink></Box>
                     </Box>
                   ))}
                 </Box>
               ))}
         </Box>
-        {deviceCode && (
-          <Box borderStyle="round" borderColor="yellow" paddingX={1} flexDirection="column">
+        {(authorization || signInResult) && (
+          <Box borderStyle="round" borderColor={signInResult ? signInResult.ok ? 'green' : 'red' : 'yellow'} paddingX={1} flexDirection="column">
             <Text bold color="yellow">Subscription sign-in</Text>
-            <Text>{deviceCodeInstruction(deviceCode)}</Text>
-            <Text dimColor>{deviceCode.url}</Text>
-            <Text dimColor>The code stays visible until sign-in finishes.</Text>
+            {signInResult && <Text color={signInResult.ok ? 'green' : 'red'}>{signInResult.text}</Text>}
+            {authorization && <>
+            <Text>{authorizationInstruction()}</Text>
+            <TerminalLink href={authorization.url}>Continue with ChatGPT</TerminalLink>
+            <Text dimColor>The link stays available until sign-in finishes.</Text>
+            </>}
           </Box>
         )}
       </>
@@ -947,7 +844,7 @@ function Dashboard(): React.ReactNode {
             metrics={secondwind?.applied}
             savingsLabel="estimated savings"
           />
-          <Text dimColor>API-equivalent cache-aware estimate for priced OpenAI and Grok requests.</Text>
+          <Text dimColor>API-equivalent cache-aware estimate for priced OpenAI requests.</Text>
         </Box>
         <Box borderStyle="round" paddingX={1} flexDirection="column">
           <Text bold>Added request latency</Text>
