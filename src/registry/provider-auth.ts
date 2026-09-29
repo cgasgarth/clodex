@@ -4,6 +4,7 @@ import { printOAuthStepsPanel } from '../ui/prompts.js';
 import pc from 'picocolors';
 import * as p from '@clack/prompts';
 import open from 'open';
+import { link } from 'ansi-escapes';
 import {
   probeProviderCredentialStore,
   provisionProviderCredential,
@@ -78,7 +79,7 @@ async function runNativeSignIn(providerId: NativeOAuthProviderId): Promise<Store
       spinner.stop('');
       const displayUrl = new URL(url);
       displayUrl.searchParams.delete('id_token_hint');
-      p.log.info(`Visit: ${pc.cyan(displayUrl.toString())}`);
+      p.log.info(pc.cyan(link(userCode ? 'Open subscription sign-in' : 'Continue with ChatGPT', displayUrl.toString())));
       if (userCode) p.log.info(`Enter code: ${pc.bold(userCode)}`);
       openBrowser(url);
       spinner.start('Waiting for authorization...');

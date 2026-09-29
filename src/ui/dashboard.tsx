@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Box, Text, render, useApp, useInput } from 'ink';
+import { TerminalLink } from './terminal-link.js';
 import { daemonControlRequest } from '../daemon/control-client.js';
 import { DASHBOARD_USAGE_REQUEST_TIMEOUT_MS } from '../config/timeouts.js';
 import {
@@ -104,7 +105,10 @@ function formatCents(value: number | undefined): string {
   return value === undefined ? 'unknown' : `$${(value / 100).toFixed(2)}`;
 }
 
-function AccountUsageDetails({ usage }: { usage: NonNullable<Account['usage']> }): React.ReactNode {
+function AccountUsageDetails({ usage, providerId }: { usage: NonNullable<Account['usage']>; providerId: string }): React.ReactNode {
+  if (providerId === 'openai-oauth') {
+    return <Box paddingLeft={4}><TerminalLink href="https://chatgpt.com/settings/usage">Manage ChatGPT plan limits and credits</TerminalLink></Box>;
+  }
   return (
     <Box paddingLeft={4} flexDirection="column">
       {usage.primaryUsedPercent !== undefined && (
@@ -710,7 +714,7 @@ function Dashboard(): React.ReactNode {
                     ● {account.name ?? account.providerId} · {accountDisplayName(account)}
                     {account.plan ? ` · ${account.plan}` : ''}
                   </Text>
-                  {account.usage && <AccountUsageDetails usage={account.usage} />}
+                  {account.usage && <AccountUsageDetails usage={account.usage} providerId={account.providerId} />}
                 </Box>
               ))}
         </Box>
@@ -821,7 +825,7 @@ function Dashboard(): React.ReactNode {
                         {index === selectedIndex ? '›' : ' '} {account.selected ? '●' : '○'} {accountDisplayName(account)}
                         {account.plan ? ` · ${account.plan}` : ''}
                       </Text>
-                      {account.usage && <AccountUsageDetails usage={account.usage} />}
+                      {account.usage && <AccountUsageDetails usage={account.usage} providerId={group.providerId} />}
                     </Box>
                   ))}
                 </Box>
@@ -831,8 +835,8 @@ function Dashboard(): React.ReactNode {
           <Box borderStyle="round" borderColor="yellow" paddingX={1} flexDirection="column">
             <Text bold color="yellow">Subscription sign-in</Text>
             <Text>{deviceCodeInstruction(deviceCode)}</Text>
-            <Text dimColor>{deviceCode.url}</Text>
-            <Text dimColor>The code stays visible until sign-in finishes.</Text>
+            <TerminalLink href={deviceCode.url}>{deviceCode.userCode ? 'Open subscription sign-in' : 'Continue with ChatGPT'}</TerminalLink>
+            <Text dimColor>{deviceCode.userCode ? 'The code stays visible until sign-in finishes.' : 'The link stays available until sign-in finishes.'}</Text>
           </Box>
         )}
       </>

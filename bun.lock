@@ -12,6 +12,7 @@
         "@ai-sdk/xai": "4.0.44",
         "@clack/prompts": "1.7.0",
         "ai": "7.0.79",
+        "ansi-escapes": "7.3.0",
         "ink": "7.1.1",
         "ipaddr.js": "2.5.0",
         "jose": "6.2.12",

@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import pc from 'picocolors';
 import * as p from '@clack/prompts';
 import open from 'open';
+import { link } from 'ansi-escapes';
 import { isString } from '../runtime/type-guards.js';
 import { credentialInstanceAuthRef } from '../credentials/helper.js';
 import {
@@ -293,7 +294,7 @@ export async function runAccountsCommand(args: string[]): Promise<number> {
         ...(command === 'login' && saved[0] && { reauthenticate: saved[0].id }),
         onDeviceCode: ({ url, userCode }) => {
           spinner.stop('');
-          p.log.info(`Visit: ${pc.cyan(url)}`);
+          p.log.info(pc.cyan(link(userCode ? 'Open subscription sign-in' : 'Continue with ChatGPT', url)));
           if (userCode) p.log.info(`Enter code: ${pc.bold(userCode)}`);
           spinner.start('Waiting for authorization…');
         },
