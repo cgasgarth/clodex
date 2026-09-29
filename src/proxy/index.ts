@@ -453,7 +453,7 @@ interface ProxyCatalogState {
   byAlias: Map<string, ProxyRoute>;
   configuredAliasNames: Set<string>;
   unavailableAliasReasons: Map<string, string>;
-  defaultRoute: ProxyRoute;
+  defaultRoute?: ProxyRoute;
   modelsPayload: string;
 }
 
@@ -462,9 +462,6 @@ function createProxyCatalogState(
   defaultAliasId: string,
   modelAliases: ProxyModelAlias[] = [],
 ): ProxyCatalogState {
-  if (routes.length === 0) {
-    throw new Error('Proxy catalog requires at least one route');
-  }
   const byAlias = new Map(routes.map(route => [normalizeRouteLookupId(route.aliasId), route]));
   const configuredAliasNames = new Set(modelAliases.flatMap(configuredAliasLookupNames));
   const unavailableAliasReasons = new Map(
@@ -480,7 +477,7 @@ function createProxyCatalogState(
     const aliasId = normalizeRouteLookupId(alias.name);
     if (route && !byAlias.has(aliasId)) byAlias.set(aliasId, route);
   }
-  const defaultRoute = lookupRoute(byAlias, defaultAliasId) ?? routes[0]!;
+  const defaultRoute = lookupRoute(byAlias, defaultAliasId) ?? routes[0];
   return {
     byAlias,
     configuredAliasNames,
@@ -702,7 +699,12 @@ export async function startProxyCatalog(
         );
         return;
       }
-      let route = resolvedRoute ?? requestCatalog.defaultRoute;
+      const initialRoute = resolvedRoute ?? requestCatalog.defaultRoute;
+      if (!initialRoute) {
+        anthropicError(res, 401, 'Sign in to Clodex and select a model before sending requests.');
+        return;
+      }
+      let route: ProxyRoute = initialRoute;
       if (resolveRouteForRequest) {
         const launchTicketFromHeader = req.headers.get('x-clodex-launch-ticket') ?? undefined;
         try {
@@ -1198,7 +1200,7 @@ export async function startProxyCatalog(
   }
   const boundPort = await requireReachableProxyServer(server, onRejection, onException);
   plog(() =>
-    `started on port ${boundPort}, catalog=${routes.length} model(s), default=${catalog.defaultRoute.aliasId}`,
+    `started on port ${boundPort}, catalog=${routes.length} model(s), default=${catalog.defaultRoute?.aliasId ?? 'none'}`,
   );
   return {
     port: boundPort,
@@ -1209,7 +1211,7 @@ export async function startProxyCatalog(
         nextModelAliases,
       );
       plog(() =>
-        `catalog replaced: ${nextRoutes.length} model(s), default=${catalog.defaultRoute.aliasId}`,
+        `catalog replaced: ${nextRoutes.length} model(s), default=${catalog.defaultRoute?.aliasId ?? 'none'}`,
       );
     },
     close: async () => {

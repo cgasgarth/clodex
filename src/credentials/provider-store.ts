@@ -310,7 +310,11 @@ async function readOAuthProviderSecret(
       if (!raw) return null;
 
       const cred = parseStoredOAuthCredential(raw);
-      if (!cred) return null;
+      if (!cred) {
+        if (providerId === 'openai' || providerId === 'openai-oauth') return null;
+        const decoded = decodeProviderSecret(raw);
+        return decoded === rejectedAccessToken ? null : decoded;
+      }
       if ((providerId === 'openai' || providerId === 'openai-oauth') && !openAiRegistrationFromData(cred.providerData)) {
         throw new Error('ChatGPT sign-in required: run clodex accounts login <account-id> (see clodex accounts list)');
       }
