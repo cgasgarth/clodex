@@ -1,3 +1,4 @@
+const planToken = (label: string) => `e30.${Buffer.from(JSON.stringify({scope: 'chatgpt.tokens.use.direct', jti: label})).toString('base64url')}.signature`;
 import { importActual } from './bun-import-actual.js';
 // tests/proxy.test.ts
 import { describe, it, expect, vi, afterEach } from 'bun:test';
@@ -2335,12 +2336,12 @@ describe('OAuth route credential resolution', () => {
       realModelId: 'gpt-3.5-turbo-compact',
       displayName: 'OAuth Compact Route',
       upstreamUrl: '',
-      apiKey: 'oauth-token',
+      apiKey: planToken('oauth-token'),
       modelFormat: 'openai',
       npm: '@ai-sdk/openai',
       providerId: 'oauth-provider',
       authType: 'oauth',
-      refreshToken: vi.fn(async () => 'oauth-token'),
+      refreshToken: vi.fn(async () => planToken('oauth-token')),
     };
     // SAFETY: The test fixture defines the asserted runtime shape.
     asMocked(withResponsesWebSocketDiagnosticContext).mockReturnValueOnce({
@@ -2383,13 +2384,13 @@ describe('OAuth route credential resolution', () => {
   });
 
   it('resolves the current token before dispatch and updates the route cache', async () => {
-    const refreshToken = vi.fn(async () => 'fresh-oauth-token');
+    const refreshToken = vi.fn(async () => planToken('fresh-oauth-token'));
     const route: ProxyRoute = {
       aliasId: 'claude-oauth-route',
       realModelId: 'claude-oauth-route',
       displayName: 'OAuth Route',
       upstreamUrl: 'https://api.example.test',
-      apiKey: 'stale-oauth-token',
+      apiKey: planToken('stale-oauth-token'),
       modelFormat: 'anthropic',
       providerId: 'oauth-provider',
       authType: 'oauth',
@@ -2417,10 +2418,10 @@ describe('OAuth route credential resolution', () => {
 
       expect(response.status).toBe(200);
       expect(refreshToken).toHaveBeenCalledTimes(1);
-      expect(route.apiKey).toBe('fresh-oauth-token');
+      expect(route.apiKey).toBe(planToken('fresh-oauth-token'));
       const [, init] = asMocked(fetch).mock.calls[0]!;
       expect(new Headers(init?.headers).get('Authorization')).toBe(
-        'Bearer fresh-oauth-token',
+        `Bearer ${planToken('fresh-oauth-token')}`,
       );
     } finally {
       await handle.close();
@@ -2430,8 +2431,8 @@ describe('OAuth route credential resolution', () => {
   it('rebuilds the translated SDK route and retries once after an OAuth 401', async () => {
     const refreshToken = vi.fn(async (rejectedAccessToken?: string) =>
       rejectedAccessToken === undefined
-        ? 'rejected-oauth-token'
-        : 'fresh-oauth-token',
+        ? planToken('rejected-oauth-token')
+        : planToken('fresh-oauth-token'),
     );
     const route: ProxyRoute = {
       aliasId: 'anthropic-oauth-provider__gpt-3-5-turbo-instruct',
@@ -2448,7 +2449,7 @@ describe('OAuth route credential resolution', () => {
     const fetchMock = vi.fn(
       async (_input: string | URL | Request, init?: RequestInit) => {
         const authorization = new Headers(init?.headers).get('authorization');
-        if (authorization === 'Bearer rejected-oauth-token') {
+        if (authorization === `Bearer ${planToken('rejected-oauth-token')}`) {
         return new Response(
             JSON.stringify({ error: { message: 'expired token' } }),
             {
@@ -2485,14 +2486,14 @@ describe('OAuth route credential resolution', () => {
       expect(response.status).toBe(200);
       expect(response.body).toContain('recovered');
       expect(refreshToken).toHaveBeenNthCalledWith(1);
-      expect(refreshToken).toHaveBeenNthCalledWith(2, 'rejected-oauth-token');
-      expect(route.apiKey).toBe('fresh-oauth-token');
+      expect(refreshToken).toHaveBeenNthCalledWith(2, planToken('rejected-oauth-token'));
+      expect(route.apiKey).toBe(planToken('fresh-oauth-token'));
       expect(fetchMock).toHaveBeenCalledTimes(2);
       expect(
         fetchMock.mock.calls.map(([, init]) =>
           new Headers(init?.headers).get('authorization'),
         ),
-      ).toEqual(['Bearer rejected-oauth-token', 'Bearer fresh-oauth-token']);
+      ).toEqual([`Bearer ${planToken('rejected-oauth-token')}`, `Bearer ${planToken('fresh-oauth-token')}`]);
     } finally {
       await handle.close();
     }
@@ -2501,8 +2502,8 @@ describe('OAuth route credential resolution', () => {
   it('surfaces a second translated OAuth 401 without another retry', async () => {
     const refreshToken = vi.fn(async (rejectedAccessToken?: string) =>
       rejectedAccessToken === undefined
-        ? 'rejected-oauth-token'
-        : 'fresh-oauth-token',
+        ? planToken('rejected-oauth-token')
+        : planToken('fresh-oauth-token'),
     );
     const route: ProxyRoute = {
       aliasId: 'anthropic-oauth-provider__gpt-3-5-turbo-second-401',
@@ -2537,7 +2538,7 @@ describe('OAuth route credential resolution', () => {
       expect(response.status).toBe(401);
       expect(fetchMock).toHaveBeenCalledTimes(2);
       expect(refreshToken).toHaveBeenCalledTimes(2);
-      expect(route.apiKey).toBe('fresh-oauth-token');
+      expect(route.apiKey).toBe(planToken('fresh-oauth-token'));
     } finally {
       await handle.close();
     }
@@ -2545,7 +2546,7 @@ describe('OAuth route credential resolution', () => {
 
   it('refuses to retry a translated OAuth 401 with an unchanged token', async () => {
     const refreshToken = vi.fn(async (rejectedAccessToken?: string) =>
-      rejectedAccessToken ?? 'rejected-oauth-token',
+      rejectedAccessToken ?? planToken('rejected-oauth-token'),
     );
     const route: ProxyRoute = {
       aliasId: 'anthropic-oauth-provider__gpt-3-5-turbo-unchanged',
@@ -2580,7 +2581,7 @@ describe('OAuth route credential resolution', () => {
       expect(response.status).toBe(401);
       expect(fetchMock).toHaveBeenCalledTimes(1);
       expect(refreshToken).toHaveBeenCalledTimes(2);
-      expect(route.apiKey).toBe('rejected-oauth-token');
+      expect(route.apiKey).toBe(planToken('rejected-oauth-token'));
     } finally {
       await handle.close();
     }

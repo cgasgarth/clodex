@@ -18,6 +18,7 @@ import {
   type StoredOAuthCredential,
 } from '../oauth/types.js';
 import { refreshStoredOAuthCredential, oauthCredentialShouldRefresh } from '../oauth/refresh.js';
+import { openAiRegistrationFromData } from '../oauth/openai.js';
 import { withCredentialMutationLock } from '../registry/lock.js';
 import {
   clodexKeyEnvVar,
@@ -163,6 +164,13 @@ export async function resolveProviderOAuthProviderData(
   return normalized;
 }
 
+/** Read a subscription credential for the managed sign-in result. */
+export async function readProviderOAuthCredential(authRef: string): Promise<StoredOAuthCredential | null> {
+  const parsed = parseAuthRef(authRef);
+  if (!parsed || parsed.kind === 'env' || parsed.kind === 'none') return null;
+  return parseStoredOAuthCredential(await readStoredCredential(parsed));
+}
+
 /** Revoke the renewable ChatGPT session before clearing its local credential. */
 export async function revokeChatGptSession(authRef: string): Promise<boolean> {
   const parsed = parseAuthRef(authRef);
@@ -302,9 +310,9 @@ async function readOAuthProviderSecret(
       if (!raw) return null;
 
       const cred = parseStoredOAuthCredential(raw);
-      if (!cred) {
-        const decoded = decodeProviderSecret(raw);
-        return decoded === rejectedAccessToken ? null : decoded;
+      if (!cred) return null;
+      if ((providerId === 'openai' || providerId === 'openai-oauth') && !openAiRegistrationFromData(cred.providerData)) {
+        throw new Error('ChatGPT sign-in required: run clodex accounts login <account-id> (see clodex accounts list)');
       }
       cacheOAuthCredential(stateKey, cred);
 

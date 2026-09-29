@@ -1,3 +1,4 @@
+const testRegistration = {clientId: 'oaiapp_test', subject: 'fixture', idToken: 'fixture', scope: 'chatgpt.tokens.use.direct'};
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -9,6 +10,7 @@ vi.mock('../src/oauth/refresh.js', () => ({
   oauthCredentialShouldRefresh: vi.fn((credential: { access?: string }) => credential.access === 'old-access'),
   refreshStoredOAuthCredential: vi.fn(async () => ({
     type: 'oauth',
+    providerData: testRegistration,
     access: 'new-access',
     refresh: 'new-refresh',
     expires: Date.now() + 3_600_000,
@@ -36,6 +38,7 @@ let account = '';
 let authRef = '';
 const expiredCredential = oauthCredentialToKeychainJson({
   type: 'oauth',
+  providerData: testRegistration,
   access: 'old-access',
   refresh: 'old-refresh',
   expires: 0,
@@ -44,6 +47,7 @@ const expiredCredential = oauthCredentialToKeychainJson({
 function unexpiredCredential(access: string): string {
   return oauthCredentialToKeychainJson({
     type: 'oauth',
+    providerData: testRegistration,
     access,
     refresh: `${access}-refresh`,
     expires: Date.now() + 3_600_000,
@@ -73,6 +77,7 @@ describe('OAuth credential-store refresh', () => {
     delete process.env.CLODEX_KEY_OPENAI_OAUTH;
     asMocked(refreshStoredOAuthCredential).mockReset().mockResolvedValue({
       type: 'oauth',
+      providerData: testRegistration,
       access: 'new-access',
       refresh: 'new-refresh',
       expires: Date.now() + 3_600_000,
@@ -114,6 +119,7 @@ describe('OAuth credential-store refresh', () => {
   it('never decodes malformed OAuth JSON as a bearer token', async () => {
     await writeCredentialHelperAccount(account, JSON.stringify({
       type: 'oauth',
+      providerData: testRegistration,
       refresh: 'sensitive-refresh-value',
       expires: Date.now() + 3_600_000,
     }));
@@ -135,6 +141,7 @@ describe('OAuth credential-store refresh', () => {
       label: 'missing refresh token',
       credential: {
         type: 'oauth',
+        providerData: testRegistration,
         access: 'partial-access',
         expires: Date.now() + 3_600_000,
       },
@@ -143,6 +150,7 @@ describe('OAuth credential-store refresh', () => {
       label: 'missing expiration',
       credential: {
         type: 'oauth',
+        providerData: testRegistration,
         access: 'partial-access',
         refresh: 'sensitive-refresh-value',
       },
@@ -151,6 +159,7 @@ describe('OAuth credential-store refresh', () => {
       label: 'invalid rejection marker',
       credential: {
         type: 'oauth',
+        providerData: testRegistration,
         access: 'partial-access',
         refresh: 'sensitive-refresh-value',
         expires: Date.now() + 3_600_000,
@@ -161,15 +170,6 @@ describe('OAuth credential-store refresh', () => {
     await writeCredentialHelperAccount(account, JSON.stringify(credential));
 
     await expect(resolveProviderCredential('openai-oauth', authRef)).resolves.toBeNull();
-  });
-
-  it('preserves a complete well-known token credential', async () => {
-    await writeCredentialHelperAccount(account, JSON.stringify({
-      type: 'wellknown',
-      token: 'static-access',
-    }));
-
-    await expect(resolveProviderCredential('openai-oauth', authRef)).resolves.toBe('static-access');
   });
 
   it('round-trips a valid opaque JSON credential for a non-OAuth provider', async () => {
@@ -255,6 +255,7 @@ describe('OAuth credential-store refresh', () => {
       writeFileSync(`${storePath}.second-set`, '', { encoding: 'utf8', mode: 0o600 });
       return {
         type: 'oauth',
+        providerData: testRegistration,
         access: 'discarded-refresh-access',
         refresh: 'discarded-refresh-token',
         expires: Date.now() + 3_600_000,
@@ -279,6 +280,7 @@ describe('OAuth credential-store refresh', () => {
       generation += 1;
       await writeCredentialHelperAccount(account, oauthCredentialToKeychainJson({
         type: 'oauth',
+        providerData: testRegistration,
         access: 'old-access',
         refresh: `external-refresh-${generation}`,
         expires: 0,
@@ -287,6 +289,7 @@ describe('OAuth credential-store refresh', () => {
       writeFileSync(`${storePath}.second-set`, '', { encoding: 'utf8', mode: 0o600 });
       return {
         type: 'oauth',
+        providerData: testRegistration,
         access: `discarded-access-${generation}`,
         refresh: `discarded-refresh-${generation}`,
         expires: Date.now() + 3_600_000,
@@ -303,6 +306,7 @@ describe('OAuth credential-store refresh', () => {
   it('updates and clears the in-memory cache with explicit credential writes', async () => {
     const replacement = oauthCredentialToKeychainJson({
       type: 'oauth',
+      providerData: testRegistration,
       access: 'replacement-access',
       refresh: 'replacement-refresh',
       expires: Date.now() + 3_600_000,
@@ -384,6 +388,7 @@ describe('OAuth credential-store refresh', () => {
     await writeCredentialHelperAccount(account, unexpiredCredential('revoked-access'));
     asMocked(refreshStoredOAuthCredential).mockResolvedValue({
       type: 'oauth',
+      providerData: testRegistration,
       access: 'revoked-access',
       refresh: 'rotated-refresh',
       expires: Date.now() + 3_600_000,
@@ -406,6 +411,7 @@ describe('OAuth credential-store refresh', () => {
   it('does not replace one rejected access token with another rejected token', async () => {
     await writeCredentialHelperAccount(account, oauthCredentialToKeychainJson({
       type: 'oauth',
+      providerData: testRegistration,
       access: 'stored-rejected-access',
       refresh: 'stored-refresh',
       expires: Date.now() + 3_600_000,
@@ -413,6 +419,7 @@ describe('OAuth credential-store refresh', () => {
     }));
     asMocked(refreshStoredOAuthCredential).mockResolvedValue({
       type: 'oauth',
+      providerData: testRegistration,
       access: 'request-rejected-access',
       refresh: 'rotated-refresh',
       expires: Date.now() + 3_600_000,
@@ -440,6 +447,7 @@ describe('OAuth credential-store refresh', () => {
       await refreshGate;
       return {
         type: 'oauth',
+        providerData: testRegistration,
         access: 'new-access',
         refresh: 'new-refresh',
         expires: Date.now() + 3_600_000,
@@ -474,6 +482,7 @@ describe('OAuth credential-store refresh', () => {
       await refreshGate;
       return {
         type: 'oauth',
+        providerData: testRegistration,
         access: 'new-access',
         refresh: 'new-refresh',
         expires: Date.now() + 3_600_000,
@@ -508,6 +517,7 @@ describe('OAuth credential-store refresh', () => {
         writeFileSync(`${storePath}.second-set`, '', { encoding: 'utf8', mode: 0o600 });
         return {
           type: 'oauth',
+          providerData: testRegistration,
           access: 'joined-rejected-access',
           refresh: 'joined-refresh',
           expires: Date.now() + 3_600_000,
@@ -515,6 +525,7 @@ describe('OAuth credential-store refresh', () => {
       })
       .mockResolvedValueOnce({
         type: 'oauth',
+        providerData: testRegistration,
         access: 'final-access',
         refresh: 'final-refresh',
         expires: Date.now() + 3_600_000,
@@ -543,6 +554,7 @@ describe('OAuth credential-store refresh', () => {
       await refreshGate;
       return {
         type: 'oauth',
+        providerData: testRegistration,
         access: 'new-access',
         refresh: 'new-refresh',
         expires: Date.now() + 3_600_000,

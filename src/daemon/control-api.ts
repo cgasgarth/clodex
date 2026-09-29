@@ -27,6 +27,7 @@ export interface DaemonAccountView {
   name?: string;
   email?: string;
   selected: boolean;
+  requiresSignIn?: boolean;
   plan?: string;
   usage?: object;
 }

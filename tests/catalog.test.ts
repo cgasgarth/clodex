@@ -246,27 +246,6 @@ describe('localModelToRoute', () => {
     resolveSpy.mockRestore();
   });
 
-  it('propagates the Responses-Lite capability flag onto the route', () => {
-    const provider: LocalProvider = {
-      id: 'openai-oauth',
-      name: 'OpenAI OAuth (ChatGPT)',
-      apiKey: 'oauth-token',
-      authType: 'oauth',
-      models: [{
-        id: 'gpt-5.6-luna',
-        name: 'GPT-5.6 Luna',
-        family: 'gpt',
-        brand: 'GPT',
-        modelFormat: 'openai',
-        upstreamModelId: 'gpt-5.6-luna',
-        npm: '@ai-sdk/openai',
-        useResponsesLite: true,
-      }],
-    };
-    const route = localModelToRoute(provider, provider.models[0]!);
-    expect(route).toMatchObject({ useResponsesLite: true });
-  });
-
   it('passes through custom endpoint headers for catalog routes', () => {
     const provider: LocalProvider = {
       id: 'custom-zai',

@@ -6,7 +6,7 @@ import { wrapLanguageModel, extractReasoningMiddleware } from 'ai';
 import type { FetchFunction, ProviderOptions } from '@ai-sdk/provider-utils';
 import type { ProviderDataValue } from './types.js';
 import { OPENAI_RESPONSES_WS_URL } from './constants.js';
-import { extractOpenAiAccountId, requireChatGptPlanToken } from './oauth/openai.js';
+import { requireChatGptPlanToken } from './oauth/openai.js';
 import {
   createResponsesWebSocketFetch,
   type ResponsesWebSocketDiagnosticEvent,
@@ -198,11 +198,8 @@ export async function createLanguageModel(
     const createOpenAI = dependencies.createOpenAI
       ?? (await import('@ai-sdk/openai')).createOpenAI;
     const useResponsesEndpoint = shouldUseOpenAiResponsesEndpoint(modelId);
-    const tokenAccountId = spec.authType === 'oauth'
-      ? extractOpenAiAccountId({ access_token: apiKey })?.trim()
-      : undefined;
     const accountId = spec.authType === 'oauth'
-      ? tokenAccountId || spec.oauthAccountId
+      ? spec.oauthAccountId
       : undefined;
     let checkpointStore: ResponsesCheckpointStore | undefined;
     if (

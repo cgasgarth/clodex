@@ -105,18 +105,9 @@ function formatCents(value: number | undefined): string {
   return value === undefined ? 'unknown' : `$${(value / 100).toFixed(2)}`;
 }
 
-function AccountUsageDetails({ usage, providerId }: { usage: NonNullable<Account['usage']>; providerId: string }): React.ReactNode {
-  if (providerId === 'openai-oauth') {
-    return <Box paddingLeft={4}><TerminalLink href="https://chatgpt.com/settings/usage">Manage ChatGPT plan limits and credits</TerminalLink></Box>;
-  }
+function AccountUsageDetails({ usage }: { usage: NonNullable<Account['usage']> }): React.ReactNode {
   return (
     <Box paddingLeft={4} flexDirection="column">
-      {usage.primaryUsedPercent !== undefined && (
-        <UsageBar label="5-hour" used={usage.primaryUsedPercent} resetAt={usage.primaryResetAt} />
-      )}
-      {usage.weeklyUsedPercent !== undefined && (
-        <UsageBar label="weekly" used={usage.weeklyUsedPercent} resetAt={usage.weeklyResetAt} />
-      )}
       {usage.limitUsedPercent !== undefined && (
         <UsageBar
           label={usage.limitPeriod ?? 'usage'}
@@ -217,6 +208,7 @@ function Dashboard(): React.ReactNode {
   const [pendingLogoutId, setPendingLogoutId] = useState<string>();
   const [pendingRestart, setPendingRestart] = useState(false);
   const [deviceCode, setDeviceCode] = useState<DeviceCodePrompt>();
+  const [signInResult, setSignInResult] = useState<{ ok: boolean; text: string }>();
   const [secondwindAction, setSecondwindAction] = useState(false);
   const [pendingSecondwindMode, setPendingSecondwindMode] = useState<SecondwindMode>();
   const [nativeCompactionAction, setNativeCompactionAction] = useState(false);
@@ -313,9 +305,12 @@ function Dashboard(): React.ReactNode {
     if (accountAction) return;
     setAccountAction(true);
     setDeviceCode(undefined);
+    setSignInResult(undefined);
     const providerName = providerId === 'openai-oauth' ? 'OpenAI' : 'xAI';
     setMessage(`Starting ${providerName} sign-in…`);
+    const reauthAccount = accounts[selectedIndex];
     loginProviderAccount(providerId, {
+      ...(reauthAccount?.providerId === providerId && reauthAccount.requiresSignIn && { reauthenticate: reauthAccount.id }),
       onDeviceCode: ({ url, userCode }) => {
         setDeviceCode({ url, userCode });
         setMessage(`Browser opened; complete ${providerName} sign-in below.`);
@@ -323,17 +318,19 @@ function Dashboard(): React.ReactNode {
     }).then(
       account => {
         setDeviceCode(undefined);
+        setSignInResult({ ok: true, text: `Authorization saved for ${account.email}` });
         setMessage(`Signed in as ${account.email}`);
         void Promise.allSettled([refresh(), refreshUsage()])
           .finally(() => setAccountAction(false));
       },
       error => {
         setDeviceCode(undefined);
+        setSignInResult({ ok: false, text: `Sign-in was not saved: ${error instanceof Error ? error.message : String(error)}` });
         setAccountAction(false);
         setMessage(error instanceof Error ? error.message : String(error));
       },
     );
-  }, [accountAction, refresh, refreshUsage]);
+  }, [accountAction, accounts, selectedIndex, refresh, refreshUsage]);
 
   const setSecondwindMode = useCallback((mode: SecondwindMode) => {
     if (secondwindAction || secondwind?.mode === mode) return;
@@ -713,8 +710,11 @@ function Dashboard(): React.ReactNode {
                   <Text color="cyan">
                     ● {account.name ?? account.providerId} · {accountDisplayName(account)}
                     {account.plan ? ` · ${account.plan}` : ''}
+                    {account.requiresSignIn ? ' · sign-in required' : ''}
                   </Text>
-                  {account.usage && <AccountUsageDetails usage={account.usage} providerId={account.providerId} />}
+                  {account.providerId === 'openai-oauth'
+                    ? <Box paddingLeft={4}><TerminalLink href="https://chatgpt.com/settings/usage">Manage ChatGPT plan limits and credits</TerminalLink></Box>
+                    : account.usage && <AccountUsageDetails usage={account.usage} />}
                 </Box>
               ))}
         </Box>
@@ -824,19 +824,25 @@ function Dashboard(): React.ReactNode {
                       <Text color={index === selectedIndex ? 'cyan' : undefined}>
                         {index === selectedIndex ? '›' : ' '} {account.selected ? '●' : '○'} {accountDisplayName(account)}
                         {account.plan ? ` · ${account.plan}` : ''}
+                        {account.requiresSignIn ? ' · sign-in required' : ''}
                       </Text>
-                      {account.usage && <AccountUsageDetails usage={account.usage} providerId={group.providerId} />}
+                      {account.providerId === 'openai-oauth'
+                        ? <Box paddingLeft={4}><TerminalLink href="https://chatgpt.com/settings/usage">Manage ChatGPT plan limits and credits</TerminalLink></Box>
+                        : account.usage && <AccountUsageDetails usage={account.usage} />}
                     </Box>
                   ))}
                 </Box>
               ))}
         </Box>
-        {deviceCode && (
-          <Box borderStyle="round" borderColor="yellow" paddingX={1} flexDirection="column">
+        {(deviceCode || signInResult) && (
+          <Box borderStyle="round" borderColor={signInResult ? signInResult.ok ? 'green' : 'red' : 'yellow'} paddingX={1} flexDirection="column">
             <Text bold color="yellow">Subscription sign-in</Text>
+            {signInResult && <Text color={signInResult.ok ? 'green' : 'red'}>{signInResult.text}</Text>}
+            {deviceCode && <>
             <Text>{deviceCodeInstruction(deviceCode)}</Text>
             <TerminalLink href={deviceCode.url}>{deviceCode.userCode ? 'Open subscription sign-in' : 'Continue with ChatGPT'}</TerminalLink>
             <Text dimColor>{deviceCode.userCode ? 'The code stays visible until sign-in finishes.' : 'The link stays available until sign-in finishes.'}</Text>
+            </>}
           </Box>
         )}
       </>

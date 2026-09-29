@@ -7,8 +7,6 @@ import pkg from '../package.json' with { type: 'json' };
 // Responses models so connection-local previous_response_id continuation
 // remains available.
 export const OPENAI_RESPONSES_WS_URL = 'wss://api.openai.com/v1/responses';
-// OpenAI-Beta opt-in for the WebSocket Responses transport.
-export const CODEX_RESPONSES_WEBSOCKETS_BETA = 'responses_websockets=2026-02-06';
 
 // These must be removed from the child process environment to avoid conflicts
 // with Vertex AI, Bedrock, AWS, Foundry, and any stale Anthropic config.

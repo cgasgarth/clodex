@@ -1,6 +1,5 @@
 import { describe, expect, it, vi, afterEach } from 'bun:test';
 import { accessTokenIsExpiring, oauthCredentialNeedsRefresh, tokensToStoredCredential } from '../src/oauth/types.js';
-import { extractOpenAiAccountId } from '../src/oauth/openai.js';
 import { postOAuthRefresh } from '../src/oauth/refresh-http.js';
 import { oauthCredentialShouldRefresh, refreshStoredOAuthCredential } from '../src/oauth/refresh.js';
 import { advanceTestTimersByTime, restoreTestGlobals, stubTestGlobal } from './test-helpers.js';
@@ -164,16 +163,6 @@ describe('oauth refresh http', () => {
     await advanceTestTimersByTime(1);
     expect(signal.aborted).toBe(true);
     await expect(rejection).resolves.toMatchObject({ name: 'TimeoutError' });
-  });
-});
-
-
-describe('openai oauth helpers', () => {
-  it('extracts account id from jwt', () => {
-    const header = Buffer.from('{}').toString('base64url');
-    const payload = Buffer.from(JSON.stringify({ client_id: 'user-123' })).toString('base64url');
-    const id = extractOpenAiAccountId({ access_token: `${header}.${payload}.x`, refresh_token: 'r' });
-    expect(id).toBe('user-123');
   });
 });
 

@@ -37,12 +37,9 @@ export interface Account {
   name?: string;
   email?: string;
   selected: boolean;
+  requiresSignIn?: boolean;
   plan?: string;
   usage?: {
-    primaryUsedPercent?: number;
-    primaryResetAt?: number;
-    weeklyUsedPercent?: number;
-    weeklyResetAt?: number;
     limitUsedPercent?: number;
     limitResetAt?: number;
     limitPeriod?: 'weekly' | 'monthly' | 'usage';

@@ -495,32 +495,6 @@ describe('createLanguageModel', () => {
     expect(getResponsesCheckpointStore).toHaveBeenCalledOnce();
   });
 
-  it('prefers the current OpenAI OAuth token account claim over stored metadata', async () => {
-    const responses = vi.fn((modelId: string) => ({ modelId, provider: 'openai-responses' }));
-    const chat = vi.fn((modelId: string) => ({ modelId, provider: 'openai-chat' }));
-    const createOpenAI = vi.fn(() => ({ responses, chat }));
-
-    const header = Buffer.from('{}').toString('base64url');
-    const payload = Buffer.from(JSON.stringify({ client_id: 'acct-123', scope: 'chatgpt.tokens.use.direct' })).toString('base64url');
-    const accessToken = `${header}.${payload}.sig`;
-
-    await createLanguageModel({
-      npm: '@ai-sdk/openai',
-      modelId: 'gpt-5.5',
-      apiKey: accessToken,
-      authType: 'oauth',
-      oauthAccountId: 'stored-acct-456',
-    }, { createOpenAI: /* SAFETY: The mock implements the required provider factory. */ createOpenAI as never });
-
-    expect(createOpenAI).toHaveBeenCalledWith({
-      apiKey: accessToken,
-      baseURL: 'https://api.openai.com/v1',
-      fetch: expect.any(Function),
-      headers: {},
-    });
-    expect(responses).toHaveBeenCalledWith('gpt-5.5');
-  });
-
   it('installs credential-header stripping for anonymous OpenAI providers', async () => {
     const responses = vi.fn((modelId: string) => ({ modelId, provider: 'openai-responses' }));
     const chat = vi.fn((modelId: string) => ({ modelId, provider: 'openai-chat' }));

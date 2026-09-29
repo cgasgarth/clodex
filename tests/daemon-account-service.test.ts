@@ -31,6 +31,7 @@ describe('DaemonAccountService launch tickets', () => {
     const one = store.add({ label: 'One', authRef: 'keyring:one' });
     const two = store.add({ label: 'Two', authRef: 'keyring:two' });
     const service = new DaemonAccountService(store, {
+      resolveProviderData: async authRef => ({clientId: authRef, subject: 'fixture', idToken: 'fixture', scope: 'chatgpt.tokens.use.direct'}),
       resolveCredential: async (_providerId, authRef) => `${authRef}-token`,
     });
     const launch = service.createLaunchTicket()!;
@@ -77,6 +78,7 @@ describe('DaemonAccountService launch tickets', () => {
     );
     const account = store.add({ label: 'Plain Claude', authRef: 'keyring:plain' });
     const service = new DaemonAccountService(store, {
+      resolveProviderData: async authRef => ({clientId: authRef, subject: 'fixture', idToken: 'fixture', scope: 'chatgpt.tokens.use.direct'}),
       resolveCredential: async (_providerId, authRef) => `${authRef}-token`,
     });
     const route = {
@@ -95,92 +97,6 @@ describe('DaemonAccountService launch tickets', () => {
         apiKey: 'keyring:plain-token',
         metricsAccountId: account.id,
       }));
-  });
-
-  it('switches a default launch to a healthy account with remaining usage', async () => {
-    const store = new DaemonAccountStore(
-      { CLODEX_HOME: root },
-      join(root, 'accounts.json'),
-    );
-    const exhausted = store.add({ label: 'Exhausted', authRef: 'keyring:exhausted' });
-    store.add({ label: 'Also exhausted', authRef: 'keyring:also-exhausted' });
-    const healthy = store.add({ label: 'Healthy', authRef: 'keyring:healthy' });
-    const checkedTokens: string[] = [];
-    const service = new DaemonAccountService(store, {
-      resolveCredential: async (_providerId, authRef) => `${authRef}-token`,
-      resolveAccountId: async () => undefined,
-      fetchUsage: async token => {
-        checkedTokens.push(token);
-        return {
-          fetchedAt: '2026-09-03T00:00:00.000Z',
-          primary: {
-            usedPercent: token.includes('also-exhausted') ? 100 : 25,
-            resetAt: 2_000_000_000,
-            limitWindowSeconds: 18_000,
-          },
-          additional: [],
-        };
-      },
-    });
-    withRegistryWriteLockSync(() => saveRegistry({ schemaVersion: 1, providers: [] }));
-    service.setAutoSwitchOnUsageLimit(true);
-    const route = {
-      aliasId: 'claude-sol',
-      realModelId: 'gpt-5.6-sol',
-      displayName: 'Sol',
-      upstreamUrl: 'https://example.test',
-      apiKey: 'boot-token',
-      modelFormat: 'openai' as const,
-      providerId: 'openai-oauth',
-      authType: 'oauth' as const,
-    };
-    const launch = service.createLaunchTicket()!;
-    const resolved = await service.routeForTicket(route, launch.ticket);
-
-    const replacement = await resolved.usageLimitFailover?.();
-
-    expect(resolved.metricsAccountId).toBe(exhausted.id);
-    expect(checkedTokens).toEqual([
-      'keyring:also-exhausted-token',
-      'keyring:healthy-token',
-    ]);
-    expect(replacement).toMatchObject({
-      apiKey: 'keyring:healthy-token',
-      metricsAccountId: healthy.id,
-    });
-    expect(store.selected()?.id).toBe(healthy.id);
-    expect(service.settings()).toEqual({ autoSwitchOnUsageLimit: true });
-  });
-
-  it('keeps auto-switch on by default and does not attach it to a pinned launch', async () => {
-    const store = new DaemonAccountStore(
-      { CLODEX_HOME: root },
-      join(root, 'accounts.json'),
-    );
-    const selected = store.add({ label: 'Selected', authRef: 'keyring:selected' });
-    store.add({ label: 'Other', authRef: 'keyring:other' });
-    const service = new DaemonAccountService(store, {
-      resolveCredential: async (_providerId, authRef) => `${authRef}-token`,
-    });
-    const route = {
-      aliasId: 'claude-sol',
-      realModelId: 'gpt-5.6-sol',
-      displayName: 'Sol',
-      upstreamUrl: 'https://example.test',
-      apiKey: 'boot-token',
-      modelFormat: 'openai' as const,
-      providerId: 'openai-oauth',
-      authType: 'oauth' as const,
-    };
-    const defaultRoute = await service.routeForTicket(route, service.createLaunchTicket()!.ticket);
-    const pinnedRoute = await service.routeForTicket(
-      route,
-      service.createLaunchTicket(selected.id)!.ticket,
-    );
-
-    expect(service.settings()).toEqual({ autoSwitchOnUsageLimit: true });
-    expect(defaultRoute.usageLimitFailover).toBeFunction();
-    expect(pinnedRoute.usageLimitFailover).toBeUndefined();
   });
 
   it('validates durable tickets after a daemon restart and rejects tampering', () => {
@@ -205,6 +121,7 @@ describe('DaemonAccountService launch tickets', () => {
     const one = store.add({ label: 'One', authRef: 'keyring:one' });
     const two = store.add({ label: 'Two', authRef: 'keyring:two' });
     const service = new DaemonAccountService(store, {
+      resolveProviderData: async authRef => ({clientId: authRef, subject: 'fixture', idToken: 'fixture', scope: 'chatgpt.tokens.use.direct'}),
       resolveCredential: async (_providerId, authRef) => (
         authRef === two.authRef ? 'selected-account-token' : null
       ),
@@ -238,6 +155,7 @@ describe('DaemonAccountService launch tickets', () => {
     );
     const account = store.add({ label: 'One', authRef: 'keyring:one' });
     const service = new DaemonAccountService(store, {
+      resolveProviderData: async authRef => ({clientId: authRef, subject: 'fixture', idToken: 'fixture', scope: 'chatgpt.tokens.use.direct'}),
       resolveCredential: async () => 'account-token',
     });
     const launch = service.createLaunchTicket(account.id);
@@ -271,6 +189,7 @@ describe('DaemonAccountService launch tickets', () => {
       authRef: 'keyring:xai',
     });
     const service = new DaemonAccountService(store, {
+      resolveProviderData: async authRef => ({clientId: authRef, subject: 'fixture', idToken: 'fixture', scope: 'chatgpt.tokens.use.direct'}),
       resolveCredential: async (_providerId, authRef) => `${authRef}-token`,
     });
     const launch = service.createLaunchTicket(openAi.id, 'fast')!;
@@ -311,7 +230,7 @@ describe('DaemonAccountService launch tickets', () => {
     });
   });
 
-  it('imports SuperGrok as a managed provider account and shows its usage', async () => {
+  it('shows usage for a managed SuperGrok account', async () => {
     withRegistryWriteLockSync(() => saveRegistry({
       schemaVersion: 1,
       providers: [{
@@ -329,7 +248,9 @@ describe('DaemonAccountService launch tickets', () => {
       { CLODEX_HOME: root },
       join(root, 'accounts.json'),
     );
+    store.add({providerId: 'xai-oauth', label: 'SuperGrok', authRef: 'keyring:xai'});
     const service = new DaemonAccountService(store, {
+      resolveProviderData: async authRef => ({clientId: authRef, subject: 'fixture', idToken: 'fixture', scope: 'chatgpt.tokens.use.direct'}),
       resolveCredential: async (providerId) => providerId === 'xai-oauth' ? 'xai-token' : null,
       fetchXaiUsage: async () => ({
         fetchedAt: '2026-08-12T00:00:00.000Z',
@@ -375,6 +296,7 @@ describe('DaemonAccountService launch tickets', () => {
       authRef: 'keyring:xai-two',
     });
     const service = new DaemonAccountService(store, {
+      resolveProviderData: async authRef => ({clientId: authRef, subject: 'fixture', idToken: 'fixture', scope: 'chatgpt.tokens.use.direct'}),
       resolveCredential: async (_providerId, authRef) => `${authRef}-token`,
     });
     const launch = service.createLaunchTicket();

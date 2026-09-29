@@ -7,7 +7,6 @@ import { streamText } from 'ai';
 import {
   OPENAI_RESPONSES_WS_URL,
 } from '../src/constants.js';
-import { extractOpenAiAccountId } from '../src/oauth/openai.js';
 import { compactResponsesWindow } from '../src/oauth/responses-compaction.js';
 import { createResponsesWebSocketFetch } from '../src/oauth/responses-websocket.js';
 import type { ResponsesWebSocketDiagnosticEvent } from '../src/oauth/responses-websocket.js';
@@ -71,7 +70,6 @@ interface WireEvent {
 interface ProbeHeaders {
   [key: string]: string;
   Authorization: string;
-  originator: string;
 }
 
 type SyntheticInputItem = {
@@ -197,25 +195,21 @@ function openAiOAuthProvider(providers: LocalProvider[]): LocalProvider {
 }
 
 function targetModels(provider: LocalProvider): LocalProviderModel[] {
-  const ids = new Set(['gpt-5.6-sol', 'gpt-5.6-luna']);
+  const ids = new Set(['gpt-6.1-sol', 'gpt-5.6-luna']);
   const models = provider.models.filter(model => (
     model.npm === '@ai-sdk/openai'
     && ids.has(model.upstreamModelId)
   ));
   if (models.length === 0) {
-    throw new Error('Neither gpt-5.6-sol nor gpt-5.6-luna is available in the OpenAI OAuth provider');
+    throw new Error('Neither gpt-6.1-sol nor gpt-5.6-luna is available in the OpenAI OAuth provider');
   }
   return models;
 }
 
 function probeHeaders(provider: LocalProvider): ProbeHeaders {
-  const accountId = extractOpenAiAccountId({ access_token: provider.apiKey })?.trim()
-    || provider.oauthAccountId?.trim();
   const headers: ProbeHeaders = {
     Authorization: `Bearer ${provider.apiKey}`,
-    originator: 'clodex-compaction-probe',
   };
-  if (accountId) headers['ChatGPT-Account-Id'] = accountId;
   return headers;
 }
 
@@ -509,11 +503,11 @@ async function main(): Promise<void> {
     for (const model of models) {
       // The second identical Sol call validates prompt-cache reuse. Luna gets
       // one capability check to keep the live probe small.
-      const attempts = model.upstreamModelId === 'gpt-5.6-sol' ? 2 : 1;
+      const attempts = model.upstreamModelId === 'gpt-6.1-sol' ? 2 : 1;
       results.push(...await probeModel(provider, model, attempts));
     }
   }
-  const sol = models.find(model => model.upstreamModelId === 'gpt-5.6-sol');
+  const sol = models.find(model => model.upstreamModelId === 'gpt-6.1-sol');
   if (sol && (mode === 'all' || mode === 'context_management')) {
     results.push(await probeContextManagement(provider, sol));
   }

@@ -253,29 +253,6 @@ beforeEach(() => {
     fakeSockets.length = 0;
   });
 
-  it('forwards request headers and adds the WebSocket beta header on the upgrade', async () => {
-    const wsFetch = createResponsesWebSocketFetch(WS_URL);
-    await wsFetch('https://chatgpt.com/backend-api/codex/responses', {
-      method: 'POST',
-      headers: {
-        Authorization: 'Bearer tok',
-        'ChatGPT-Account-Id': 'acct-123',
-        originator: 'clodex',
-        version: '0.153.3',
-        'x-openai-internal-codex-responses-lite': 'true',
-      },
-      body: JSON.stringify({ model: 'gpt-5.6-luna', input: [] }),
-    });
-
-    const headers = lastSocket().options.headers ?? {};
-    expect(lastSocket().url).toBe(WS_URL);
-    expect(headers['Authorization']).toBe('Bearer tok');
-    expect(headers['ChatGPT-Account-Id']).toBe('acct-123');
-    expect(headers['version']).toBe('0.153.3');
-    expect(headers['x-openai-internal-codex-responses-lite']).toBe('true');
-    expect(headers['OpenAI-Beta']).toContain('responses_websockets');
-  });
-
   it('collapses each frame onto a single SSE data line and closes on response.completed', async () => {
     const wsFetch = createResponsesWebSocketFetch(WS_URL);
     const res = await wsFetch('https://x', {

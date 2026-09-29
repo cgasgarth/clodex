@@ -1,6 +1,6 @@
 // Sign in with ChatGPT for open-source, locally hosted apps.
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
-import { createServer } from 'node:http';
+import { createServer, type ServerResponse } from 'node:http';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createRemoteJWKSet, decodeJwt, jwtVerify, type JWTVerifyGetKey } from 'jose';
@@ -23,7 +23,8 @@ export interface OpenAiRegistration {
 }
 
 export function openAiRegistrationFromData(data?: Record<string, ProviderDataValue>): OpenAiRegistration | undefined {
-  if (!isString(data?.clientId) || !isString(data.subject) || !isString(data.idToken)) return undefined;
+  if (!isString(data?.clientId) || !isString(data.subject) || !isString(data.idToken)
+    || !isString(data.scope) || !data.scope.split(' ').includes('chatgpt.tokens.use.direct')) return undefined;
   return { clientId: data.clientId, subject: data.subject, idToken: data.idToken };
 }
 
@@ -39,21 +40,6 @@ function hostId(): string {
   const id = readFileSync(path, 'utf8').trim();
   if (!/^urn:uuid:[0-9a-f-]{36}$/i.test(id)) throw new Error('Invalid Clodex ChatGPT host ID');
   return id;
-}
-
-// Access-token fields are routing metadata. OpenAI verifies the bearer credential.
-export function extractOpenAiAccountId(tokens: Partial<OAuthTokenResponse>): string | undefined {
-  try {
-    const claims = decodeJwt(tokens.access_token ?? tokens.id_token ?? '');
-    return isString(claims.client_id) ? claims.client_id : claims.sub;
-  } catch { return undefined; }
-}
-
-export function extractOpenAiEmail(tokens: Partial<OAuthTokenResponse>): string | undefined {
-  try {
-    const claims = decodeJwt(tokens.id_token ?? tokens.access_token ?? '');
-    return isString(claims.email) ? claims.email.trim().toLowerCase() : undefined;
-  } catch { return undefined; }
 }
 
 export function requireChatGptPlanToken(accessToken: string): void {
@@ -95,6 +81,7 @@ export async function runOpenAiSignIn(
   if (!address || isString(address)) throw new Error('Could not start ChatGPT sign-in callback');
   const redirectUri = `http://127.0.0.1:${address.port}/auth/callback`;
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let browserResponse: ServerResponse | undefined;
   try {
     const result = await new Promise<{ code: string; clientId: string }>((resolve, reject) => {
       timer = setTimeout(() => reject(new Error('ChatGPT sign-in timed out')), 5 * 60_000);
@@ -112,7 +99,7 @@ export async function runOpenAiSignIn(
           reject(new Error('ChatGPT authorization was declined or the registration was incomplete'));
           return;
         }
-        response.writeHead(200, { 'Content-Type': 'text/plain' }).end('Sign-in received. Return to Clodex.');
+        browserResponse = response;
         resolve({ code, clientId });
       });
       const authUrl = new URL(`${ISSUER}/api/accounts/authorize`);
@@ -141,12 +128,25 @@ export async function runOpenAiSignIn(
     const identity = await validateChatGptTokens(tokens, result.clientId, nonce);
     if (registration && identity.sub !== registration.subject) throw new Error('ChatGPT sign-in returned a different account');
     const email = isString(identity.email) ? identity.email.trim().toLowerCase() : undefined;
+    browserResponse?.writeHead(200, { 'Content-Type': 'text/plain' }).end('Authorization verified. Return to Clodex and check for the Authorization saved message.');
     return {
       tokens, accountId: result.clientId, email,
       providerData: { clientId: result.clientId, subject: identity.sub!, idToken: tokens.id_token!, scope: tokens.scope!, ...(email && { email }) },
     };
+  } catch (error) {
+    if (browserResponse && !browserResponse.writableEnded) {
+      browserResponse.writeHead(400, { 'Content-Type': 'text/plain' }).end('Clodex sign-in did not finish. See the sign-in error in Clodex and try again.');
+    }
+    throw error;
   } finally {
     clearTimeout(timer);
+    if (browserResponse && !browserResponse.writableFinished && !browserResponse.destroyed) {
+      const response = browserResponse;
+      await new Promise<void>(resolve => {
+        response.once('finish', resolve);
+        response.once('close', resolve);
+      });
+    }
     callback.closeAllConnections();
     await new Promise<void>(resolve => callback.close(() => resolve()));
   }

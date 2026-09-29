@@ -1,4 +1,3 @@
-import { CODEX_RESPONSES_WEBSOCKETS_BETA } from '../../../constants.js';
 import { isObject } from '../../../runtime/type-guards.js';
 import type {
   JsonObject,
@@ -49,7 +48,6 @@ export function prepareResponsesRequest(
   options: ResponsesWebSocketFetchOptions,
 ) {
   const headers = toHeaderRecord(init?.headers);
-  headers['OpenAI-Beta'] = CODEX_RESPONSES_WEBSOCKETS_BETA;
 
   let payload: JsonObject;
   try {

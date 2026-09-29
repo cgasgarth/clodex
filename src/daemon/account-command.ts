@@ -14,8 +14,6 @@ import {
   saveProviderCredential,
 } from '../config/environment.js';
 import {
-  extractOpenAiAccountId,
-  extractOpenAiEmail,
   runOpenAiSignIn,
   openAiRegistrationFromData,
 } from '../oauth/openai.js';
@@ -32,7 +30,6 @@ import {
 } from './account-store.js';
 import {
   DaemonAccountService,
-  migrateLegacyOAuthAccounts,
   providerDisplayName,
   syncManagedProviderCredential,
 } from './account-service.js';
@@ -57,12 +54,6 @@ account launches remain pinned. Capacity and authentication failures never switc
 accounts.`;
 }
 
-function storeWithMigration(): DaemonAccountStore {
-  const store = new DaemonAccountStore();
-  migrateLegacyOAuthAccounts(store);
-  return store;
-}
-
 function accountIdentity(account: { email?: string; label?: string }): string {
   return account.email ?? account.label ?? 'Email unavailable';
 }
@@ -74,7 +65,7 @@ export async function loginProviderAccount(
     reauthenticate?: string;
   } = {},
 ): Promise<{ id: string; email: string; providerId: ManagedOAuthProviderId }> {
-  const store = storeWithMigration();
+  const store = new DaemonAccountStore();
   if (!options.reauthenticate && store.list(providerId).length >= MAX_DAEMON_ACCOUNTS) {
     throw new Error(`Clodex supports at most ${MAX_DAEMON_ACCOUNTS} managed ${providerDisplayName(providerId)} accounts`);
   }
@@ -106,7 +97,7 @@ export async function loginProviderAccount(
   }
   const email = emailValue.trim().toLowerCase();
   const resultAccountId = providerId === 'openai-oauth'
-    ? result.accountId ?? extractOpenAiAccountId(result.tokens)
+    ? result.accountId
     : xaiIdentity?.accountId;
   const existingIdentities = await Promise.all(store.list(providerId).map(async account => {
     const token = await resolveProviderCredential(providerId, account.authRef).catch(() => null);
@@ -116,14 +107,8 @@ export async function loginProviderAccount(
     return {
       account,
       credentialAvailable: Boolean(token),
-      email: account.email?.toLowerCase()
-        ?? (providerId === 'openai-oauth' && token
-          ? extractOpenAiEmail({ access_token: token })
-          : storedXaiIdentity?.email),
-      accountId: account.accountId
-        ?? (providerId === 'openai-oauth' && token
-          ? extractOpenAiAccountId({ access_token: token })
-          : xaiIdentity?.accountId),
+      email: account.email?.toLowerCase() ?? storedXaiIdentity?.email,
+      accountId: account.accountId ?? storedXaiIdentity?.accountId,
     };
   }));
   const existing = existingIdentities.find(identity => registrations[0]
@@ -217,7 +202,7 @@ export async function loginProviderAccount(
 }
 
 export async function logoutProviderAccount(idOrEmail: string): Promise<string> {
-  const store = storeWithMigration();
+  const store = new DaemonAccountStore();
   const account = store.remove(idOrEmail);
   const revoked = account.providerId !== 'openai-oauth' || await revokeChatGptSession(account.authRef);
   const deleted = await deleteProviderCredential(account.authRef);
@@ -239,7 +224,7 @@ async function printAccounts(store: DaemonAccountStore): Promise<void> {
   }
   for (const account of accounts) {
     const selected = account.selected ? pc.green('●') : pc.dim('○');
-    console.log(`  ${selected} ${pc.bold(accountIdentity(account))} ${pc.dim(`${account.providerId} · ${account.id}`)}`);
+    console.log(`  ${selected} ${pc.bold(accountIdentity(account))} ${pc.dim(`${account.providerId} · ${account.id}`)}${account.requiresSignIn ? ' · sign-in required' : ''}`);
   }
 }
 
@@ -273,7 +258,7 @@ async function printUsage(store: DaemonAccountStore, idOrLabel?: string): Promis
 export async function runAccountsCommand(args: string[]): Promise<number> {
   const [command = 'list', ...rest] = args.filter(arg => arg !== '--help' && arg !== '-h');
   let value = rest.join(' ').trim();
-  const store = storeWithMigration();
+  const store = new DaemonAccountStore();
   try {
     if (command === 'list') {
       await printAccounts(store);
