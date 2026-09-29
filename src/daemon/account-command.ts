@@ -3,7 +3,6 @@ import pc from 'picocolors';
 import * as p from '@clack/prompts';
 import open from 'open';
 import { link } from 'ansi-escapes';
-import { isString } from '../runtime/type-guards.js';
 import { credentialInstanceAuthRef } from '../credentials/helper.js';
 import {
   deleteProviderCredential,
@@ -17,7 +16,6 @@ import {
   runOpenAiSignIn,
   openAiRegistrationFromData,
 } from '../oauth/openai.js';
-import { runXaiDeviceCodeFlow } from '../oauth/xai.js';
 import {
   oauthCredentialToKeychainJson,
   tokensToStoredCredential,
@@ -33,7 +31,6 @@ import {
   providerDisplayName,
   syncManagedProviderCredential,
 } from './account-service.js';
-import { fetchXaiIdentity, fetchXaiUsage } from './xai-usage.js';
 import { refreshProviderModels } from '../registry/refresh-models.js';
 
 export function accountsHelpText(): string {
@@ -41,7 +38,7 @@ export function accountsHelpText(): string {
 
 ${pc.bold('Usage:')}
   clodex accounts list
-  clodex accounts add [openai|xai]
+  clodex accounts add [openai]
   clodex accounts login <email-or-id>
   clodex accounts select <email-or-id>
   clodex accounts remove <email-or-id>
@@ -49,9 +46,8 @@ ${pc.bold('Usage:')}
 
 Up to ${MAX_DAEMON_ACCOUNTS} accounts per provider can be stored. Selection sets
 that provider's account for the next request from new and existing default-account
-launches. The Accounts dashboard can enable usage-limit auto-switch. Explicit
-account launches remain pinned. Capacity and authentication failures never switch
-accounts.`;
+launches. Explicit account launches remain pinned. Plan limits and authentication
+failures do not switch accounts.`;
 }
 
 function accountIdentity(account: { email?: string; label?: string }): string {
@@ -61,60 +57,36 @@ function accountIdentity(account: { email?: string; label?: string }): string {
 export async function loginProviderAccount(
   providerId: ManagedOAuthProviderId,
   options: {
-    onDeviceCode?: (info: { url: string; userCode?: string }) => void;
+    onAuthorization?: (info: { url: string }) => void;
     reauthenticate?: string;
   } = {},
 ): Promise<{ id: string; email: string; providerId: ManagedOAuthProviderId }> {
   const store = new DaemonAccountStore();
-  if (!options.reauthenticate && store.list(providerId).length >= MAX_DAEMON_ACCOUNTS) {
-    throw new Error(`Clodex supports at most ${MAX_DAEMON_ACCOUNTS} managed ${providerDisplayName(providerId)} accounts`);
+  if (!options.reauthenticate && store.list().length >= MAX_DAEMON_ACCOUNTS) {
+    throw new Error(`Clodex supports at most ${MAX_DAEMON_ACCOUNTS} managed ${providerDisplayName()} accounts`);
   }
-  const registrations = options.reauthenticate ? store.list(providerId).filter(account =>
+  const registrations = options.reauthenticate ? store.list().filter(account =>
     account.id === options.reauthenticate || account.email === options.reauthenticate) : [];
   if (options.reauthenticate && registrations.length !== 1) throw new Error('Select one account by its ID with clodex accounts list');
   const previousData = registrations[0]
     ? await resolveProviderOAuthProviderData(registrations[0].authRef) : undefined;
-  const showAuthorization = ({ url, userCode }: { url: string; userCode?: string }) => {
+  const showAuthorization = ({ url }: { url: string }) => {
     const displayUrl = new URL(url);
     displayUrl.searchParams.delete('id_token_hint');
-    options.onDeviceCode?.({ url: displayUrl.toString(), userCode });
+    options.onAuthorization?.({ url: displayUrl.toString() });
     open(url).catch(() => {});
   };
-  const result: OAuthSignInResult = providerId === 'openai-oauth'
-    ? await runOpenAiSignIn(showAuthorization, openAiRegistrationFromData(previousData))
-    : await runXaiDeviceCodeFlow(showAuthorization);
-  const xaiIdentity = providerId === 'xai-oauth'
-    ? await fetchXaiIdentity(result.tokens.access_token)
-    : undefined;
-  const resultEmail = 'email' in result && isString(result.email)
-    ? result.email
-    : undefined;
-  const emailValue = providerId === 'openai-oauth'
-    ? resultEmail
-    : xaiIdentity?.email;
-  if (!emailValue) {
-    throw new Error(`${providerDisplayName(providerId)} sign-in did not return an account email`);
-  }
-  const email = emailValue.trim().toLowerCase();
-  const resultAccountId = providerId === 'openai-oauth'
-    ? result.accountId
-    : xaiIdentity?.accountId;
-  const existingIdentities = await Promise.all(store.list(providerId).map(async account => {
-    const token = await resolveProviderCredential(providerId, account.authRef).catch(() => null);
-    const storedXaiIdentity = providerId === 'xai-oauth' && token
-      ? await fetchXaiIdentity(token).catch(() => undefined)
-      : undefined;
-    return {
-      account,
-      credentialAvailable: Boolean(token),
-      email: account.email?.toLowerCase() ?? storedXaiIdentity?.email,
-      accountId: account.accountId ?? storedXaiIdentity?.accountId,
-    };
-  }));
-  const existing = existingIdentities.find(identity => registrations[0]
-    ? identity.account.id === registrations[0].id
-    : providerId === 'openai-oauth' ? Boolean(resultAccountId && identity.accountId === resultAccountId)
-    : identity.email === email || Boolean(resultAccountId && identity.accountId === resultAccountId));
+  const result: OAuthSignInResult = await runOpenAiSignIn(showAuthorization, openAiRegistrationFromData(previousData));
+  if (!result.email) throw new Error('ChatGPT sign-in did not return an account email');
+  const email = result.email.trim().toLowerCase();
+  const resultAccountId = result.accountId;
+  const existingAccount = store.list().find(account => registrations[0]
+    ? account.id === registrations[0].id
+    : Boolean(resultAccountId && account.accountId === resultAccountId));
+  const existing = existingAccount ? {
+    account: existingAccount,
+    credentialAvailable: Boolean(await resolveProviderCredential(providerId, existingAccount.authRef).catch(() => null)),
+  } : undefined;
 
   const credential = tokensToStoredCredential(
     result.tokens,
@@ -158,9 +130,9 @@ export async function loginProviderAccount(
       const account = authRef === existing.account.authRef
         ? store.updateIdentity(existing.account.id, identity)
         : store.replaceCredential(existing.account.id, authRef, identity);
-      if (store.selected(providerId)?.id === account.id) {
+      if (store.selected()?.id === account.id) {
         syncManagedProviderCredential(providerId, account.authRef);
-        if (providerId === 'openai-oauth') await refreshProviderModels(providerId, credential.access).catch(() => undefined);
+        await refreshProviderModels(providerId, credential.access).catch(() => undefined);
       }
       return { id: account.id, email, providerId };
     } catch (error) {
@@ -189,10 +161,10 @@ export async function loginProviderAccount(
       accountId: resultAccountId,
       authRef,
     });
-    if (providerId === 'openai-oauth') store.select(account.id);
-    if (store.selected(providerId)?.id === account.id) {
+    store.select(account.id);
+    if (store.selected()?.id === account.id) {
       syncManagedProviderCredential(providerId, account.authRef);
-      if (providerId === 'openai-oauth') await refreshProviderModels(providerId, credential.access).catch(() => undefined);
+      await refreshProviderModels(providerId, credential.access).catch(() => undefined);
     }
     return { id: account.id, email, providerId };
   } catch (error) {
@@ -204,11 +176,11 @@ export async function loginProviderAccount(
 export async function logoutProviderAccount(idOrEmail: string): Promise<string> {
   const store = new DaemonAccountStore();
   const account = store.remove(idOrEmail);
-  const revoked = account.providerId !== 'openai-oauth' || await revokeChatGptSession(account.authRef);
+  const revoked = await revokeChatGptSession(account.authRef);
   const deleted = await deleteProviderCredential(account.authRef);
   syncManagedProviderCredential(
     account.providerId,
-    store.selected(account.providerId)?.authRef,
+    store.selected()?.authRef,
   );
   if (!deleted) {
     throw new Error(`Removed ${accountIdentity(account)}, but credential cleanup could not be verified`);
@@ -228,7 +200,7 @@ async function printAccounts(store: DaemonAccountStore): Promise<void> {
   }
 }
 
-async function printUsage(store: DaemonAccountStore, idOrLabel?: string): Promise<void> {
+function printUsage(store: DaemonAccountStore, idOrLabel?: string): void {
   const accounts = idOrLabel
     ? [store.list().find(account =>
         account.id === idOrLabel || account.label.toLowerCase() === idOrLabel.toLowerCase(),
@@ -237,21 +209,7 @@ async function printUsage(store: DaemonAccountStore, idOrLabel?: string): Promis
   if (accounts.length === 0) throw new Error(`Managed account not found: ${idOrLabel ?? ''}`);
   for (const account of accounts) {
     if (!account) continue;
-    if (account.providerId === 'openai-oauth') {
-      console.log(`${accountIdentity(account)}: https://chatgpt.com/settings/usage`);
-      continue;
-    }
-    const token = await resolveProviderCredential(account.providerId, account.authRef);
-    if (!token) throw new Error(`Credential unavailable for ${accountIdentity(account)}`);
-    const usage = await fetchXaiUsage(token);
-      if (usage.email && usage.email !== account.email) {
-        store.updateIdentity(account.id, { email: usage.email, accountId: usage.accountId });
-      }
-      console.log(pc.bold(usage.email ?? accountIdentity(account)));
-      if (usage.plan) console.log(`  plan: ${usage.plan}`);
-      if (usage.usedPercent !== undefined) {
-        console.log(`  ${usage.period ?? 'usage'}: ${Math.round(100 - usage.usedPercent)}% left${usage.resetAt ? ` · resets ${new Date(usage.resetAt * 1000).toLocaleString()}` : ''}`);
-      }
+    console.log(link(accountIdentity(account) + ': ChatGPT plan usage', 'https://chatgpt.com/settings/usage'));
   }
 }
 
@@ -267,20 +225,15 @@ export async function runAccountsCommand(args: string[]): Promise<number> {
     if (command === 'add' || command === 'login') {
       const saved = command === 'login' ? store.list().filter(account => account.id === value || account.email === value) : [];
       if (command === 'login' && saved.length !== 1) throw new Error('Usage: clodex accounts login <account-id> (see clodex accounts list)');
-      const providerId = saved[0]?.providerId ?? (value === 'xai' || value === 'xai-oauth'
-        ? 'xai-oauth'
-        : value === 'openai' || value === 'openai-oauth' || !value
-          ? 'openai-oauth'
-          : undefined);
-      if (!providerId) throw new Error('Usage: clodex accounts add [openai|xai]');
+      const providerId = saved[0]?.providerId ?? (value === 'openai' || value === 'openai-oauth' || !value ? 'openai-oauth' : undefined);
+      if (!providerId) throw new Error('Usage: clodex accounts add [openai]');
       const spinner = p.spinner({ indicator: 'timer' });
-      spinner.start(`Starting ${providerDisplayName(providerId)} sign-in…`);
+      spinner.start(`Starting ${providerDisplayName()} sign-in…`);
       const account = await loginProviderAccount(providerId, {
         ...(command === 'login' && saved[0] && { reauthenticate: saved[0].id }),
-        onDeviceCode: ({ url, userCode }) => {
+        onAuthorization: ({ url }) => {
           spinner.stop('');
-          p.log.info(pc.cyan(link(userCode ? 'Open subscription sign-in' : 'Continue with ChatGPT', url)));
-          if (userCode) p.log.info(`Enter code: ${pc.bold(userCode)}`);
+          p.log.info(pc.cyan(link('Continue with ChatGPT', url)));
           spinner.start('Waiting for authorization…');
         },
       });
@@ -292,7 +245,7 @@ export async function runAccountsCommand(args: string[]): Promise<number> {
       const account = store.select(value);
       syncManagedProviderCredential(account.providerId, account.authRef);
       console.log(
-        `Selected ${accountIdentity(account)} for ${providerDisplayName(account.providerId)} requests. `
+        `Selected ${accountIdentity(account)} for ${providerDisplayName()} requests. `
         + 'Existing default-account sessions switch on their next request; explicit account launches remain pinned.',
       );
       return 0;
@@ -304,7 +257,7 @@ export async function runAccountsCommand(args: string[]): Promise<number> {
       return 0;
     }
     if (command === 'usage') {
-      await printUsage(store, value || undefined);
+      printUsage(store, value || undefined);
       return 0;
     }
     throw new Error(`Unknown accounts command: ${command}`);

@@ -23,24 +23,23 @@ export async function authenticateProvider(
   _options: ProviderAuthOptions = {},
 ): Promise<ProviderAuthResult> {
   if (!supportsNativeOAuth(providerId)) {
-    throw new Error('OAuth sign-in is available for openai (ChatGPT) and xai (SuperGrok).');
+    throw new Error('OAuth sign-in is available for openai (ChatGPT).');
   }
-  const registryId = providerId === 'openai' || providerId === 'openai-oauth' ? 'openai-oauth' : 'xai-oauth';
+  const registryId = 'openai-oauth';
   const store = new DaemonAccountStore();
-  const selected = store.selected(registryId);
+  const selected = store.selected();
   const spinner = p.spinner({ indicator: 'timer' });
   spinner.start('Starting subscription sign-in...');
   try {
     const signedIn = await loginProviderAccount(registryId, {
       ...(selected && { reauthenticate: selected.id }),
-      onDeviceCode: ({ url, userCode }) => {
+      onAuthorization: ({ url }) => {
         spinner.stop('');
-        p.log.info(pc.cyan(link(userCode ? 'Open subscription sign-in' : 'Continue with ChatGPT', url)));
-        if (userCode) p.log.info(`Enter code: ${pc.bold(userCode)}`);
+        p.log.info(pc.cyan(link('Continue with ChatGPT', url)));
         spinner.start('Waiting for authorization and credential save...');
       },
     });
-    const account = store.list(registryId).find(item => item.id === signedIn.id);
+    const account = store.list().find(item => item.id === signedIn.id);
     if (!account) throw new Error('The subscription account was not saved');
     const credential = await readProviderOAuthCredential(account.authRef);
     const registryProvider = loadRegistryStrict().providers.find(item => item.id === registryId);
@@ -58,9 +57,7 @@ export function providerAuthHelpText(): string {
 
 ${pc.bold('Usage:')}
   clodex providers auth openai
-  clodex providers auth xai
 
 ${pc.bold('Sign-in methods:')}
-  openai   Continue with ChatGPT in your browser (local loopback callback)
-  xai      SuperGrok (device code at auth.x.ai)`;
+  openai   Continue with ChatGPT in your browser (local loopback callback)`;
 }

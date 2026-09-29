@@ -11,7 +11,7 @@ import { gzipSync } from 'node:zlib';
 import { ensureHttpProxyCaBundle, ensureHttpProxyCertificates } from '../src/http-proxy/ca.js';
 import { shouldInterceptConnect, startHttpProxy } from '../src/http-proxy/server.js';
 import { flushTraceLogs } from '../src/observability/trace-log.js';
-import { requireTcpAddress, type JsonObject } from './test-helpers.js';
+import { requireTcpAddress } from './test-helpers.js';
 
 const testHome = mkdtempSync(join(tmpdir(), 'clodex-http-proxy-'));
 const previousRelayHome = process.env['CLODEX_HOME'];
@@ -242,82 +242,6 @@ it('preserves an existing custom CA in the child trust bundle', () => {
       expect(response).toContain('401');
       expect(response).toContain('account route resolved for test');
       expect(observed).toEqual([ticket]);
-    } finally {
-      await proxy.close();
-    }
-  });
-
-  it('sends Grok requests through Secondwind before provider translation', async () => {
-    const certificates = ensureHttpProxyCertificates();
-    let adapterBody = '';
-    const observed: JsonObject[] = [];
-    const adapterServer = http.createServer(async (req, res) => {
-      const chunks: Buffer[] = [];
-      req.on('data', chunk => chunks.push(Buffer.from(chunk)));
-      await once(req, 'end');
-      adapterBody = Buffer.concat(chunks).toString();
-      res.writeHead(200, { 'Content-Type': 'text/event-stream', Connection: 'close' });
-      res.end('event: message_stop\ndata: {"type":"message_stop"}\n\n');
-    });
-    const adapterPort = await listen(adapterServer);
-    const route = {
-      aliasId: 'clodex:xai-oauth:grok-4.6',
-      realModelId: 'grok-4.6',
-      displayName: 'Grok 4.6',
-      upstreamUrl: '',
-      apiKey: 'unused',
-      modelFormat: 'openai' as const,
-      npm: '@ai-sdk/openai-compatible',
-      providerId: 'xai-oauth',
-    };
-    const proxy = await startHttpProxy({
-      routes: [route],
-      adapterHandle: {
-        port: adapterPort,
-        token: 'adapter-token',
-        close: () => {
-          adapterServer.closeAllConnections();
-          adapterServer.close();
-        },
-      },
-      optimizeTranslatedRequest: async context => {
-        observed.push(context);
-        return Buffer.from(JSON.stringify({
-          ...context.request,
-          messages: [{ role: 'user', content: 'optimized' }],
-        }));
-      },
-    });
-
-    try {
-      const body = JSON.stringify({
-        model: route.aliasId,
-        messages: [{ role: 'user', content: 'original' }],
-        stream: true,
-      });
-      const response = await requestMitm(
-        proxy.port,
-        certificates.caCert,
-        '/v1/messages',
-        body,
-        {
-          'X-Claude-Code-Session-Id': '11111111-1111-4111-8111-111111111111',
-          'X-Claude-Code-Agent-Id': 'agent-7',
-        },
-      );
-
-      expect(response).toContain('200 OK');
-      expect(JSON.parse(adapterBody)).toMatchObject({
-        model: route.aliasId,
-        messages: [{ role: 'user', content: 'optimized' }],
-      });
-      expect(observed).toHaveLength(1);
-      expect(observed[0]).toMatchObject({
-        route,
-        claudeSessionId: '11111111-1111-4111-8111-111111111111',
-        claudeAgentId: 'agent-7',
-        endpoint: 'messages',
-      });
     } finally {
       await proxy.close();
     }

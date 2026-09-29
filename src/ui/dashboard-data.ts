@@ -33,29 +33,16 @@ export interface DaemonStatus {
 
 export interface Account {
   id: string;
-  providerId: 'openai-oauth' | 'xai-oauth';
+  providerId: 'openai-oauth';
   name?: string;
   email?: string;
   selected: boolean;
   requiresSignIn?: boolean;
-  plan?: string;
-  usage?: {
-    limitUsedPercent?: number;
-    limitResetAt?: number;
-    limitPeriod?: 'weekly' | 'monthly' | 'usage';
-    usedCents?: number;
-    limitCents?: number;
-    onDemandUsedCents?: number;
-    onDemandLimitCents?: number;
-    prepaidBalanceCents?: number;
-    stale?: boolean;
-    error?: string;
-  };
+
 }
 
-export interface DeviceCodePrompt {
+export interface AuthorizationPrompt {
   url: string;
-  userCode?: string;
 }
 
 export type UsagePeriod = 'day' | 'last7' | 'last30';
@@ -79,7 +66,6 @@ export interface DashboardPanelSnapshot {
   reachable: boolean;
   status?: DaemonStatus;
   accounts?: Account[];
-  autoSwitchOnUsageLimit?: boolean;
   diagnostics?: Diagnostic[];
   diagnosticLogMode?: DiagnosticLogMode;
   secondwind?: SecondwindSnapshot;
@@ -102,7 +88,7 @@ export async function loadDashboardPanels(
   const options = { timeoutMs: DASHBOARD_CONTROL_REQUEST_TIMEOUT_MS };
   const [status, accounts, diagnostics, secondwind, nativeCompaction] = await Promise.allSettled([
     request<DaemonStatus>('/v1/status', options),
-    request<{ accounts: Account[]; autoSwitchOnUsageLimit: boolean }>('/v1/accounts', options),
+    request<{ accounts: Account[] }>('/v1/accounts', options),
     request<{ diagnostics: Diagnostic[]; mode: DiagnosticLogMode }>(
       '/v1/diagnostics?limit=20',
       options,
@@ -137,9 +123,6 @@ export async function loadDashboardPanels(
     reachable,
     status: status.status === 'fulfilled' ? status.value : undefined,
     accounts: accounts.status === 'fulfilled' ? accounts.value.accounts : undefined,
-    autoSwitchOnUsageLimit: accounts.status === 'fulfilled'
-      ? accounts.value.autoSwitchOnUsageLimit
-      : undefined,
     diagnostics: diagnostics.status === 'fulfilled'
       ? diagnostics.value.diagnostics
       : undefined,
@@ -279,8 +262,8 @@ export function accountDisplayName(account: Pick<Account, 'email' | 'name'>): st
   return account.email ?? account.name ?? 'Account identity unavailable';
 }
 
-export function deviceCodeInstruction({ userCode }: DeviceCodePrompt): string {
-  return userCode ? `Enter code ${userCode} in the browser.` : 'Continue with ChatGPT in the browser and allow Clodex to use your plan.';
+export function authorizationInstruction(): string {
+  return 'Continue with ChatGPT in the browser and allow Clodex to use your plan.';
 }
 
 function startOfDay(date: Date): Date {

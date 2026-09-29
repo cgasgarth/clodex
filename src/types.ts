@@ -34,7 +34,7 @@ export interface LocalProviderModel {
   upstreamModelId: string;
   baseUrl?: string;        // set for anthropic-format models
   completionsUrl?: string; // set for openai-format models
-  npm?: string;            // OpenCode api.npm package, e.g. @ai-sdk/xai (SDK routing)
+  npm?: string;            // OpenCode api.npm package, e.g. @ai-sdk/openai (SDK routing)
   apiBaseUrl?: string;     // raw api.url, for openai-compatible/openrouter SDK base URL
   cost?: ModelCost;
   contextWindow?: number;

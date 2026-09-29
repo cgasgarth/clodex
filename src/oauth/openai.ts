@@ -66,7 +66,7 @@ export async function validateChatGptTokens(
 }
 
 export async function runOpenAiSignIn(
-  onAuthorization: (info: { url: string; userCode?: string }) => void,
+  onAuthorization: (info: { url: string }) => void,
   registration?: OpenAiRegistration,
 ): Promise<{ tokens: OAuthTokenResponse; accountId: string; email?: string; providerData: Record<string, ProviderDataValue> }> {
   const state = randomBytes(32).toString('base64url');

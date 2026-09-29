@@ -131,7 +131,7 @@ export function accessTokenIsExpiring(token: string | undefined, skewMs = OAUTH_
   }
 }
 
-const NATIVE_OAUTH_PROVIDER_IDS = ['openai', 'openai-oauth', 'xai', 'xai-oauth'] as const;
+const NATIVE_OAUTH_PROVIDER_IDS = ['openai', 'openai-oauth'] as const;
 export type NativeOAuthProviderId = typeof NATIVE_OAUTH_PROVIDER_IDS[number];
 
 export function supportsNativeOAuth(providerId: string): providerId is NativeOAuthProviderId {

@@ -25,7 +25,7 @@ describe('gateway id masking', () => {
   });
 
   it('is self-inverse', () => {
-    const original = 'anthropic-xai-oauth__grok-4.6';
+    const original = 'anthropic-mistral__mistral-large';
     const masked = maskGatewayModelId(original);
     expect(unmaskGatewayModelId(masked)).toBe(original);
   });

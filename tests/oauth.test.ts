@@ -65,11 +65,11 @@ describe('oauth refresh http', () => {
       new URLSearchParams({ grant_type: 'refresh_token' }),
       {
         contentType: 'form',
-        errorPrefix: 'xAI token refresh failed',
+        errorPrefix: 'Example token refresh failed',
         includeStatus: true,
         includeBody: true,
       },
-    )).rejects.toThrow('xAI token refresh failed (401): bad refresh');
+    )).rejects.toThrow('Example token refresh failed (401): bad refresh');
   });
 
   it('cancels an unread failed response body when error details are disabled', async () => {
@@ -189,25 +189,6 @@ describe('oauth refresh', () => {
     });
     expect(cred.access).toBe('new-access');
     expect(oauthCredentialShouldRefresh(cred, 'openai-oauth')).toBe(false);
-  });
-
-  it('refreshes xAI subscription tokens', async () => {
-    stubTestGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
-      access_token: 'new-xai-access',
-      refresh_token: 'new-xai-refresh',
-      expires_in: 3600,
-    }), { status: 200 })));
-
-    const cred = await refreshStoredOAuthCredential('xai-oauth', {
-      type: 'oauth',
-      access: 'old',
-      refresh: 'rt',
-      expires: 0,
-    });
-    expect(cred.access).toBe('new-xai-access');
-    // SAFETY: The test fixture defines the asserted runtime shape.
-    const [, init] = (fetch as ReturnType<typeof vi.fn>).mock.calls[0]!;
-    expect(String(init.body)).toContain('client_id=b1a00492-073a-47ea-816f-4c329264a828');
   });
 
   it('rejects unknown providers', async () => {

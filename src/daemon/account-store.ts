@@ -1,4 +1,4 @@
-import { isBoolean, isObject, isString } from '../runtime/type-guards.js';
+import { isObject, isString } from '../runtime/type-guards.js';
 import { randomUUID } from 'node:crypto';
 import {
   chmodSync,
@@ -16,7 +16,7 @@ import type { DiagnosticValue } from '../observability/trace-log.js';
 export const MAX_DAEMON_ACCOUNTS = 5;
 const ACCOUNT_STORE_VERSION = 2;
 
-export type ManagedOAuthProviderId = 'openai-oauth' | 'xai-oauth';
+export type ManagedOAuthProviderId = 'openai-oauth';
 
 export interface DaemonAccountRecord {
   id: string;
@@ -31,7 +31,6 @@ export interface DaemonAccountRecord {
 
 export interface DaemonAccountState {
   version: number;
-  autoSwitchOnUsageLimit: boolean;
   selectedAccountIds: Partial<Record<ManagedOAuthProviderId, string>>;
   accounts: DaemonAccountRecord[];
 }
@@ -60,29 +59,20 @@ function applyIdentity(
   if (accountId) account.accountId = accountId;
 }
 
-interface ParsedDaemonAccountState {
-  state: DaemonAccountState;
-  migrated: boolean;
-}
-
 interface UntrustedDaemonAccountState {
   version?: DiagnosticValue;
   accounts?: DiagnosticValue;
   selectedAccountIds?: DiagnosticValue;
-  selectedAccountId?: DiagnosticValue;
-  autoSwitchOnUsageLimit?: DiagnosticValue;
 }
 
 function parseProviderId(value: DiagnosticValue): ManagedOAuthProviderId | null {
   if (!isString(value)) return null;
   if (value === 'openai-oauth') return 'openai-oauth';
-  if (value === 'xai-oauth') return 'xai-oauth';
   return null;
 }
 
 function parseAccount(
   value: DiagnosticValue,
-  fallbackProviderId?: ManagedOAuthProviderId,
 ): DaemonAccountRecord | null {
   if (!value || !isObject(value)) return null;
   const account = diagnosticRecord(value);
@@ -96,7 +86,7 @@ function parseAccount(
     || !isString(account.createdAt)
     || !isString(account.updatedAt)
   ) return null;
-  const providerId = parseProviderId(account.providerId) ?? fallbackProviderId;
+  const providerId = parseProviderId(account.providerId);
   if (!providerId) return null;
   const parsedAccount: DaemonAccountRecord = {
     id: account.id,
@@ -115,48 +105,19 @@ function parseAccount(
   return parsedAccount;
 }
 
-function parseState(raw: string): ParsedDaemonAccountState {
+function parseState(raw: string): DaemonAccountState {
   const parsed: UntrustedDaemonAccountState = JSON.parse(raw);
-  if ((parsed.version !== 1 && parsed.version !== ACCOUNT_STORE_VERSION) || !Array.isArray(parsed.accounts)) {
+  if (parsed.version !== ACCOUNT_STORE_VERSION || !Array.isArray(parsed.accounts)) {
     throw new Error('Managed account store has an unsupported version');
   }
-  const migrated = parsed.version === 1;
-  const accounts = parsed.accounts
-    .map(value => parseAccount(value, migrated ? 'openai-oauth' : undefined))
-    .filter((item): item is DaemonAccountRecord => Boolean(item));
-  if (
-    accounts.length !== parsed.accounts.length
-    || accounts.some(account => (
-      accounts.filter(item => item.providerId === account.providerId).length > MAX_DAEMON_ACCOUNTS
-    ))
-  ) {
+  const accounts = parsed.accounts.map(parseAccount).filter((item): item is DaemonAccountRecord => Boolean(item));
+  if (accounts.length !== parsed.accounts.length || accounts.length > MAX_DAEMON_ACCOUNTS) {
     throw new Error('Managed account store contains invalid accounts');
   }
-  const savedSelections = !migrated
-    && parsed.selectedAccountIds
-    && isObject(parsed.selectedAccountIds)
-    && !Array.isArray(parsed.selectedAccountIds)
-    ? parsed.selectedAccountIds
-    : {};
-  const selectedAccountIds: DaemonAccountState['selectedAccountIds'] = {};
-  for (const providerId of ['openai-oauth', 'xai-oauth'] as const) {
-    const candidate = migrated && providerId === 'openai-oauth'
-      ? parsed.selectedAccountId
-      : savedSelections[providerId];
-    const selected = isString(candidate)
-      && accounts.some(account => account.providerId === providerId && account.id === candidate)
-      ? candidate
-      : accounts.find(account => account.providerId === providerId)?.id;
-    if (selected) selectedAccountIds[providerId] = selected;
-  }
-  return { state: {
-    version: ACCOUNT_STORE_VERSION,
-    autoSwitchOnUsageLimit: isBoolean(parsed.autoSwitchOnUsageLimit)
-      ? parsed.autoSwitchOnUsageLimit
-      : true,
-    selectedAccountIds,
-    accounts,
-  }, migrated };
+  const selections = parsed.selectedAccountIds && isObject(parsed.selectedAccountIds) ? diagnosticRecord(parsed.selectedAccountIds) : {};
+  const candidate = selections['openai-oauth'];
+  const selected = isString(candidate) && accounts.some(account => account.id === candidate) ? candidate : accounts[0]?.id;
+  return { version: ACCOUNT_STORE_VERSION, accounts, selectedAccountIds: selected ? { 'openai-oauth': selected } : {} };
 }
 
 export class DaemonAccountStore {
@@ -168,9 +129,7 @@ export class DaemonAccountStore {
 
   load(): DaemonAccountState {
     try {
-      const parsed = parseState(readFileSync(this.path, 'utf8'));
-      if (parsed.migrated) this.save(parsed.state);
-      return parsed.state;
+      return parseState(readFileSync(this.path, 'utf8'));
     } catch (error) {
       const code = isObject(error) && 'code' in error && isString(error.code)
         ? error.code
@@ -178,7 +137,6 @@ export class DaemonAccountStore {
       if (code === 'ENOENT') {
         return {
           version: ACCOUNT_STORE_VERSION,
-          autoSwitchOnUsageLimit: true,
           selectedAccountIds: {},
           accounts: [],
         };
@@ -187,25 +145,18 @@ export class DaemonAccountStore {
     }
   }
 
-  list(providerId?: ManagedOAuthProviderId): DaemonAccountRecord[] {
+  list(): DaemonAccountRecord[] {
     const accounts = this.load().accounts;
-    return providerId ? accounts.filter(account => account.providerId === providerId) : accounts;
+    return accounts;
   }
 
-  selected(providerId: ManagedOAuthProviderId = 'openai-oauth'): DaemonAccountRecord | null {
+  selected(): DaemonAccountRecord | null {
     const state = this.load();
     return state.accounts.find(account => (
-      account.providerId === providerId
-      && account.id === state.selectedAccountIds[providerId]
+      account.id === state.selectedAccountIds['openai-oauth']
     ))
-      ?? state.accounts.find(account => account.providerId === providerId)
+      ?? state.accounts[0]
       ?? null;
-  }
-
-  setAutoSwitchOnUsageLimit(enabled: boolean): void {
-    const state = this.load();
-    state.autoSwitchOnUsageLimit = enabled;
-    this.save(state);
   }
 
   add(
@@ -216,7 +167,7 @@ export class DaemonAccountStore {
   ): DaemonAccountRecord {
     const state = this.load();
     const providerId = account.providerId ?? 'openai-oauth';
-    if (state.accounts.filter(item => item.providerId === providerId).length >= MAX_DAEMON_ACCOUNTS) {
+    if (state.accounts.length >= MAX_DAEMON_ACCOUNTS) {
       throw new Error(
         `Clodex supports at most ${MAX_DAEMON_ACCOUNTS} managed ${providerId} accounts`,
       );
@@ -224,8 +175,7 @@ export class DaemonAccountStore {
     const label = normalizeLabel(account.label);
     if (!label) throw new Error('Account label cannot be empty');
     if (state.accounts.some(item => (
-      item.providerId === providerId
-      && item.label.toLowerCase() === label.toLowerCase()
+      item.label.toLowerCase() === label.toLowerCase()
     ))) {
       throw new Error(`An account named "${label}" already exists`);
     }
@@ -248,13 +198,11 @@ export class DaemonAccountStore {
 
   select(
     idOrLabel: string,
-    providerId?: ManagedOAuthProviderId,
   ): DaemonAccountRecord {
     const state = this.load();
     const lookup = idOrLabel.trim().toLowerCase();
     const matches = state.accounts.filter(item => (
-      (!providerId || item.providerId === providerId)
-      && (
+      (
         item.id === idOrLabel
         || item.label.toLowerCase() === lookup
         || item.email?.toLowerCase() === lookup
@@ -271,15 +219,13 @@ export class DaemonAccountStore {
 
   remove(
     idOrLabel: string,
-    providerId?: ManagedOAuthProviderId,
   ): DaemonAccountRecord {
     const state = this.load();
     const lookup = idOrLabel.trim().toLowerCase();
     const matches = state.accounts
       .map((item, index) => ({ item, index }))
       .filter(({ item }) => (
-        (!providerId || item.providerId === providerId)
-        && (
+        (
           item.id === idOrLabel
           || item.label.toLowerCase() === lookup
           || item.email?.toLowerCase() === lookup
@@ -290,7 +236,7 @@ export class DaemonAccountStore {
     if (index < 0) throw new Error(`Managed account not found: ${idOrLabel}`);
     const [removed] = state.accounts.splice(index, 1);
     if (state.selectedAccountIds[removed!.providerId] === removed!.id) {
-      const replacement = state.accounts.find(account => account.providerId === removed!.providerId);
+      const replacement = state.accounts[0];
       if (replacement) state.selectedAccountIds[removed!.providerId] = replacement.id;
       else delete state.selectedAccountIds[removed!.providerId];
     }

@@ -141,7 +141,7 @@ export function parseProvidersArgs(args: string[]): ParsedProvidersArgs {
 }
 
 export function providersHelpText(): string {
-  return `${pc.bold('clodex providers')} — manage OpenAI and Grok providers
+  return `${pc.bold('clodex providers')} — manage OpenAI providers
 
 ${pc.bold('Usage:')}
   clodex providers
@@ -150,12 +150,11 @@ ${pc.bold('Usage:')}
   clodex providers remove <id>
   clodex providers refresh-models [id]
   clodex providers auth openai
-  clodex providers auth xai
 
 ${pc.bold('Subcommands:')}
   (none)      Provider hub wizard
   add         Choose subscription sign-in or add an OpenAI API key
-  auth        Sign in with ChatGPT or SuperGrok OAuth (device code)
+  auth        Sign in with ChatGPT in your browser
   list        Show configured providers
   remove      Remove a provider by id
   refresh-models  Update cached model lists`;
@@ -267,7 +266,7 @@ async function runProvidersRefreshModels(providerId?: string): Promise<number> {
 function runProvidersList(): number {
   const entries = resolveProvidersForDisplay();
   if (entries.length === 0) {
-    p.log.info('No providers configured. Run clodex providers add, or sign in with openai or xai.');
+    p.log.info('No providers configured. Run clodex providers add, or sign in with openai.');
     return 0;
   }
 
@@ -340,12 +339,7 @@ async function runProvidersAddWithCleanupState(
       {
         value: 'openai-oauth',
         label: 'Sign in with ChatGPT (Plus/Pro plan)',
-        hint: 'OAuth device code — no API key needed',
-      },
-      {
-        value: 'xai-oauth',
-        label: 'Sign in with SuperGrok',
-        hint: 'OAuth device code — Grok 4.6 only',
+        hint: 'Browser sign-in — no API key needed',
       },
       {
         value: 'apikey',
@@ -361,9 +355,6 @@ async function runProvidersAddWithCleanupState(
 
   if (choice === 'openai-oauth') {
     return runProvidersAuthWithCleanupState('openai', undefined, cleanupState);
-  }
-  if (choice === 'xai-oauth') {
-    return runProvidersAuthWithCleanupState('xai', undefined, cleanupState);
   }
   if (choice === 'apikey') return runTemplateAddFlow(cleanupState);
   return 0;

@@ -28,7 +28,6 @@ import {
   OPENAI_MILLION_CONTEXT_WINDOW,
   OPENAI_OAUTH_RETIRED_MODELS,
 } from '../data/openai-oauth-models.js';
-import { buildXaiOAuthModels } from '../data/xai-oauth-models.js';
 import { modelPrefersResponsesApi } from '../provider-factory.js';
 import { deriveBrand } from '../models/types.js';
 import { resolveContextWindow } from '../models/context-window.js';
@@ -50,21 +49,6 @@ export interface RefreshProviderResult {
 
 export interface RefreshModelsResult {
   refreshed: RefreshProviderResult[];
-}
-
-/**
- * OAuth model refresh:
- * - OpenAI OAuth: List models authorized for the selected ChatGPT plan grant.
- * - xAI OAuth: Keep the single supported SuperGrok model from the static seed.
- */
-async function refreshOAuthProvider(
-  provider: RegistryProvider,
-  accessToken: string,
-): Promise<{ models: CachedModel[]; baseUrl?: string; source: 'live' | 'seed'; failureReason?: string }> {
-  const tpl = provider.templateId;
-  if (tpl === 'openai' || tpl === 'openai-oauth') return refreshOpenAiOAuthModels(accessToken);
-  if (tpl === 'xai-oauth') return { models: buildXaiOAuthModels(), source: 'seed' };
-  throw new Error(`refreshOAuthProvider: unsupported template "${tpl}"`);
 }
 
 /** A parsed model entry, including backend-reported request capability flags. */
@@ -185,7 +169,7 @@ async function fetchJsonWithAuth(
  */
 async function refreshOpenAiOAuthModels(
   accessToken: string,
-): Promise<{ models: CachedModel[]; source: 'live' | 'seed'; failureReason?: string }> {
+): Promise<{ models: CachedModel[]; source: 'live' }> {
   requireChatGptPlanToken(accessToken);
   const seedById = new Map(buildOpenAiOAuthModels().map(m => [m.id, m]));
   const result = await fetchJsonWithAuth('https://api.openai.com/v1/models', accessToken, PROVIDER_METADATA_TIMEOUT_MS);
@@ -312,15 +296,12 @@ export async function refreshProviderModels(
     const previousModelCount = provider.modelsCache?.models.length ?? 0;
     let models: CachedModel[] = [];
     let baseUrl: string | undefined;
-    let oauthFallbackReason: string | undefined;
 
     if (provider.authType === 'oauth' && (
       provider.templateId === 'openai'
       || provider.id === 'openai-oauth'
-      || provider.templateId === 'xai-oauth'
-      || provider.id === 'xai-oauth'
     )) {
-      // ChatGPT plan grants and SuperGrok have provider-specific model discovery.
+      // Discover models authorized for this ChatGPT plan grant.
       if (!apiKey) {
         return {
           id: provider.id,
@@ -329,23 +310,7 @@ export async function refreshProviderModels(
           reason: 'OAuth token not available — try signing in again with clodex providers auth.',
         };
       }
-      const oauthResult = await refreshOAuthProvider(provider, apiKey);
-      const staticOnly = provider.templateId === 'xai-oauth' || provider.id === 'xai-oauth';
-      const failureDetail = oauthResult.failureReason ? ` (${oauthResult.failureReason})` : '';
-      if (!staticOnly && oauthResult.source === 'seed' && cachedModelCount(provider) > 0) {
-        // Live discovery failed — keep the existing cache (which may already include
-        // models newer than the built-in fallback list) instead of overwriting it.
-        return skipWithCachedModels(
-          provider,
-          `Live model discovery failed${failureDetail} — kept your existing cached model list instead of `
-          + "overwriting it with clodex's built-in fallback list. Try refreshing again later.",
-        );
-      }
-      if (!staticOnly && oauthResult.source === 'seed') {
-        oauthFallbackReason = `Live model discovery failed${failureDetail} — showing clodex's built-in fallback `
-          + 'model list, which may not include the newest models yet. Try refreshing again later.';
-      }
-      models = oauthResult.models;
+      models = (await refreshOpenAiOAuthModels(apiKey)).models;
       if (models.length === 0) {
         return {
           id: provider.id,
@@ -424,7 +389,6 @@ export async function refreshProviderModels(
       ok: true,
       modelCount: enriched.length,
       previousModelCount: provider.refreshedAt ? previousModelCount : undefined,
-      reason: oauthFallbackReason,
     };
   } catch (err) {
     return {

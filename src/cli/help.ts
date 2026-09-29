@@ -3,7 +3,7 @@ import { MAX_MODEL_CATALOG, VERSION } from '../constants.js';
 
 export function rootHelpText(): string {
   return `${pc.bold('clodex')} v${VERSION}
-Bridge Claude Code to OpenAI and Grok models with API-key or subscription access.
+Bridge Claude Code to OpenAI models with API-key or subscription access.
 
 ${pc.bold('Usage:')}
   clodex
@@ -27,11 +27,11 @@ ${pc.bold('Commands:')}
   start       Start the persistent daemon without opening the dashboard
   stop        Stop the persistent daemon
   daemon      Manage the persistent per-user Clodex service
-  accounts    Manage OpenAI and SuperGrok logins (manual switching only)
+  accounts    Manage ChatGPT logins (manual switching only)
   server      Run a foreground gateway (endpoint or proxy mode)
   models      Manage favorite models and aliases (max ${MAX_MODEL_CATALOG})
   favorites   Alias for models
-  providers   Add or configure OpenAI and Grok providers
+  providers   Add or configure OpenAI providers
 
 ${pc.bold('Claude Code:')}
   Configure ~/.claude/settings.json once, then start the unmodified Claude Code

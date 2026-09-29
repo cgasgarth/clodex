@@ -4,8 +4,6 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import { DaemonAccountService } from '../src/daemon/account-service.js';
 import { DaemonAccountStore } from '../src/daemon/account-store.js';
-import { loadRegistry, saveRegistry } from '../src/registry/io.js';
-import { withRegistryWriteLockSync } from '../src/registry/lock.js';
 
 let root: string;
 let previousHome: string | undefined;
@@ -183,11 +181,6 @@ describe('DaemonAccountService launch tickets', () => {
       join(root, 'accounts.json'),
     );
     const openAi = store.add({ label: 'OpenAI', authRef: 'keyring:openai' });
-    store.add({
-      providerId: 'xai-oauth',
-      label: 'xAI',
-      authRef: 'keyring:xai',
-    });
     const service = new DaemonAccountService(store, {
       resolveProviderData: async authRef => ({clientId: authRef, subject: 'fixture', idToken: 'fixture', scope: 'chatgpt.tokens.use.direct'}),
       resolveCredential: async (_providerId, authRef) => `${authRef}-token`,
@@ -203,17 +196,17 @@ describe('DaemonAccountService launch tickets', () => {
       providerId: 'openai-oauth',
       authType: 'oauth' as const,
     };
-    const xaiRoute = {
+    const apiRoute = {
       ...openAiRoute,
-      aliasId: 'claude-grok',
-      realModelId: 'grok-4.6',
-      providerId: 'xai-oauth',
+      aliasId: 'api-astra',
+      realModelId: 'gpt-6-astra',
+      providerId: 'openai', authType: 'api' as const,
     };
 
     expect(launch.processingMode).toBe('fast');
     await expect(service.routeForTicket(openAiRoute, launch.ticket))
       .resolves.toMatchObject({ processingMode: 'fast' });
-    await expect(service.routeForTicket(xaiRoute, launch.ticket))
+    await expect(service.routeForTicket(apiRoute, launch.ticket))
       .resolves.not.toHaveProperty('processingMode');
   });
 
@@ -228,156 +221,5 @@ describe('DaemonAccountService launch tickets', () => {
       accountIds: {},
       processingMode: 'fast',
     });
-  });
-
-  it('shows usage for a managed SuperGrok account', async () => {
-    withRegistryWriteLockSync(() => saveRegistry({
-      schemaVersion: 1,
-      providers: [{
-        id: 'xai-oauth',
-        templateId: 'xai-oauth',
-        name: 'xAI (SuperGrok)',
-        enabled: true,
-        authRef: 'keyring:xai',
-        authType: 'oauth',
-        api: { npm: '@ai-sdk/xai', url: 'https://cli-chat-proxy.grok.com/v1' },
-        addedAt: '2026-08-12T00:00:00.000Z',
-      }],
-    }));
-    const store = new DaemonAccountStore(
-      { CLODEX_HOME: root },
-      join(root, 'accounts.json'),
-    );
-    store.add({providerId: 'xai-oauth', label: 'SuperGrok', authRef: 'keyring:xai'});
-    const service = new DaemonAccountService(store, {
-      resolveProviderData: async authRef => ({clientId: authRef, subject: 'fixture', idToken: 'fixture', scope: 'chatgpt.tokens.use.direct'}),
-      resolveCredential: async (providerId) => providerId === 'xai-oauth' ? 'xai-token' : null,
-      fetchXaiUsage: async () => ({
-        fetchedAt: '2026-08-12T00:00:00.000Z',
-        plan: 'SuperGrok',
-        period: 'weekly',
-        usedPercent: 25,
-        resetAt: 2_000_000_000,
-        usedCents: 500,
-        limitCents: 2_000,
-      }),
-    });
-
-    await service.refreshUsage();
-    await expect(service.list()).resolves.toEqual([expect.objectContaining({
-      providerId: 'xai-oauth',
-      name: 'xAI (SuperGrok)',
-      selected: true,
-      plan: 'SuperGrok',
-      usage: expect.objectContaining({
-        limitUsedPercent: 25,
-        limitResetAt: 2_000_000_000,
-        limitPeriod: 'weekly',
-        usedCents: 500,
-        limitCents: 2_000,
-      }),
-    })]);
-  });
-
-  it('follows independent OpenAI and SuperGrok selections for one launch', async () => {
-    const store = new DaemonAccountStore(
-      { CLODEX_HOME: root },
-      join(root, 'accounts.json'),
-    );
-    const openAi = store.add({ label: 'OpenAI one', authRef: 'keyring:openai-one' });
-    const xaiOne = store.add({
-      providerId: 'xai-oauth',
-      label: 'xAI one',
-      authRef: 'keyring:xai-one',
-    });
-    const xaiTwo = store.add({
-      providerId: 'xai-oauth',
-      label: 'xAI two',
-      authRef: 'keyring:xai-two',
-    });
-    const service = new DaemonAccountService(store, {
-      resolveProviderData: async authRef => ({clientId: authRef, subject: 'fixture', idToken: 'fixture', scope: 'chatgpt.tokens.use.direct'}),
-      resolveCredential: async (_providerId, authRef) => `${authRef}-token`,
-    });
-    const launch = service.createLaunchTicket();
-
-    store.select(xaiTwo.id);
-
-    expect(service.accountForTicket(launch!.ticket, 'openai-oauth')?.id).toBe(openAi.id);
-    expect(service.accountForTicket(launch!.ticket, 'xai-oauth')?.id).toBe(xaiTwo.id);
-    await expect(service.routeForTicket({
-      aliasId: 'claude-grok',
-      realModelId: 'grok-4.6',
-      displayName: 'Grok 4.6',
-      upstreamUrl: 'https://cli-chat-proxy.grok.com/v1',
-      apiKey: 'boot-token',
-      modelFormat: 'openai' as const,
-      providerId: 'xai-oauth',
-      authType: 'oauth' as const,
-    }, launch!.ticket)).resolves.toEqual(expect.objectContaining({
-      apiKey: 'keyring:xai-two-token',
-      metricsAccountId: xaiTwo.id,
-    }));
-    expect(xaiOne.id).not.toBe(xaiTwo.id);
-  });
-
-  it('updates only the selected provider bootstrap credential', () => {
-    const store = new DaemonAccountStore(
-      { CLODEX_HOME: root },
-      join(root, 'accounts.json'),
-    );
-    store.add({ label: 'OpenAI one', authRef: 'keyring:openai-one' });
-    store.add({
-      providerId: 'xai-oauth',
-      label: 'xAI one',
-      authRef: 'keyring:xai-one',
-    });
-    const xaiTwo = store.add({
-      providerId: 'xai-oauth',
-      label: 'xAI two',
-      authRef: 'keyring:xai-two',
-    });
-    withRegistryWriteLockSync(() => saveRegistry({
-      schemaVersion: 1,
-      providers: [],
-    }));
-    const service = new DaemonAccountService(store);
-
-    service.select(xaiTwo.id);
-
-    expect(store.selected('openai-oauth')?.authRef).toBe('keyring:openai-one');
-    expect(store.selected('xai-oauth')?.authRef).toBe('keyring:xai-two');
-    expect(loadRegistry().providers).toEqual([
-      expect.objectContaining({
-        id: 'xai-oauth',
-        authRef: 'keyring:xai-two',
-        enabled: true,
-      }),
-    ]);
-  });
-
-  it('does not re-import a signed-out provider credential', () => {
-    withRegistryWriteLockSync(() => saveRegistry({
-      schemaVersion: 1,
-      providers: [{
-        id: 'xai-oauth',
-        templateId: 'xai-oauth',
-        name: 'xAI (SuperGrok)',
-        enabled: false,
-        authRef: 'keyring:deleted-xai',
-        authType: 'oauth',
-        api: { npm: '@ai-sdk/xai', url: 'https://cli-chat-proxy.grok.com/v1' },
-        addedAt: '2026-08-12T00:00:00.000Z',
-      }],
-    }));
-    const store = new DaemonAccountStore(
-      { CLODEX_HOME: root },
-      join(root, 'accounts.json'),
-    );
-
-    const service = new DaemonAccountService(store);
-    expect(service).toBeInstanceOf(DaemonAccountService);
-
-    expect(store.list('xai-oauth')).toEqual([]);
   });
 });

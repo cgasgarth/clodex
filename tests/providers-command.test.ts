@@ -140,11 +140,9 @@ describe('parseProvidersArgs', () => {
     expect(help).not.toContain('OpenCode');
   });
 
-  it('mentions both subscription sign-in providers in auth help', () => {
+  it('describes ChatGPT sign-in in auth help', () => {
     const help = providerAuthHelpText();
     expect(help).toContain('openai');
-    expect(help).toContain('xai');
-    expect(help).toContain('SuperGrok');
     expect(help).not.toContain('github-copilot');
   });
 
@@ -536,13 +534,13 @@ describe('providers add menu', () => {
     vi.restoreAllMocks();
   });
 
-  it('offers ChatGPT OAuth, SuperGrok OAuth, and the OpenAI API key', async () => {
+  it('offers ChatGPT OAuth and the OpenAI API key', async () => {
     selectMock.mockResolvedValue('noop');
 
     await runProvidersAdd();
 
     const options = selectMock.mock.calls[0]?.[0].options.map((option: { value: string }) => option.value);
-    expect(options).toEqual(['openai-oauth', 'xai-oauth', 'apikey']);
+    expect(options).toEqual(['openai-oauth', 'apikey']);
   });
 
   it('reports pending cleanup after an API-key provider is committed', async () => {
