@@ -33,7 +33,7 @@ Each account registration keeps its issued client ID, tokens, and verified ident
 in the credential store. A stable host ID is stored in `~/.clodex/chatgpt-host-id`.
 Inference and model discovery use the public OpenAI Responses and models endpoints.
 Use `clodex models --list` to see models available to this app registration.
-Availability can differ from the Codex app; create aliases only for listed models.
+Sol 6.1 is included while the public model catalog catches up with its rollout.
 
 For an existing installation, sign in again:
 

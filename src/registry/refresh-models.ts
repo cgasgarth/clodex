@@ -177,6 +177,9 @@ async function refreshOpenAiOAuthModels(
   const models = parseOpenAiModelEntries(result.body)
     .filter(({ id }) => !OPENAI_OAUTH_RETIRED_MODELS.has(id.toLowerCase()))
     .map(entry => buildDynamicOAuthModel(entry, seedById));
+  // Sol 6.1 accepts direct plan requests before /v1/models lists it.
+  const sol = seedById.get('gpt-6.1-sol')!;
+  if (!models.some(model => model.id === sol.id)) models.unshift(sol);
   return { models, source: 'live' };
 }
 

@@ -1,8 +1,8 @@
 // src/data/openai-oauth-models.ts
 //
 // Model metadata used to enrich the signed-in account's public /v1/models catalog.
-// Live discovery determines which models are available; this list supplies
-// confirmed context-window and reasoning metadata for known models.
+// This list supplies context-window and reasoning metadata for known models.
+// Sol 6.1 is also included during its model-catalog rollout.
 
 import type { CachedModel } from '../registry/types.js';
 import { resolveContextWindow } from '../models/context-window.js';

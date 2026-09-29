@@ -20,6 +20,17 @@ function registry(): ProviderRegistry {
 afterEach(() => { global.fetch = originalFetch; vi.clearAllMocks(); });
 
 describe('ChatGPT plan model discovery', () => {
+  it('includes Sol 6.1 while the public catalog lists only Astra', async () => {
+    const saved = registry();
+    asMocked(io.loadRegistryStrict).mockReturnValue(saved);
+    global.fetch = Object.assign(vi.fn(async () => Response.json({ models: [
+      { slug: 'gpt-6-astra', display_name: 'Astra', visibility: 'list' },
+    ] })), { preconnect: originalFetch.preconnect });
+    expect(await refreshProviderModels('openai-oauth', token, saved)).toMatchObject({ ok: true, modelCount: 2 });
+    expect(asMocked(io.saveRegistry).mock.calls[0]?.[0].providers[0]?.modelsCache?.models.map(model => model.id))
+      .toEqual(['gpt-6.1-sol', 'gpt-6-astra']);
+  });
+
   it('loads the account catalog from the public API and preserves Sol context', async () => {
     const saved = registry();
     asMocked(io.loadRegistryStrict).mockReturnValue(saved);
