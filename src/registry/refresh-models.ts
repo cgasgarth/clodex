@@ -27,6 +27,7 @@ import {
   CHATGPT_CODEX_UNSUPPORTED_MODELS,
   OPENAI_MILLION_CONTEXT_MODELS,
   OPENAI_MILLION_CONTEXT_WINDOW,
+  OPENAI_OAUTH_RETIRED_MODELS,
 } from '../data/openai-oauth-models.js';
 import { buildXaiOAuthModels } from '../data/xai-oauth-models.js';
 import { modelPrefersResponsesApi } from '../provider-factory.js';
@@ -202,8 +203,8 @@ async function fetchJsonWithAuth(
  * Fetch OpenAI OAuth (ChatGPT) models using a 3-tier strategy:
  *
  * 1. chatgpt.com/backend-api/codex/models — Codex-specific endpoint.
- *    If it exists, it returns ONLY models the Codex API actually supports,
- *    so no filtering is needed. Self-updating as OpenAI changes Codex availability.
+ *    If it exists, it returns models the Codex API supports. Retired Sol
+ *    routes are hidden from the Clodex catalog.
  *
  * 2. chatgpt.com/backend-api/models — all ChatGPT models, filtered by the
  *    confirmed-bad set. Used when the Codex endpoint doesn't exist or returns nothing.
@@ -226,7 +227,8 @@ async function refreshOpenAiOAuthModels(
     accessToken,
     TIMEOUT_MS,
   );
-  const codexEntries = parseOpenAiModelEntries(codexResult.body);
+  const codexEntries = parseOpenAiModelEntries(codexResult.body)
+    .filter(({ id }) => !OPENAI_OAUTH_RETIRED_MODELS.has(id.toLowerCase()));
   if (codexEntries.length > 0) {
     return { models: toModels(codexEntries), source: 'live' };
   }
@@ -238,6 +240,7 @@ async function refreshOpenAiOAuthModels(
     TIMEOUT_MS,
   );
   const chatGptEntries = parseOpenAiModelEntries(chatGptResult.body)
+    .filter(({ id }) => !OPENAI_OAUTH_RETIRED_MODELS.has(id.toLowerCase()))
     .filter(({ id }) => !CHATGPT_CODEX_UNSUPPORTED_MODELS.has(id));
   if (chatGptEntries.length > 0) {
     return { models: toModels(chatGptEntries), source: 'live' };

@@ -33,10 +33,16 @@ export const OPENAI_MILLION_CONTEXT_WINDOW = 1_000_000;
 
 /** Models whose live ChatGPT catalog still reports the old 272K window. */
 export const OPENAI_MILLION_CONTEXT_MODELS = new Set<string>([
+  'gpt-6.1-sol',
   'gpt-6-astra',
-  'gpt-5.6-sol',
   'gpt-5.6-terra',
   'gpt-5.6-luna',
+]);
+
+/** Sol routes hidden from the OpenAI OAuth catalog. */
+export const OPENAI_OAUTH_RETIRED_MODELS = new Set<string>([
+  'gpt-6-sol',
+  'gpt-5.6-sol',
 ]);
 
 // Models that the ChatGPT Codex backend (chatgpt.com/backend-api/codex) explicitly rejects
@@ -52,9 +58,9 @@ export const CHATGPT_CODEX_UNSUPPORTED_MODELS = new Set<string>([
 // Ordered from newest to oldest within each tier.
 const OPENAI_OAUTH_MODEL_SEEDS: OAuthModelSeed[] = [
   // GPT-6 family
+  { id: 'gpt-6.1-sol',          name: 'sol-6.1',           contextWindow: OPENAI_MILLION_CONTEXT_WINDOW, reasoning: true },
   { id: 'gpt-6-astra',          name: 'GPT-6 Astra',       contextWindow: OPENAI_MILLION_CONTEXT_WINDOW, reasoning: true, useResponsesLite: true },
-  // GPT-5.6 family (Sol / Terra / Luna)
-  { id: 'gpt-5.6-sol',          name: 'GPT-5.6 Sol',       contextWindow: OPENAI_MILLION_CONTEXT_WINDOW, reasoning: true },
+  // GPT-5.6 family (Terra / Luna)
   { id: 'gpt-5.6-terra',        name: 'GPT-5.6 Terra',     contextWindow: OPENAI_MILLION_CONTEXT_WINDOW, reasoning: true },
   { id: 'gpt-5.6-luna',         name: 'GPT-5.6 Luna',      contextWindow: OPENAI_MILLION_CONTEXT_WINDOW, reasoning: true, useResponsesLite: true },
   // GPT-5.5 family (Pro)

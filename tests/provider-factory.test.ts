@@ -167,6 +167,14 @@ describe('getReasoningCapabilities', () => {
     expect(caps.defaultLevel).toBe('medium');
   });
 
+  it('passes sol-6.1 reasoning effort to OpenAI', () => {
+    const caps = getReasoningCapabilities('@ai-sdk/openai', 'gpt-6.1-sol');
+    expect(caps.levels).toEqual(['low', 'medium', 'high', 'xhigh', 'max']);
+    expect(effortProviderOptions('@ai-sdk/openai', 'high', 'gpt-6.1-sol')).toEqual({
+      openai: { reasoningEffort: 'high' },
+    });
+  });
+
   it('returns the documented SuperGrok effort levels for Grok 4.6', () => {
     const caps = getReasoningCapabilities('@ai-sdk/xai', 'grok-4.6');
     expect(caps.levels).toEqual(['low', 'medium', 'high', 'xhigh']);

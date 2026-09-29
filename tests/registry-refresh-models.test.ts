@@ -217,7 +217,7 @@ describe('registry/refresh-models', () => {
           models: [
             { slug: 'gpt-6-astra', title: 'gpt-6-astra', context_window: 272_000, use_responses_lite: true },
             { slug: 'gpt-5.6-luna', title: 'GPT-5.6 Luna', context_window: 272_000, use_responses_lite: true },
-            { slug: 'gpt-5.6-sol', title: 'GPT-5.6 Sol', context_window: 272_000 },
+            { slug: 'gpt-6.1-sol', title: 'GPT-6.1 Sol', context_window: 272_000 },
             { slug: 'gpt-5.6-terra', title: 'GPT-5.6 Terra', context_window: 272_000 },
           ],
         }),
@@ -230,7 +230,7 @@ describe('registry/refresh-models', () => {
       const models = savedRegistry.providers[0]?.modelsCache?.models ?? [];
       const astra = models.find(m => m.id === 'gpt-6-astra');
       const luna = models.find(m => m.id === 'gpt-5.6-luna');
-      const sol = models.find(m => m.id === 'gpt-5.6-sol');
+      const sol = models.find(m => m.id === 'gpt-6.1-sol');
       const terra = models.find(m => m.id === 'gpt-5.6-terra');
       expect(astra).toMatchObject({
         name: 'GPT-6 Astra',
@@ -240,7 +240,7 @@ describe('registry/refresh-models', () => {
       });
       expect(luna?.useResponsesLite).toBe(true);
       expect(luna?.contextWindow).toBe(1_000_000);
-      expect(sol?.contextWindow).toBe(1_000_000);
+      expect(sol).toMatchObject({ name: 'sol-6.1', contextWindow: 1_000_000, reasoning: true });
       expect(terra?.contextWindow).toBe(1_000_000);
       // A model the backend does not flag stays on the HTTP path.
       expect(sol?.useResponsesLite).toBeUndefined();
@@ -269,6 +269,7 @@ describe('registry/refresh-models', () => {
 
       // SAFETY: The test fixture defines the asserted runtime shape.
       const savedRegistry = asMocked(io.saveRegistry).mock.calls[0]?.[0] as ProviderRegistry;
+      const sol61 = savedRegistry.providers[0]?.modelsCache?.models.find(m => m.id === 'gpt-6.1-sol');
       const astra = savedRegistry.providers[0]?.modelsCache?.models.find(m => m.id === 'gpt-6-astra');
       const luna = savedRegistry.providers[0]?.modelsCache?.models.find(m => m.id === 'gpt-5.6-luna');
       expect(astra).toMatchObject({
@@ -277,6 +278,7 @@ describe('registry/refresh-models', () => {
         reasoning: true,
         useResponsesLite: true,
       });
+      expect(sol61?.contextWindow).toBe(1_000_000);
       expect(luna?.contextWindow).toBe(1_000_000);
       expect(luna?.useResponsesLite).toBe(true);
     });

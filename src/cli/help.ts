@@ -130,8 +130,8 @@ Manage favorite models for mid-session switching.
 ${pc.bold('Usage:')}
   clodex favorites
   clodex models --list
-  clodex models --alias sol=clodex:openai-oauth:gpt-5.6-sol
-  clodex models --unalias sol
+  clodex models --alias sol-6.1=clodex:openai-oauth:gpt-6.1-sol
+  clodex models --unalias sol-6.1
   clodex models
   clodex favorites --help
   clodex favorites --version
@@ -155,7 +155,7 @@ ${pc.bold('How it works:')}
 
 ${pc.bold('Examples:')}
   clodex favorites
-  clodex models --alias sol=clodex:openai-oauth:gpt-5.6-sol
+  clodex models --alias sol-6.1=clodex:openai-oauth:gpt-6.1-sol
   claude           # use the native /model picker after settings setup`;
 }
 
