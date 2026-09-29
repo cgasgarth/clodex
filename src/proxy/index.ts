@@ -701,8 +701,7 @@ export async function startProxyCatalog(
       }
       const initialRoute = resolvedRoute ?? requestCatalog.defaultRoute;
       if (!initialRoute) {
-        anthropicError(res, 401, 'Sign in to Clodex and select a model before sending requests.');
-        return;
+        return anthropicError(res, 401, 'Sign in to Clodex and select a model before sending requests.');
       }
       let route: ProxyRoute = initialRoute;
       if (resolveRouteForRequest) {
