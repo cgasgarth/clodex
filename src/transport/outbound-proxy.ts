@@ -1,45 +1,64 @@
-// src/transport/outbound-proxy.ts — make clodex's OWN outbound network calls honor
-// HTTP_PROXY / HTTPS_PROXY / NO_PROXY.
+// src/transport/outbound-proxy.ts — proxy selection for Clodex's own WebSocket
+// connections.
 //
-// Node's fetch (undici) ignores proxy env vars by default, so OAuth device
-// flow/token refresh, model-list refresh, models.dev fetches, and upstream
-// OpenAI calls made through the AI SDK would all bypass a corporate proxy.
-// installOutboundProxyDispatcher() installs undici's EnvHttpProxyAgent as the
-// global fetch dispatcher — but only when a proxy env var is actually set, so
-// proxy-less environments are completely unaffected.
-//
-// Bun's native OAuth Responses WebSocket transport receives the selected proxy
-// URL directly from outboundProxyUrlForTarget().
+// Bun's fetch() applies HTTP_PROXY / HTTPS_PROXY / ALL_PROXY / NO_PROXY by
+// itself. Bun's WebSocket does not, so the native OAuth Responses WebSocket
+// transport passes the URL from outboundProxyUrlForTarget() as its `proxy`
+// option. These rules follow Bun 1.4.3 fetch(): lowercase names win, ALL_PROXY
+// is the fallback, and NO_PROXY accepts domain suffixes, `host:port`, IP
+// addresses and CIDR blocks.
 //
 // Self-loop guard: clodex never sets proxy vars in its OWN process.env — proxy
 // bridge mode sets HTTPS_PROXY only in the CHILD's env (buildHttpProxyChildEnv
-// works on a copy of process.env). The dispatcher therefore only ever points at
-// a proxy the user configured for clodex, never at clodex's own MITM listener.
+// works on a copy of process.env).
 
-export function hasOutboundProxyEnv(env: NodeJS.ProcessEnv = process.env): boolean {
-  return Boolean(
-    env['HTTPS_PROXY']?.trim()
-    || env['https_proxy']?.trim()
-    || env['HTTP_PROXY']?.trim()
-    || env['http_proxy']?.trim(),
-  );
+import ipaddr from 'ipaddr.js';
+
+function envValue(env: NodeJS.ProcessEnv, name: string): string | undefined {
+  return env[name.toLowerCase()]?.trim() || env[name]?.trim() || undefined;
 }
 
-/** NO_PROXY matcher — comma-separated hosts; `*` disables proxying; `.foo` / `*.foo` are suffix matches. */
-export function noProxyBypasses(hostname: string, env: NodeJS.ProcessEnv = process.env): boolean {
-  const noProxy = env['NO_PROXY'] ?? env['no_proxy'];
+function defaultPort(protocol: string): string {
+  return protocol === 'https:' || protocol === 'wss:' ? '443' : '80';
+}
+
+function splitEntryPort(entry: string) {
+  const bracketed = /^\[([^\]]+)\](?::(\d+))?$/.exec(entry);
+  if (bracketed?.[1]) return { host: bracketed[1], port: bracketed[2] };
+  const hostPort = /^([^:]+):(\d+)$/.exec(entry);
+  if (hostPort?.[1]) return { host: hostPort[1], port: hostPort[2] };
+  return { host: entry, port: undefined };
+}
+
+function ipMatches(host: string, entry: string): boolean {
+  if (!ipaddr.isValid(host)) return false;
+  const address = ipaddr.parse(host);
+  if (entry.includes('/')) {
+    if (!ipaddr.isValidCIDR(entry)) return false;
+    const range = ipaddr.parseCIDR(entry);
+    return address.kind() === range[0].kind() && address.match(range);
+  }
+  if (!ipaddr.isValid(entry)) return false;
+  const other = ipaddr.parse(entry);
+  return address.kind() === other.kind() && address.toNormalizedString() === other.toNormalizedString();
+}
+
+/** True when NO_PROXY (or no_proxy) sends the target URL direct. */
+function noProxyBypasses(target: URL, env: NodeJS.ProcessEnv): boolean {
+  const noProxy = envValue(env, 'NO_PROXY');
   if (!noProxy) return false;
-  const host = hostname.toLowerCase();
+  const host = target.hostname.toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '');
+  const port = target.port || defaultPort(target.protocol);
   for (const raw of noProxy.split(',')) {
-    const entry = raw.trim().toLowerCase().replace(/^https?:\/\//, '').replace(/:\d+$/, '');
+    const entry = raw.trim().toLowerCase();
     if (!entry) continue;
     if (entry === '*') return true;
-    const suffix = entry.startsWith('*.') ? entry.slice(1) : entry;
-    if (suffix.startsWith('.')) {
-      if (host === suffix.slice(1) || host.endsWith(suffix)) return true;
-    } else if (host === suffix || host.endsWith(`.${suffix}`)) {
-      return true;
-    }
+    if (ipMatches(host, entry)) return true;
+    const parsed = splitEntryPort(entry);
+    if (parsed.port !== undefined && parsed.port !== port) continue;
+    if (ipMatches(host, parsed.host)) return true;
+    const domain = parsed.host.replace(/^\*/, '').replace(/^\./, '').replace(/\.$/, '');
+    if (domain && (host === domain || host.endsWith(`.${domain}`))) return true;
   }
   return false;
 }
@@ -56,34 +75,8 @@ export function outboundProxyUrlForTarget(
     return undefined;
   }
   const secure = parsed.protocol === 'https:' || parsed.protocol === 'wss:';
-  const proxy = secure
-    ? env['HTTPS_PROXY'] ?? env['https_proxy']
-    : env['HTTP_PROXY'] ?? env['http_proxy'];
-  if (!proxy?.trim()) return undefined;
-  if (noProxyBypasses(parsed.hostname, env)) return undefined;
-  return proxy.trim();
-}
-
-let dispatcherInstalled = false;
-
-/**
- * Install undici's EnvHttpProxyAgent as the global fetch dispatcher when any
- * proxy env var is set. Idempotent. A failure warns and falls back to direct
- * connections — it must never break the CLI.
- */
-export async function installOutboundProxyDispatcher(): Promise<boolean> {
-  if (dispatcherInstalled) return true;
-  if (!hasOutboundProxyEnv()) return false;
-  try {
-    const { EnvHttpProxyAgent, setGlobalDispatcher } = await import('undici');
-    setGlobalDispatcher(new EnvHttpProxyAgent());
-    dispatcherInstalled = true;
-    return true;
-  } catch (err) {
-    console.error(
-      'clodex: HTTP(S)_PROXY is set but installing the outbound proxy dispatcher failed; '
-      + `using direct connections (${err instanceof Error ? err.message : String(err)})`,
-    );
-    return false;
-  }
+  const proxy = envValue(env, secure ? 'HTTPS_PROXY' : 'HTTP_PROXY') ?? envValue(env, 'ALL_PROXY');
+  if (!proxy) return undefined;
+  if (noProxyBypasses(parsed, env)) return undefined;
+  return proxy;
 }

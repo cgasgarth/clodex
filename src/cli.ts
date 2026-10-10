@@ -6,7 +6,6 @@ import { resolveBridgeMode } from './config/config.js';
 import { VERSION } from './constants.js';
 import { runProvidersCommand, providersHelpText } from './cli/providers-command.js';
 import { refreshModelsDevCacheAsync } from './registry/models-dev.js';
-import { installOutboundProxyDispatcher } from './transport/outbound-proxy.js';
 import { daemonHelpText, ensureDaemonRunning, runDaemonCommand, stopDaemon } from './daemon/index.js';
 import { accountsHelpText, runAccountsCommand } from './daemon/account-command.js';
 import { parseArgs, runCatalogCommand } from './cli/args.js';
@@ -19,10 +18,6 @@ export { modelsHelpText, rootHelpText, serverHelpText } from './cli/help.js';
 export { runModelsCommand } from './cli/models-command.js';
 
 export async function main(args: string[] = process.argv.slice(2)): Promise<number> {
-  // Honor HTTP_PROXY/HTTPS_PROXY/NO_PROXY for clodex's own outbound calls
-  // (no-op when no proxy env var is set; never throws).
-  await installOutboundProxyDispatcher();
-
   const parsed = parseArgs(args);
   const runtimePaths = resolveCliRuntimePaths(import.meta.url);
 
