@@ -20,6 +20,7 @@ async function build(): Promise<boolean> {
     outdir: 'dist',
     target: 'bun',
     format: 'esm',
+    check: true,
     packages: 'external',
     sourcemap: 'external',
     naming: '[name].js',

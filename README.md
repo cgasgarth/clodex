@@ -13,7 +13,7 @@ or pin a Claude Code version.
 
 ## Install
 
-Clodex targets Bun 1.4.2.
+Clodex targets Bun 1.4.3.
 
 ```bash
 bun add --global @cgasgarth/clodex
@@ -296,7 +296,9 @@ options.
   see [credential helpers](docs/credential-helpers.md).
 - `CLODEX_DAEMON_PORT` can change the stable loopback daemon port before the
   service is installed. Keep `ANTHROPIC_BASE_URL` in Claude settings aligned.
-- `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY` apply to Clodex outbound traffic.
+- `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, and `NO_PROXY` apply to Clodex
+  outbound HTTP and WebSocket traffic. `NO_PROXY` accepts domain suffixes,
+  `host:port`, IP addresses, and CIDR blocks, as Bun 1.4.3 `fetch()` does.
 
 ## Known limits
 

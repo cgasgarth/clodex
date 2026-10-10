@@ -184,7 +184,7 @@ export class SecondwindWorkerPool {
     slot: WorkerSlot,
     child: WorkerProcess,
     exitCode: number | null,
-    signalCode: number | null,
+    signalCode: NodeJS.Signals | number | null,
     error?: Error,
   ): void {
     if (slot.process !== child) return;
