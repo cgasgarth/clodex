@@ -1,9 +1,6 @@
 {
   "name": "@cgasgarth/clodex",
   "version": "3.1.0",
-  "publishConfig": {
-    "access": "public"
-  },
   "description": "Bridge Claude Code to OpenAI models through API keys or ChatGPT plan sign-in, with prompt caching, auto-compaction, and model switching",
   "author": "Connor Gasgarth",
   "keywords": [
@@ -46,8 +43,7 @@
     "lint:dead-code": "knip",
     "lint:lockfile": "bun dedupe --check",
     "typecheck": "bun check -p tsconfig.scripts.json",
-    "prepare": "bunx --no-install husky",
-    "prepublishOnly": "bun run build"
+    "prepare": "bunx --no-install husky"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "4.0.42",
