@@ -97,12 +97,12 @@ ${pc.bold('Bare clodex server:')}
   password or --password.
 
 ${pc.bold('--mask-gateway-ids explained:')}
-  Endpoint-mode discovery ids look like anthropic-openai-oauth__gpt-5.6.
+  Endpoint-mode discovery ids look like anthropic-openai-oauth__gpt-6.1-sol.
   Some Claude clients validate model names (Claude Desktop / Cowork pickers,
   Claude Code skill/agent "model:" frontmatter) and reject or filter ids that
   contain non-Anthropic vendor names. Masking reverses the provider and model
-  segments (anthropic-htuao-ianepo__6.5-tpg) so vendor strings never appear
-  literally; display names stay readable ("GPT 5.6 (OpenAI)"), and the
+  segments (anthropic-htuao-ianepo__los-1.6-tpg) so vendor strings never appear
+  literally; display names stay readable ("GPT 6.1 Sol (OpenAI)"), and the
   gateway accepts both masked and unmasked ids in requests. Tradeoff: the ids
   are unreadable, so copy them exactly from the printed catalog. Masking is on
   by default; use --no-mask-gateway-ids for clients that don't need it.

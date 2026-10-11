@@ -1,15 +1,17 @@
 # Responses sessions, queued input, and hosted tools
 
-Clodex uses native Responses steering for queued text input in local Astra
-sessions. Other local Responses models, including Sol, receive that input in a
-normal continuation before Clodex closes the turn. It keeps one delivery state
-per response lineage and preserves the
+Clodex uses native Responses steering for queued text input in local GPT-6
+Astra, GPT-6.1 Sol, and GPT-6 Luna sessions. A live check on 2026-10-10 over
+the ChatGPT OAuth Responses WebSocket showed that all three accept
+`response.steer` and start a successor response. Other Responses models
+receive queued input in a normal continuation before Clodex closes the turn.
+Clodex keeps one delivery state per response lineage and preserves the
 provider's output separately from Claude's replay representation.
 
 ```mermaid
 flowchart LR
   Q[Claude queue journal] --> S[Session input state]
-  S -->|Astra: response.steer| W[Responses WebSocket]
+  S -->|Astra, Sol, Luna: response.steer| W[Responses WebSocket]
   S -->|Other models: response.create after completion| W
   T[Claude tool results] -->|response.create| W
   W --> R[Original and successor responses]
@@ -23,15 +25,15 @@ session's transcript. It does not modify Claude's queue. Normal prompt hooks
 run too late for this purpose: an isolated Claude 2.1.263 test showed the second
 prompt hook running after the first request ended.
 
-| Input | Astra | Sol and other Responses models |
+| Input | Astra, Sol, and Luna | Other Responses models |
 | --- | --- | --- |
 | User text sent during a turn | Native user steering input | User input in the next response |
 | Background command completion | Automated task notification via steering | Automated task notification in the next response |
 | Workflow or subagent completion | Automated task notification via steering | Automated task notification in the next response |
 | Required client tool output | Normal tool result on the same connection | Normal tool result on the same connection |
 
-The API supports native mid-turn steering only for Astra. Sol cannot receive an
-update inside an active response. For models without native steering, Clodex
+The public steering guide documents Astra; the live check above confirmed Sol
+and Luna on the same WebSocket path. For models without native steering, Clodex
 waits for the response to complete, sends queued input with `response.create`,
 and reads the continuation before closing the Claude stream. If the response
 requires a client tool, Claude runs it first. An update included with its tool

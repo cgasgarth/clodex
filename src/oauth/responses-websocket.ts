@@ -88,6 +88,9 @@ import {
 
 export * from './responses-websocket/api/public.js';
 
+/** Models that accept `response.steer` on the Responses WebSocket (live check 2026-10-10). */
+const NATIVE_STEERING_MODEL = /^(?:gpt-6-astra|gpt-6\.1-sol|gpt-6-luna)$/;
+
 function runtimeTypeName<Value>(value: Value): string {
   if (value instanceof Error) return value.name;
   if (isUndefined(value)) return 'undefined';
@@ -1095,7 +1098,9 @@ export function createResponsesWebSocketFetch(
 
     let activeContext: RequestContext | undefined;
     const steering = (selectedMatch ? selected?.steering : undefined)
-      ?? new ResponseSteeringSession(payload.model === 'gpt-6-astra' ? 'native' : 'boundary');
+      ?? new ResponseSteeringSession(
+        isString(payload.model) && NATIVE_STEERING_MODEL.test(payload.model) ? 'native' : 'boundary',
+      );
     if (continued && selected?.nativeHistory && selectedDelta && !compacted && !retryPayload) {
       retryPayload = { ...payload, input: [...selected.nativeHistory, ...selectedDelta] };
     }

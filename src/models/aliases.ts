@@ -229,7 +229,7 @@ export function normalizeModelAliases(
   };
 }
 
-/** Parse `luna=clodex:openai-oauth:gpt-5.6-luna` (the `clodex:` prefix is optional). */
+/** Parse `luna=clodex:openai-oauth:gpt-6-luna` (the `clodex:` prefix is optional). */
 export function parseModelAliasAssignment(value: string): ModelAlias | { error: string } {
   const separator = value.indexOf('=');
   if (separator < 1 || separator === value.length - 1) {

@@ -33,7 +33,7 @@ deduplicate, or otherwise rewrite Claude-owned text.
 
 Prompt composition receives neither model identity nor reasoning configuration.
 The same Claude input therefore produces the same instruction text for generic
-GPT-5.6, Sol, Terra, and Luna, independent of reasoning level. Model and
+GPT-6 Astra, Sol, and Luna, independent of reasoning level. Model and
 reasoning selection remain provider parameters outside prompt construction.
 
 ## Clodex-owned semantic rule
