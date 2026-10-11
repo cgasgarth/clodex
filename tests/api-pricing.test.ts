@@ -12,32 +12,32 @@ import {
 
 describe('API-equivalent pricing', () => {
   it('uses the current published OpenAI rates', () => {
-    expect(API_PRICING_AS_OF).toBe('2026-09-04');
+    expect(API_PRICING_AS_OF).toBe('2026-10-10');
     expect(API_PRICING_SOURCE).toBe('OpenAI API pricing');
     expect(OPENAI_API_RATES['gpt-6-astra'])
       .toEqual({ input: 10, cachedInput: 1, output: 50 });
     expect(OPENAI_PRIORITY_API_RATES['gpt-6-astra'])
       .toEqual({ input: 20, cachedInput: 2, output: 100 });
-    expect(OPENAI_API_RATES['gpt-5.6-terra'])
-      .toEqual({ input: 2, cachedInput: 0.2, output: 12 });
-    expect(OPENAI_API_RATES['gpt-5.6-luna'])
-      .toEqual({ input: 0.2, cachedInput: 0.02, output: 1.2 });
-    expect(OPENAI_PRIORITY_API_RATES['gpt-5.6-terra'])
-      .toEqual({ input: 4, cachedInput: 0.4, output: 24 });
-    expect(OPENAI_PRIORITY_API_RATES['gpt-5.6-luna'])
-      .toEqual({ input: 0.4, cachedInput: 0.04, output: 2.4 });
+    expect(OPENAI_API_RATES['gpt-6.1-sol'])
+      .toEqual({ input: 2, cachedInput: 0.1, output: 10 });
+    expect(OPENAI_API_RATES['gpt-6-luna'])
+      .toEqual({ input: 0.1, cachedInput: 0.01, output: 0.5 });
+    expect(OPENAI_PRIORITY_API_RATES['gpt-6.1-sol'])
+      .toEqual({ input: 4, cachedInput: 0.2, output: 20 });
+    expect(OPENAI_PRIORITY_API_RATES['gpt-6-luna'])
+      .toEqual({ input: 0.2, cachedInput: 0.02, output: 1 });
   });
 
   it('recognizes Claude aliases for OpenAI models', () => {
     expect(canonicalPricedModelId('astra')).toBe('gpt-6-astra');
     expect(canonicalPricedModelId('anthropic-openai-oauth__gpt-6-astra[1m]'))
       .toBe('gpt-6-astra');
-    expect(canonicalPricedModelId('sol')).toBe('gpt-5.6-sol');
-    expect(canonicalPricedModelId('anthropic-openai-oauth__gpt-5.6-terra'))
-      .toBe('gpt-5.6-terra');
-    expect(canonicalPricedModelId('gpt-5.6-luna')).toBe('gpt-5.6-luna');
-    expect(canonicalPricedModelId('anthropic-openai__gpt-5.6-sol[1m]'))
-      .toBe('gpt-5.6-sol');
+    expect(canonicalPricedModelId('sol')).toBe('gpt-6.1-sol');
+    expect(canonicalPricedModelId('sol-6.1[1m]')).toBe('gpt-6.1-sol');
+    expect(canonicalPricedModelId('luna')).toBe('gpt-6-luna');
+    expect(canonicalPricedModelId('anthropic-openai__gpt-6.1-sol[1m]'))
+      .toBe('gpt-6.1-sol');
+    expect(canonicalPricedModelId('gpt-5.6-terra')).toBeUndefined();
     expect(canonicalPricedModelId('gpt-unpriced')).toBeUndefined();
   });
 
@@ -56,59 +56,35 @@ describe('API-equivalent pricing', () => {
     });
   });
 
-  it('applies GPT-6 Astra long-context multipliers above 272K input tokens', () => {
-    expect(estimateApiCost({
-      modelId: 'gpt-6-astra',
+  it.each([
+    ['gpt-6-astra', 5.44002, 0.75],
+    ['gpt-6.1-sol', 1.088004, 0.15],
+    ['gpt-6-luna', 0.0544002, 0.0075],
+  ])('applies %s long-context rates above 272K input tokens', (modelId, input, output) => {
+    const cost = estimateApiCost({
+      modelId,
       inputTokens: 272_001,
       cachedInputTokens: 0,
       cacheWriteTokens: 0,
       outputTokens: 10_000,
-    })).toEqual({
-      input: 5.44002,
-      cache: 0,
-      output: 0.75,
-      total: 6.19002,
     });
+    expect(cost?.input).toBeCloseTo(input, 9);
+    expect(cost?.output).toBeCloseTo(output, 9);
   });
 
   it('breaks standard Sol pricing into uncached input, cache, and output', () => {
     expect(estimateApiCost({
       modelId: 'sol',
-      inputTokens: 1_000_000,
-      cachedInputTokens: 1_000_000,
-      cacheWriteTokens: 1_000_000,
-      outputTokens: 1_000_000,
+      inputTokens: 100_000,
+      cachedInputTokens: 100_000,
+      cacheWriteTokens: 50_000,
+      outputTokens: 100_000,
     })).toEqual({
-      input: 5,
-      cache: 6.75,
-      output: 30,
-      total: 41.75,
+      input: 0.2,
+      cache: 0.135,
+      output: 1,
+      total: 1.335,
     });
-  });
-
-  it('uses each family rate throughout the 1M context window', () => {
-    const terra = estimateApiCost({
-      modelId: 'terra',
-      inputTokens: 500_000,
-      cachedInputTokens: 500_000,
-      cacheWriteTokens: 0,
-      outputTokens: 10_000,
-    });
-    expect(terra?.input).toBeCloseTo(1);
-    expect(terra?.cache).toBeCloseTo(0.1);
-    expect(terra?.output).toBeCloseTo(0.12);
-    expect(terra?.total).toBeCloseTo(1.22);
-    const luna = estimateApiCost({
-      modelId: 'luna',
-      inputTokens: 500_000,
-      cachedInputTokens: 500_000,
-      cacheWriteTokens: 0,
-      outputTokens: 10_000,
-    });
-    expect(luna?.input).toBeCloseTo(0.1);
-    expect(luna?.cache).toBeCloseTo(0.01);
-    expect(luna?.output).toBeCloseTo(0.012);
-    expect(luna?.total).toBeCloseTo(0.122);
   });
 
   it('prices Fast requests at twice Standard and accepts the legacy priority name', () => {
@@ -123,29 +99,13 @@ describe('API-equivalent pricing', () => {
       cacheWriteTokens: 0,
       outputTokens: 10_000,
     });
-    expect(cost?.input).toBeCloseTo(0.04);
-    expect(cost?.cache).toBeCloseTo(0.004);
-    expect(cost?.output).toBeCloseTo(0.024);
-    expect(cost?.total).toBeCloseTo(0.068);
+    expect(cost?.input).toBeCloseTo(0.02);
+    expect(cost?.cache).toBeCloseTo(0.002);
+    expect(cost?.output).toBeCloseTo(0.01);
+    expect(cost?.total).toBeCloseTo(0.032);
   });
 
-  it('keeps Standard rates beyond the former 272K threshold', () => {
-    const cost = estimateApiCost({
-      modelId: 'gpt-5.6-sol',
-      inputTokens: 272_001,
-      cachedInputTokens: 0,
-      cacheWriteTokens: 0,
-      outputTokens: 1_000,
-    });
-    expect(cost).toEqual(expect.objectContaining({
-      input: 1.360005,
-      cache: 0,
-      output: 0.03,
-    }));
-    expect(cost?.total).toBeCloseTo(1.390005);
-  });
-
-  it('keeps Fast rates beyond the former 272K threshold', () => {
+  it('doubles long-context rates for Fast requests', () => {
     const usage = {
       modelId: 'sol',
       processingMode: 'fast' as const,
@@ -156,7 +116,7 @@ describe('API-equivalent pricing', () => {
     };
     const cost = estimateApiCost(usage);
     expect(effectiveApiProcessingMode(usage)).toBe('fast');
-    expect(cost?.input).toBeCloseTo(2.72001);
-    expect(cost?.output).toBeCloseTo(0.06);
+    expect(cost?.input).toBeCloseTo(2.176008);
+    expect(cost?.output).toBeCloseTo(0.03);
   });
 });

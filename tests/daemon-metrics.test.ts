@@ -64,8 +64,8 @@ describe('DaemonMetricsStore', () => {
       standardRequests: 0,
       fastRequests: 1,
     }));
-    expect(bucket?.totalCost).toBeCloseTo(1.7425);
-    expect(bucket?.fastCost).toBeCloseTo(1.7425);
+    expect(bucket?.totalCost).toBeCloseTo(0.641);
+    expect(bucket?.fastCost).toBeCloseTo(0.641);
     expect(bucket?.standardCost).toBe(0);
     expect(store.readSince(0, 'account-b')).toHaveLength(1);
     store.close();

@@ -1,6 +1,6 @@
 export const API_PRICING_SOURCE = 'OpenAI API pricing';
-export const API_PRICING_AS_OF = '2026-09-04';
-const ASTRA_LONG_CONTEXT_INPUT_TOKENS = 272_000;
+export const API_PRICING_AS_OF = '2026-10-10';
+const LONG_CONTEXT_INPUT_TOKENS = 272_000;
 
 const TOKENS_PER_MILLION = 1_000_000;
 const CACHE_WRITE_INPUT_MULTIPLIER = 1.25;
@@ -36,17 +36,15 @@ export interface ApiPricedUsage {
 /** Standard processing prices in USD per one million tokens. */
 export const OPENAI_API_RATES: ApiRateCatalog = {
   'gpt-6-astra': { input: 10, cachedInput: 1, output: 50 },
-  'gpt-5.6-sol': { input: 5, cachedInput: 0.5, output: 30 },
-  'gpt-5.6-terra': { input: 2, cachedInput: 0.2, output: 12 },
-  'gpt-5.6-luna': { input: 0.2, cachedInput: 0.02, output: 1.2 },
+  'gpt-6.1-sol': { input: 2, cachedInput: 0.1, output: 10 },
+  'gpt-6-luna': { input: 0.1, cachedInput: 0.01, output: 0.5 },
 };
 
 /** Fast processing prices in USD per one million tokens (2x Standard). */
 export const OPENAI_PRIORITY_API_RATES: ApiRateCatalog = {
   'gpt-6-astra': { input: 20, cachedInput: 2, output: 100 },
-  'gpt-5.6-sol': { input: 10, cachedInput: 1, output: 60 },
-  'gpt-5.6-terra': { input: 4, cachedInput: 0.4, output: 24 },
-  'gpt-5.6-luna': { input: 0.4, cachedInput: 0.04, output: 2.4 },
+  'gpt-6.1-sol': { input: 4, cachedInput: 0.2, output: 20 },
+  'gpt-6-luna': { input: 0.2, cachedInput: 0.02, output: 1 },
 };
 
 export function normalizeApiProcessingMode<Value>(value: Value): ApiProcessingMode {
@@ -70,11 +68,9 @@ export function canonicalPricedModelId(modelId: string): string | undefined {
     ? normalized.slice(normalized.lastIndexOf('__') + 2)
     : normalized;
   const withoutContextSuffix = routed.replace(/\[1m\]$/, '');
-  if (withoutContextSuffix === 'gpt-5.6') return 'gpt-5.6-sol';
   if (withoutContextSuffix === 'astra') return 'gpt-6-astra';
-  if (withoutContextSuffix === 'sol') return 'gpt-5.6-sol';
-  if (withoutContextSuffix === 'terra') return 'gpt-5.6-terra';
-  if (withoutContextSuffix === 'luna') return 'gpt-5.6-luna';
+  if (withoutContextSuffix === 'sol' || withoutContextSuffix === 'sol-6.1') return 'gpt-6.1-sol';
+  if (withoutContextSuffix === 'luna') return 'gpt-6-luna';
   return OPENAI_API_RATES[withoutContextSuffix] ? withoutContextSuffix : undefined;
 }
 
@@ -86,11 +82,10 @@ export function estimateApiCost(usage: ApiPricedUsage): ApiCostBreakdown | undef
     + usage.cacheWriteTokens;
   const fast = effectiveApiProcessingMode(usage) === 'fast';
   const rates = (fast ? OPENAI_PRIORITY_API_RATES : OPENAI_API_RATES)[modelId]!;
-  const usesAstraLongContextRates = modelId === 'gpt-6-astra'
-    && logicalInputTokens > ASTRA_LONG_CONTEXT_INPUT_TOKENS;
-  const inputRate = rates.input * (usesAstraLongContextRates ? 2 : 1);
-  const cachedInputRate = rates.cachedInput * (usesAstraLongContextRates ? 2 : 1);
-  const outputRate = rates.output * (usesAstraLongContextRates ? 1.5 : 1);
+  const longContext = logicalInputTokens > LONG_CONTEXT_INPUT_TOKENS;
+  const inputRate = rates.input * (longContext ? 2 : 1);
+  const cachedInputRate = rates.cachedInput * (longContext ? 2 : 1);
+  const outputRate = rates.output * (longContext ? 1.5 : 1);
   const input = usage.inputTokens / TOKENS_PER_MILLION * inputRate;
   const cacheRead = usage.cachedInputTokens / TOKENS_PER_MILLION * cachedInputRate;
   const cacheWrite = usage.cacheWriteTokens

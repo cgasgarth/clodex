@@ -28,7 +28,7 @@ describe('Secondwind daemon service', () => {
       body,
       request: toolRequest('unchanged'),
       sessionId: 'session-1',
-      modelId: 'gpt-5.6-sol',
+      modelId: 'gpt-6.1-sol',
     })).toBe(body);
     expect(rewrite).toHaveBeenCalledTimes(1);
     expect(service.snapshot()).toMatchObject({
@@ -68,7 +68,7 @@ describe('Secondwind daemon service', () => {
       body,
       request: original,
       sessionId: 'session-1',
-      modelId: 'gpt-5.6-sol',
+      modelId: 'gpt-6.1-sol',
     });
     expect(applied).not.toBe(body);
     expect(JSON.parse(applied.toString())).toEqual(toolRequest('short'));
@@ -95,7 +95,7 @@ describe('Secondwind daemon service', () => {
       body,
       request: original,
       sessionId: 'session-1',
-      modelId: 'gpt-5.6-sol',
+      modelId: 'gpt-6.1-sol',
     })).toBe(body);
     expect(rewrite).toHaveBeenCalledTimes(1);
 
@@ -105,7 +105,7 @@ describe('Secondwind daemon service', () => {
       body,
       request: original,
       sessionId: 'session-1',
-      modelId: 'gpt-5.6-sol',
+      modelId: 'gpt-6.1-sol',
     });
     expect(resumed.equals(applied)).toBe(true);
     expect(rewrite).toHaveBeenCalledTimes(2);
@@ -127,7 +127,7 @@ describe('Secondwind daemon service', () => {
       body: Buffer.from(JSON.stringify(original)),
       request: original,
       sessionId: 'session-1',
-      modelId: 'gpt-5.6-luna',
+      modelId: 'gpt-6-luna',
       recordMetrics: false,
     });
 
@@ -149,7 +149,7 @@ describe('Secondwind daemon service', () => {
       body: Buffer.from(JSON.stringify(original)),
       request: original,
       sessionId: 'compatibility-fallback',
-      modelId: 'gpt-5.6-sol',
+      modelId: 'gpt-6.1-sol',
     });
 
     expect(service.snapshot().applied).toMatchObject({
@@ -180,7 +180,7 @@ describe('Secondwind daemon service', () => {
       body: Buffer.from(JSON.stringify(original)),
       request: original,
       sessionId: 'persistent-session',
-      modelId: 'gpt-5.6-sol',
+      modelId: 'gpt-6.1-sol',
     });
 
     expect(service.snapshot().applied).toMatchObject({
@@ -206,7 +206,7 @@ describe('Secondwind daemon service', () => {
       body,
       request,
       sessionId: 'session-1',
-      modelId: 'gpt-5.6-sol',
+      modelId: 'gpt-6.1-sol',
     })).toBe(body);
   });
 
@@ -233,7 +233,7 @@ describe('Secondwind daemon service', () => {
     const rewritten = await service.rewrite({
       body: originalBody,
       request,
-      modelId: 'gpt-5.6-sol',
+      modelId: 'gpt-6.1-sol',
     });
 
     expect(rewritten.toString()).toBe('worker-owned-wire-bytes');
@@ -258,7 +258,7 @@ describe('Secondwind daemon service', () => {
     expect(await service.rewrite({
       body,
       request,
-      modelId: 'gpt-5.6-sol',
+      modelId: 'gpt-6.1-sol',
     })).toBe(body);
     expect(service.snapshot()).toMatchObject({
       errors: 1,
@@ -311,7 +311,7 @@ describe('Secondwind daemon service', () => {
       request,
       sessionId: 'optimizer:agent',
       reportingSessionId: 'parent-session',
-      modelId: 'gpt-5.6-sol',
+      modelId: 'gpt-6.1-sol',
     });
     expect(service.snapshot().applied.estimatedSavingsUsd).toBe(0);
 
@@ -320,7 +320,7 @@ describe('Secondwind daemon service', () => {
       entry: {
         event: 'response_usage',
         requestId: 'cache-aware',
-        modelId: 'gpt-5.6-sol',
+        modelId: 'gpt-6.1-sol',
         provider: 'openai-oauth',
         route: 'translated',
         inputTokens: 100,
@@ -334,28 +334,28 @@ describe('Secondwind daemon service', () => {
       entry: {
         event: 'response_completed',
         requestId: 'cache-aware',
-        modelId: 'gpt-5.6-sol',
+        modelId: 'gpt-6.1-sol',
         provider: 'openai-oauth',
         route: 'translated',
       },
     });
 
-    expect(service.snapshot().applied.estimatedSavingsUsd).toBeCloseTo(0.001525);
+    expect(service.snapshot().applied.estimatedSavingsUsd).toBeCloseTo(0.00053);
     expect(service.snapshot().applied).toMatchObject({
       observedInputTokens: 1_000,
       savedInputTokens: 100,
       savedCachedInputTokens: 800,
       savedCacheWriteTokens: 100,
-      estimatedInputSavingsUsd: expect.closeTo(0.0005),
-      estimatedCacheSavingsUsd: expect.closeTo(0.001025),
+      estimatedInputSavingsUsd: expect.closeTo(0.0002),
+      estimatedCacheSavingsUsd: expect.closeTo(0.00033),
       estimatedOutputSavingsUsd: 0,
     });
-    expect(service.snapshot().lifetime.estimatedSavingsUsd).toBeCloseTo(0.001525);
+    expect(service.snapshot().lifetime.estimatedSavingsUsd).toBeCloseTo(0.00053);
     expect(service.snapshot().topSessions).toEqual([
       expect.objectContaining({
         sessionHash: hashSessionId('parent-session'),
         tokensReduced: 1_000,
-        estimatedSavingsUsd: expect.closeTo(0.001525),
+        estimatedSavingsUsd: expect.closeTo(0.00053),
       }),
     ]);
   });
@@ -386,7 +386,7 @@ describe('Secondwind daemon service', () => {
         request,
         sessionId: `${reportingSessionId}:agent-${requestIndex}`,
         reportingSessionId,
-        modelId: 'gpt-5.6-sol',
+        modelId: 'gpt-6.1-sol',
       });
     }
 
@@ -405,7 +405,7 @@ describe('Secondwind daemon service', () => {
     });
   });
 
-  it('keeps fast-mode savings within one uniform context tier', async () => {
+  it('prices fast-mode savings across the 272K long-context tier', async () => {
     const service = new SecondwindService({
       initialMode: 'on',
       rewrite: () => ({
@@ -424,7 +424,7 @@ describe('Secondwind daemon service', () => {
       body: Buffer.from(JSON.stringify(request)),
       request,
       sessionId: 'long-context',
-      modelId: 'gpt-5.6-sol',
+      modelId: 'gpt-6.1-sol',
       processingMode: 'fast',
     });
     service.handleTrace({
@@ -432,7 +432,7 @@ describe('Secondwind daemon service', () => {
       entry: {
         event: 'response_usage',
         requestId: 'long-context',
-        modelId: 'gpt-5.6-sol',
+        modelId: 'gpt-6.1-sol',
         provider: 'openai-oauth',
         route: 'translated',
         inputTokens: 265_000,
@@ -444,14 +444,14 @@ describe('Secondwind daemon service', () => {
       entry: {
         event: 'response_completed',
         requestId: 'long-context',
-        modelId: 'gpt-5.6-sol',
+        modelId: 'gpt-6.1-sol',
         provider: 'openai-oauth',
         route: 'translated',
       },
     });
 
     const original = estimateApiCost({
-      modelId: 'gpt-5.6-sol',
+      modelId: 'gpt-6.1-sol',
       processingMode: 'fast',
       inputTokens: 275_000,
       cachedInputTokens: 0,
@@ -459,7 +459,7 @@ describe('Secondwind daemon service', () => {
       outputTokens: 10_000,
     })!;
     const optimized = estimateApiCost({
-      modelId: 'gpt-5.6-sol',
+      modelId: 'gpt-6.1-sol',
       processingMode: 'fast',
       inputTokens: 265_000,
       cachedInputTokens: 0,
@@ -490,13 +490,13 @@ describe('Secondwind daemon service', () => {
       body,
       request,
       sessionId: 'shared',
-      modelId: 'gpt-5.6-sol',
+      modelId: 'gpt-6.1-sol',
     });
     const second = service.rewrite({
       body,
       request,
       sessionId: 'shared',
-      modelId: 'gpt-5.6-sol',
+      modelId: 'gpt-6.1-sol',
     });
     expect(service.snapshot().sessions).toBe(1);
     release();
@@ -517,24 +517,24 @@ describe('Secondwind daemon service', () => {
     const request = toolRequest('isolated');
     const body = Buffer.from(JSON.stringify(request));
 
-    await service.rewrite({ body, request, modelId: 'gpt-5.6-sol' });
-    await service.rewrite({ body, request, modelId: 'gpt-5.6-sol' });
+    await service.rewrite({ body, request, modelId: 'gpt-6.1-sol' });
+    await service.rewrite({ body, request, modelId: 'gpt-6.1-sol' });
     await service.rewrite({
       body,
       request,
       sessionId: 'parent:agent-a',
-      modelId: 'gpt-5.6-sol',
+      modelId: 'gpt-6.1-sol',
     });
     await service.rewrite({
       body,
       request,
       sessionId: 'parent:agent-b',
-      modelId: 'gpt-5.6-sol',
+      modelId: 'gpt-6.1-sol',
     });
 
     expect(rewrite).toHaveBeenCalledTimes(4);
     expect(rewrite.mock.calls.map(([key]) => key)).toEqual([
-      undefined, undefined, 'gpt-5.6-sol:parent:agent-a', 'gpt-5.6-sol:parent:agent-b',
+      undefined, undefined, 'gpt-6.1-sol:parent:agent-a', 'gpt-6.1-sol:parent:agent-b',
     ]);
     expect(service.snapshot().sessions).toBe(0);
   });

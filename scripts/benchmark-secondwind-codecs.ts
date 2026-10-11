@@ -460,7 +460,7 @@ async function main(): Promise<void> {
   const runs = [...control.runs, ...optimized.runs];
   const report = {
     generatedAt: new Date().toISOString(),
-    model: 'gpt-5.6-luna',
+    model: 'gpt-6-luna',
     reasoningEffort: 'medium',
     repetitions,
     execution: 'Nine fresh sessions ran concurrently per condition; control ran before Secondwind.',

@@ -108,17 +108,12 @@ your absolute home path. Keep other settings and hooks that you already use.
       {
         "model": "sol-6.1[1m]",
         "label": "sol",
-        "description": "GPT-5.6 Sol"
+        "description": "GPT-6.1 Sol"
       },
       {
         "model": "luna[1m]",
         "label": "luna",
-        "description": "GPT-5.6 Luna"
-      },
-      {
-        "model": "terra[1m]",
-        "label": "terra",
-        "description": "GPT-5.6 Terra"
+        "description": "GPT-6 Luna"
       }
     ]
   },

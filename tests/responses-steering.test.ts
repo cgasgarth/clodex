@@ -360,6 +360,26 @@ it.each(['wrapped', 'plain'])('drains late Sol input, reconciles its %s echo, an
   await second.text();
 });
 
+it.each(['gpt-6.1-sol', 'gpt-6-luna'])('sends native response.steer for %s', async model => {
+  let receive: ((input: QueuedSessionInput) => void) | undefined;
+  const fetch = createResponsesWebSocketFetch('wss://test.invalid/responses', undefined, {
+    webSocketConstructor: Socket,
+    subscribeQueuedInput: async (_id, callback) => { receive = callback; return {flush:async()=>{},close:()=>{}}; },
+  });
+  const response = await withResponsesWebSocketDiagnosticContext({allowLocalClaudeQueue:true,claudeSessionId:'00000000-0000-4000-8000-000000000002'},
+    () => fetch('https://test.invalid', {method:'POST',body:JSON.stringify({...payload,model})}));
+  const socket = sockets[0]!;
+  socket.emit('open');
+  socket.event({type:'response.created',response:{id:'resp_1'}});
+  receive?.({id:'event_1',kind:'human',text:'Use the revised target.'});
+  expect(socket.sent[1]).toMatchObject({type:'response.steer',previous_response_id:'resp_1'});
+  socket.event({type:'response.steer.accepted',steer:{id:'steer_1',previous_response_id:'resp_1'}});
+  socket.event({type:'response.completed',response:{id:'resp_1',output:[]}});
+  socket.event({type:'response.created',response:{id:'resp_2'}});
+  complete(socket,'resp_2','Revised target applied.');
+  expect(await response.text()).toContain('Revised target applied.');
+});
+
 it('matches each Claude echo to only one queued occurrence', () => {
   const session = new ResponseSteeringSession('boundary');
   session.attach(payload.input,()=>{});

@@ -195,13 +195,13 @@ function openAiOAuthProvider(providers: LocalProvider[]): LocalProvider {
 }
 
 function targetModels(provider: LocalProvider): LocalProviderModel[] {
-  const ids = new Set(['gpt-6.1-sol', 'gpt-5.6-luna']);
+  const ids = new Set(['gpt-6.1-sol', 'gpt-6-luna']);
   const models = provider.models.filter(model => (
     model.npm === '@ai-sdk/openai'
     && ids.has(model.upstreamModelId)
   ));
   if (models.length === 0) {
-    throw new Error('Neither gpt-6.1-sol nor gpt-5.6-luna is available in the OpenAI OAuth provider');
+    throw new Error('Neither gpt-6.1-sol nor gpt-6-luna is available in the OpenAI OAuth provider');
   }
   return models;
 }

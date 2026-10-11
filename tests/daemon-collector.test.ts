@@ -28,8 +28,8 @@ describe('DaemonInferenceCollector', () => {
           claudeSessionId: sessionId,
           accountId: 'account-a',
           processingMode: 'fast',
-          modelId: 'gpt-5.6-sol',
-          resolvedModelId: 'gpt-5.6-sol',
+          modelId: 'gpt-6.1-sol',
+          resolvedModelId: 'gpt-6.1-sol',
           provider: 'openai-oauth',
           route: 'translated',
         },
@@ -40,7 +40,7 @@ describe('DaemonInferenceCollector', () => {
           event: 'translation_completed',
           requestId,
           claudeSessionId: sessionId,
-          modelId: 'gpt-5.6-sol',
+          modelId: 'gpt-6.1-sol',
           provider: 'openai-oauth',
           route: 'translated',
           durationMs: 900,
@@ -52,7 +52,7 @@ describe('DaemonInferenceCollector', () => {
           event: 'response_usage',
           requestId,
           claudeSessionId: sessionId,
-          modelId: 'gpt-5.6-sol',
+          modelId: 'gpt-6.1-sol',
           provider: 'openai-oauth',
           route: 'translated',
           usageStage: 'message_start',
@@ -67,7 +67,7 @@ describe('DaemonInferenceCollector', () => {
           event: 'response_usage',
           requestId,
           claudeSessionId: sessionId,
-          modelId: 'gpt-5.6-sol',
+          modelId: 'gpt-6.1-sol',
           provider: 'openai-oauth',
           route: 'translated',
           usageStage: 'message_delta',
@@ -80,7 +80,7 @@ describe('DaemonInferenceCollector', () => {
           event: 'response_completed',
           requestId,
           claudeSessionId: sessionId,
-          modelId: 'gpt-5.6-sol',
+          modelId: 'gpt-6.1-sol',
           provider: 'openai-oauth',
           route: 'translated',
           durationMs: 1_000,
@@ -125,7 +125,7 @@ describe('DaemonInferenceCollector', () => {
       entry: {
         requestId,
         claudeSessionId: sessionId,
-        modelId: 'gpt-5.6-sol',
+        modelId: 'gpt-6.1-sol',
         provider: 'openai-oauth',
         route: 'translated',
       },
@@ -136,7 +136,7 @@ describe('DaemonInferenceCollector', () => {
         event: 'response_client_disconnected',
         requestId,
         claudeSessionId: sessionId,
-        modelId: 'gpt-5.6-sol',
+        modelId: 'gpt-6.1-sol',
         provider: 'openai-oauth',
         route: 'translated',
         terminationSource: 'downstream_client',
@@ -213,7 +213,7 @@ describe('DaemonInferenceCollector', () => {
         requestId,
         accountId: 'account-a',
         modelId: 'orbit',
-        resolvedModelId: 'gpt-5.6-sol',
+        resolvedModelId: 'gpt-6.1-sol',
         provider: 'openai-oauth',
         route: 'translated',
       },
@@ -224,7 +224,7 @@ describe('DaemonInferenceCollector', () => {
         event: 'response_completed',
         requestId,
         modelId: 'orbit',
-        resolvedModelId: 'gpt-5.6-sol',
+        resolvedModelId: 'gpt-6.1-sol',
         provider: 'openai-oauth',
         route: 'translated',
         inputTokens: 100_000,
@@ -234,7 +234,7 @@ describe('DaemonInferenceCollector', () => {
 
     const bucket = metrics.bucketsRange(0, Date.now() + 1_000, Date.now() + 1_000, 'account-a')
       .find(candidate => candidate.requests === 1);
-    expect(metrics.readSince(0, 'account-a')[0]?.modelId).toBe('gpt-5.6-sol');
+    expect(metrics.readSince(0, 'account-a')[0]?.modelId).toBe('gpt-6.1-sol');
     expect(bucket?.pricedRequests).toBe(1);
     expect(bucket?.unpricedRequests).toBe(0);
     metrics.close();
