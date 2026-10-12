@@ -36,9 +36,10 @@ Claude Code uses VibeProxy directly through `~/.claude/settings.json`:
 claude --model gpt-6.1-sol
 ```
 
-The settings contain `ANTHROPIC_BASE_URL=http://127.0.0.1:8318`, a local
-placeholder API key, and 900k windows for Codex models. Claude models keep
+The settings contain `ANTHROPIC_BASE_URL=http://127.0.0.1:8318` and 900k
+windows for Codex models. No gateway key is set, so the saved Claude.ai login
+and cloud connectors stay active. Claude models keep
 their default windows. Claude Code handles `/compact`
 and automatic compaction. No Clodex daemon, HTTPS proxy, or startup hook is used.
-The current proxy has no client API-key restriction; use a real proxy key if
-that changes. See `~/.claude/docs/vibeproxy.md` for client setup.
+VibeProxy selects its saved upstream credentials. See
+`~/.claude/docs/vibeproxy.md` for client setup.
