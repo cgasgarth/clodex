@@ -11,6 +11,12 @@ Claude Code keeps its normal terminal UI, tools, skills, hooks, MCPs, sessions,
 subagents, workflows, and agent teams. Clodex does not patch the Claude binary
 or pin a Claude Code version.
 
+## VibeProxy plugin
+
+[Native GPT compaction](plugins/native-compaction/README.md) runs inside VibeProxy
+and gives Claude Code native GPT compaction with durable checkpoints. See its
+README for build and install instructions.
+
 ## Install
 
 Clodex targets Bun 1.4.3.
